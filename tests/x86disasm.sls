@@ -1024,7 +1024,7 @@ unindented test case, given a file and a mode."
 (test64 '#vu8(#xF0 #x4C #x0F #xB1 #x63 #x07)
         '(lock.cmpxchg (mem64+ rbx #x7) r12))
 
-(test64 '#vu8(#xF3 #xF3 #x0F #xA7 #xD8
+(test64 '#vu8(#xF3 #x0F #xA7 #xD8
                    #xF3 #x48 #xAB
                    #xF3 #xA7
                    #xF2 #x48 #xAF)
