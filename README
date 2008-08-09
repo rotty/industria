@@ -1,0 +1,66 @@
+-*- mode: outline; coding: utf-8 -*-
+
+* WHAT THIS IS
+These are the Industria libraries for R6RS Scheme. They are more or
+less a place for me to put the Scheme code I write. 
+
+* LICENSING
+Copyright © 2008 Göran Weinholt <goran@weinholt.se>
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+** ALTERNATIVE LICENSING
+If you wish to use any of this code under different license terms, I
+accept payments in gold and silver coin. Contact me with an offer.
+
+* AVAILABLE LIBRARIES
+** (se weinholt disassembler x86)
+Disassembler for the Intel x86 architecture. Supports most modern
+instructions encodings as of 2008, including the VEX prefix used by
+Intel AVX and the DREX encoding used by AMD SSE5. Supports 16-bit,
+32-bit and 64-bit modes. The API consists of `get-instruction', which
+reads the next instruction on a port using the given bit-mode and
+returns the instruction as a list. See the source code for
+documentation.
+
+** (se weinholt disassembler x86-opcodes)
+An opcode table for the Intel x86 that includes all SSE instructions
+up to SSE5, all Intel AVX instructions and of course the AMD64
+instructions. The table layout is designed for use with a
+disassembler, but it can also be transformed for use in an assembler.
+
+** (define-values)
+This is a define-values macro which, unlike previous R5RS instances of
+the same, permits the defined variables to be exported from libraries.
+It can be used anywhere the normal define works.
+
+(define-values (foo bar)
+  (values 1 2))
+
+* TEST ROUTINES
+The tests/ directory contains scripts that test the libraries. Can
+also be useful if you want to see how a library is used.
+
+* PROGRAMS
+The programs/ directory contains small utilities that use the
+libraries. These scripts are implemented in the way recommended by
+R6RS non-normative appendix D. The file names follow the Unix
+convention, so if you use an adult operating system you will need to
+rename them.
+
+** fcdisasm
+The Full-Color Disassembler, which disassembles x86 code and colors
+the bytes in the hexdump. This makes it easy to see how many bytes all
+the different parts of an instruction uses.
+
