@@ -98,7 +98,7 @@
       (when msg (display (car msg) x) (newline x) (newline x))
       (display "fcdisasm - Full-color disassembler
 
-Usage: fcdisasm [-b <bits>] [-nocolor] [--] <filename>
+Usage: fcdisasm [-b|--bits <bits>] [--nocolor] [--] <filename>
 
 The <bits> argument can be either 16, 32 or 64 (default).
 The -nocolor flag suppresses the color output.
@@ -121,14 +121,15 @@ Author: Göran Weinholt <goran@weinholt.se>.
            (unless filename
              (help "ERROR: No filename given."))
            (values filename mode color))
-          ((string=? (car args) "--b")
+          ((or (string=? (car args) "--bits")
+               (string=? (car args) "-b"))
            (if (null? (cdr args)) (help "ERROR: -b needs an argument (16, 32, 64)"))
            (cond ((assoc (cadr args) '(("64" . 64) ("32" . 32) ("16" . 16))) =>
                   (lambda (x)
                     (lp filename color (cdr x) (cddr args))))
                  (else
                   (help "ERROR: invalid argument for -b flag"))))
-          ((string=? (car args) "-nocolor")
+          ((string=? (car args) "--nocolor")
            (lp filename #f mode (cdr args)))
           ((string=? (car args) "--")
            (if (not (= (length args) 2)) (help "ERROR: following -- must be only a filename"))
