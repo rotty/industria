@@ -33,7 +33,7 @@ unindented test case, given a file and a mode."
                         ((invalid-opcode? con)
                          (list 'bad:
                                (condition-message con))))
-                       (get-instruction p mode)))
+                       (get-instruction p mode #f)))
              (new-pos (port-position p)))
         (cond ((eof-object? i)
                (for-each (lambda (i)
@@ -840,11 +840,11 @@ unindented test case, given a file and a mode."
         '(jmpf (mem16:32+ bx di))
         '(jmpf (mem16:32+ bx di)))
 
-(test64 '#vu8(#xEB #x0E 
-                   #xE9 #x09 #x00 #x00 #x00 
-                   #xFF #x20 
-                   #xFF #x28 
-                   #xFF #x28 
+(test64 '#vu8(#xEB #x0E
+                   #xE9 #x09 #x00 #x00 #x00
+                   #xFF #x20
+                   #xFF #x28
+                   #xFF #x28
                    #x48 #xFF #x28 )
         '(jmp (+ rip #xE))
         '(jmp (+ rip #x9))
@@ -853,13 +853,13 @@ unindented test case, given a file and a mode."
         '(jmpf (mem16:32+ rax))
         '(jmpf (mem16:64+ rax)))
 
-(test64 '#vu8(#xEB #x17 
-                   #xE9 #x12 #x00 #x00 #x00 
-                   #xFF #x20 
-                   #xFF #x28 
-                   #xFF #x28 
-                   #x48 #xFF #x28 
-                   #x0F #xB8 #xEA #xFF #xFF #xFF 
+(test64 '#vu8(#xEB #x17
+                   #xE9 #x12 #x00 #x00 #x00
+                   #xFF #x20
+                   #xFF #x28
+                   #xFF #x28
+                   #x48 #xFF #x28
+                   #x0F #xB8 #xEA #xFF #xFF #xFF
                    #x0F #x00 #x30)
         '(jmp (+ rip #x17))
         '(jmp (+ rip #x12))
@@ -1015,3 +1015,20 @@ unindented test case, given a file and a mode."
         '(vmovlhps xmm0 xmm1 xmm2)
         '(vmovlps (mem64+ rcx) xmm0)
         '(vmovhps (mem64+ rcx) xmm0))
+
+(test64 '#vu8(#x2E #x75 #xFD
+                   #x3E #x75 #xFA)
+        '(jnz.spnt (+ rip #x-3))
+        '(jnz.sptk (+ rip #x-6)))
+
+(test64 '#vu8(#xF0 #x4C #x0F #xB1 #x63 #x07)
+        '(lock.cmpxchg (mem64+ rbx #x7) r12))
+
+(test64 '#vu8(#xF3 #xF3 #x0F #xA7 #xD8
+                   #xF3 #x48 #xAB
+                   #xF3 #xA7
+                   #xF2 #x48 #xAF)
+        '(rep.xcryptctr)
+        '(rep.stosq (mem64+ rdi) rax)
+        '(repz.cmpsd (mem32+ rsi) (mem32+ rdi))
+        '(repnz.scasq rax (mem64+ rdi)))
