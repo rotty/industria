@@ -72,8 +72,7 @@
     prefix-set)
 
   (define-condition-type &invalid-opcode &condition
-    make-invalid-opcode invalid-opcode?
-    (reason invalid-opcode-reason))
+    make-invalid-opcode invalid-opcode?)
 
   (define-enumeration tag
     ;; Just used for the `tag' syntax. So here is a list of all tags
@@ -86,7 +85,7 @@
             (make-who-condition 'get-instruction)
             (make-message-condition msg)
             (make-irritants-condition irritants)
-            (make-invalid-opcode #t))))
+            (make-invalid-opcode))))
 
   (define (map-in-order f l)
     (if (null? l)
