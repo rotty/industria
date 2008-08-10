@@ -437,6 +437,28 @@ operand is an opcode extension."
                         (cdr instruction)))
                  (else instruction)))
           (else instruction)))
+
+  (define (fix-nop instruction prefixes mode operand-size)
+    (define (nop)
+      (if (enum-set-member? (prefix repz) prefixes) '(pause) '(nop)))
+    (if (eq? (car instruction) '*nop*)
+        (case mode
+          ((32 64)
+           (case operand-size
+             ((16) (if (enum-set-member? (prefix rex.b) prefixes)
+                       '(xchg r8w ax)
+                       '(xchg ax ax)))
+             ((32) (if (enum-set-member? (prefix rex.b) prefixes)
+                       '(xchg r8d eax)
+                       (nop)))
+             ((64) (if (enum-set-member? (prefix rex.b) prefixes)
+                       '(xchg r8 rax)
+                       '(xchg rax rax)))))
+          ((16)
+           (case operand-size
+             ((16) (nop))
+             ((32) '(xchg eax eax)))))
+        instruction))
 
 ;;; Instruction stream decoding
   (define (get-displacement port collect prefixes modr/m sib address-size)
@@ -872,12 +894,10 @@ bits, which are neded in get-displacement."
         ((Rd/Mw) (translate-displacement prefixes mode disp 32 16))
         ((Rd/Mb) (translate-displacement prefixes mode disp 32 8))
 
-        
+
         ((*rAX/r8 *rCX/r9 *rDX/r10 *rBX/r11 *rSP/r12 *rBP/r13 *rSI/r14 *rDI/r15)
          (translate-displacement prefixes mode (ModR/M-r/m opcode prefixes)
-                                 (if (= mode 64)
-                                     (if (= operand-size 32) 64 operand-size)
-                                     operand-size)))
+                                 operand-size))
         ((*AL/R8L *CL/R9L *DL/R10L *BL/R11L *AH/R12L *CH/R13L *DH/R14L *BH/R15L)
          (translate-displacement prefixes mode (ModR/M-r/m opcode prefixes) 8))
         ((*eCX *eDX *eBX *eSP *eBP *eSI *eDI)
@@ -947,12 +967,14 @@ bits, which are neded in get-displacement."
        (fix-branches
         (fix-lock
          (fix-pseudo-ops
-          (cons (car instr)
-                (map-in-order (lambda (op)
-                                (get-operand port mode collect op prefixes opcode vex.v
-                                             operand-size address-size modr/m drex.dest
-                                             disp /is4))
-                              (cdr instr))))
+          (fix-nop
+           (cons (car instr)
+                 (map-in-order (lambda (op)
+                                 (get-operand port mode collect op prefixes opcode vex.v
+                                              operand-size address-size modr/m drex.dest
+                                              disp /is4))
+                               (cdr instr)))
+           prefixes mode operand-size))
          prefixes)
         prefixes)
        prefixes)))

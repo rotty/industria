@@ -1693,12 +1693,7 @@
                #(#(Mode (pop Ev) (pop Eq/w))
                  #f #f #f #f #f #f #f))
        ;; 90
-       #(Datasize (xchg *AX *AX)
-                  #(Prefix (nop)
-                           (pause)
-                           #f
-                           #f)
-                  (xchg *rAX/r8 *rAX))
+       (*nop*)
        (xchg *rCX/r9 *rAX)
        (xchg *rDX/r10 *rAX)
        (xchg *rBX/r11 *rAX)

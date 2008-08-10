@@ -20,8 +20,8 @@
         (se weinholt disassembler x86))
 
 (define (print-test filename mode)
-  "Improvised pretty-printer (not so pretty really) that prints an
-unindented test case, given a file and a mode."
+  "Improvised pretty-printer (not so pretty really) that prints a kind
+of indented test case, given a file and a mode."
   (let ((p (open-file-input-port filename))
         (p2 (open-file-input-port filename)))
     (display "(test")
@@ -1032,3 +1032,46 @@ unindented test case, given a file and a mode."
         '(rep.stosq (mem64+ rdi) rax)
         '(repz.cmpsd (mem32+ rsi) (mem32+ rdi))
         '(repnz.scasq rax (mem64+ rdi)))
+
+;;; Test the special handling of NOP/PAUSE
+(test16 '#vu8(#x90
+              #x66 #x90
+              #x48
+              #x90
+              #xF3 #x90
+              #x87 #xC0)
+        '(nop)
+        '(xchg eax eax)
+        '(dec ax)
+        '(nop)
+        '(pause)
+        '(xchg ax ax))
+
+(test32 '#vu8(#x90
+              #x66 #x90
+              #x48
+              #x90
+              #xF3 #x90
+              #x87 #xC0)
+        '(nop)
+        '(xchg ax ax)
+        '(dec eax)
+        '(nop)
+        '(pause)
+        '(xchg eax eax))
+
+(test64 '#vu8(#x90 
+              #x66 #x90 
+              #x48 #x90 
+              #xF3 #x90
+              #x87 #xC0
+              #x41 #x90
+              #x66 #x41 #x90)
+        '(nop)
+        '(xchg ax ax)
+        '(xchg rax rax)
+        '(pause)
+        '(xchg eax eax)
+        '(xchg r8d eax)
+        '(xchg r8w ax))
+
