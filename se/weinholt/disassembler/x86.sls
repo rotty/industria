@@ -1000,7 +1000,8 @@ the port will be passed to the collector."
                      (opcode-collected #f)
                      (vex-traversed #f))
               (cond
-               ((and (= opcode #xC4) (or (= mode 64) (lookahead-is-valid-VEX? port)))
+               ((and (= opcode #xC4) (or (= mode 64) (lookahead-is-valid-VEX? port))
+                     (not (enum-set-member? (prefix vex) prefixes)))
                 ;; Three-byte VEX prefix
                 (let* ((byte1 (get-u8 port))
                        (byte2 (get-u8 port)))
@@ -1010,7 +1011,8 @@ the port will be passed to the collector."
                                (VEX-vvvv byte2 mode)
                                (VEX3->prefixes prefixes mode byte1 byte2))))
 
-               ((and (= opcode #xC5) (or (= mode 64) (lookahead-is-valid-VEX? port)))
+               ((and (= opcode #xC5) (or (= mode 64) (lookahead-is-valid-VEX? port))
+                     (not (enum-set-member? (prefix vex) prefixes)))
                 ;; Two-byte VEX prefix
                 (let ((byte1 (get-u8 port)))
                   (if collect (collect (tag prefix) opcode byte1))
