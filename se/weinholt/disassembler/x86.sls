@@ -1048,14 +1048,12 @@ the port will be passed to the collector."
                ((eq? (vector-ref instr 0) 'Group)
                 ;; Read a ModR/M byte and use the fields as opcode
                 ;; extension.
-                (let* ((modr/m (get-u8 port))
+                (if collect (collect (tag opcode) opcode))
+                (let* ((modr/m (get-u8/collect port collect (tag modr/m)))
                        (v (vector-ref instr (if (and (> (vector-length instr) 3)
                                                      (= (ModR/M-mod modr/m) #b11))
                                                 3 2)))
                        (instr (vector-ref v (ModR/M-reg modr/m))))
-                  (when collect
-                    (collect (tag opcode) opcode)
-                    (collect (tag modr/m) modr/m))
                   (cond ((and (vector? instr) (= (vector-length instr) 8))
                          (when debug (print-modr/m modr/m prefixes))
                          (lp (vector-ref instr (ModR/M-r/m modr/m))
