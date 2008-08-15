@@ -1,0 +1,145 @@
+#!/usr/bin/env scheme-script
+;; -*- mode: scheme; coding: utf-8 -*-
+;; The Minimum-Effort IRC bot
+;; Copyright © 2008 Göran Weinholt <goran@weinholt.se>
+;;
+;; This program is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+;;
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+;;
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#!ikarus
+
+(import (se weinholt parser irc)
+        (rnrs)
+        (only (ikarus) tcp-connect printf))
+
+;;; Configuration default
+
+;; Nicknames to try, in order.
+(define *nicknames* '("Industry" "Industry`" "Industry_"
+                      "Zeal" "Zeal`" "Zeal_"))
+(define *nickname* (car *nicknames*))
+(define *realname* "The Minimum-Effort IRC bot")
+(define *username* "meircbot")
+(define *channels* '("#spencer"))
+
+(define *server-hostname* "localhost")
+(define *server-port* "6667")
+
+;; Incoming messages will be transcoded with utf-8 and if that fails,
+;; fall back on latin-1.
+(define *incoming-codec* (utf-8-codec))
+(define *fallback-codec* (latin-1-codec))
+(define *outgoing-codec* (utf-8-codec))
+
+;;; Helpers
+
+(define (binary-get-line port)
+  (let lp ((l '()))
+    (let ((b (get-u8 port)))
+      (cond ((and (eof-object? b) (null? l))
+             b)
+            ((eof-object? b)
+             (u8-list->bytevector (reverse l)))
+            ((= b (char->integer #\linefeed))
+             (if (null? l)
+                 '#vu8()
+                 (if (= (car l) (char->integer #\return))
+                     (u8-list->bytevector (reverse (cdr l)))
+                     (u8-list->bytevector (reverse l)))))
+            (else
+             (lp (cons b l)))))))
+
+;;; Main program
+
+(define *server-out* #f)
+
+(define (fmt cmd . args)
+  (printf "=> ~a ~s~%" cmd args)
+  (apply format-message-with-whitewash *server-out* (utf-8-codec) #f cmd args)
+  (flush-output-port *server-out*))
+
+(define (handle-message prefix nick-src cmd args)
+  (printf "<= ~a ~a ~s~%" prefix cmd args)
+  (case cmd
+    ((PING)
+     (fmt 'PONG (car args)))
+
+    ((433)
+     ;; ERR_NICKNAMEINUSE
+     (set! *nicknames* (cdr *nicknames*))
+     (when (null? *nicknames*)
+       (display "All nicknames are taken, giving up!\n")
+       (exit 1))
+     (set! *nickname* (car *nicknames*))
+     (fmt 'NICK *nickname*))
+
+    ((NICK)
+     (when (and nick-src (swe-ascii-string-ci=? nick-src *nickname*))
+       ;; The server changed our nick
+       (set! *nickname* (car args))))
+
+    ((001)
+     ;; RPL_WELCOME
+     (for-each (lambda (c)
+                 (if (pair? c)
+                     (fmt 'JOIN (car c) (cdr c))
+                     (fmt 'JOIN c)))
+               *channels*))
+
+    ((PRIVMSG)
+     (when (and nick-src (= (length args) 2))
+       (cond ((swe-ascii-string-ci=? *nickname* (car args))
+              ;; Private message
+              (let ((msg (cadr args)))
+                (cond ((and (> (string-length msg) 3)
+                            (char=? #\x01 (string-ref msg 0))
+                            (char=? #\x01 (string-ref msg (- (string-length msg) 1))))
+                       (fmt 'PRIVMSG nick-src "I don't support CTCP!"))
+                      (else
+                       (fmt 'PRIVMSG nick-src "Whaddaya want?"))))
+              #f)
+             ((exists (lambda (c) (string-ci=? (car args)))
+                      *channels*)
+              ;; Public message to a channel
+              #f))))))
+
+(define (transcode-message prefix cmd parameters)
+  (handle-message
+   prefix
+   (if (extended-prefix? prefix) (prefix-nick prefix) #f)
+   cmd
+   (map (lambda (x)
+          (guard (con
+                  ((i/o-decoding-error? con)
+                   (bytevector->string x (make-transcoder *fallback-codec*))))
+                 (bytevector->string x (make-transcoder *incoming-codec*
+                                                        (eol-style none)
+                                                        (error-handling-mode raise)))))
+        parameters)))
+
+;; main loop
+(call-with-values
+    (lambda () (tcp-connect *server-hostname* *server-port*))
+  (lambda (out in)
+    (set! *server-out* out)
+    (fmt 'NICK *nickname*)
+    (fmt 'USER *username* 0 "*" *realname*)
+    (let lp ()
+      (let ((line (binary-get-line in)))
+        (cond ((eof-object? line)
+               (display "The server hung up on me!\n"))
+              (else
+               (call-with-values
+                   (lambda ()
+                     (parse-message-bytevector line))
+                 transcode-message)
+               (lp)))))))

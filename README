@@ -48,6 +48,11 @@ It can be used anywhere the normal define works.
 (define-values (foo bar)
   (values 1 2))
 
+** (se weinholt parser irc)
+A parser and formatter for the Internet Relay Chat protocol. Should be
+usable both for clients and servers. It can split IRC messages into
+prefix, command and argument parts and it also does the inverse.
+
 * TEST ROUTINES
 The tests/ directory contains scripts that test the libraries. Can
 also be useful if you want to see how a library is used.
@@ -64,3 +69,8 @@ The Full-Color Disassembler, which disassembles x86 code and colors
 the bytes in the hexdump. This makes it easy to see how many bytes all
 the different parts of an instruction uses.
 
+** meircbot
+The Minimum-Effort IRC bot. The script contains the configuration. It
+doesn't do anything other than joining channels and being rude in
+private messages. Shows how the (se weinholt parser irc) library is
+used. It requires tcp-connect and uses printf from (ikarus).
