@@ -34,7 +34,11 @@
 
 ;;; Usage etc
 
-;; Should follow RFC 2812 and RFC 2813.
+;; Note that this library isn't really ready to use. The parser will
+;; probably fail on malformed input (i.e. it will give exceptions
+;; other than &irc-parse). But if you're writing a client, it will be
+;; OK since if the server wants you to fail it can just disconnect
+;; you.
 
 ;; See programs/meircbot for an example usage.
 
@@ -45,6 +49,8 @@
 ;; the message. So if you never want your message to be truncated and
 ;; want to transmit maximum size messages, you must take the prefix
 ;; into consideration.
+
+;; Should follow RFC 2812 and RFC 2813.
 
 (library (se weinholt parser irc (1 0 0))
     (export irc-format-condition? irc-parse-condition?

@@ -30,6 +30,7 @@
 (define *realname* "The Minimum-Effort IRC bot")
 (define *username* "meircbot")
 (define *channels* '("#spencer"))
+(define *joined-channels* '())
 
 (define *server-hostname* "localhost")
 (define *server-port* "6667")
@@ -58,6 +59,9 @@
             (else
              (lp (cons b l)))))))
 
+(define (its-me? nick)
+  (and nick (swe-ascii-string-ci=? nick *nickname*)))
+
 ;;; Main program
 
 (define *server-out* #f)
@@ -83,9 +87,25 @@
      (fmt 'NICK *nickname*))
 
     ((NICK)
-     (when (and nick-src (swe-ascii-string-ci=? nick-src *nickname*))
+     (when (its-me? nick-src)
        ;; The server changed our nick
        (set! *nickname* (car args))))
+
+    ((JOIN)
+     (when (its-me? nick-src)
+       ;; The server joined us to a channel
+       (set! *joined-channels*
+             (cons (car args)
+                   *joined-channels*))
+       (printf "Currently joined to ~a~%" *joined-channels*)))
+
+    ((PART)
+     (when (its-me? nick-src)
+       ;; The server parted us from a channel
+       (set! *joined-channels*
+             (remp (lambda (x) (string-ci=? x (car args)))
+                   *joined-channels*))
+       (printf "Currently joined to ~a~%" *joined-channels*)))
 
     ((001)
      ;; RPL_WELCOME
@@ -97,18 +117,18 @@
 
     ((PRIVMSG)
      (when (and nick-src (= (length args) 2))
-       (cond ((swe-ascii-string-ci=? *nickname* (car args))
+       (cond ((its-me? (car args))
               ;; Private message
               (let ((msg (cadr args)))
-                (cond ((and (> (string-length msg) 3)
+                (cond ((and (>= (string-length msg) 2)
                             (char=? #\x01 (string-ref msg 0))
                             (char=? #\x01 (string-ref msg (- (string-length msg) 1))))
                        (fmt 'PRIVMSG nick-src "I don't support CTCP!"))
                       (else
                        (fmt 'PRIVMSG nick-src "Whaddaya want?"))))
               #f)
-             ((exists (lambda (c) (string-ci=? (car args)))
-                      *channels*)
+             ((exists (lambda (c) (string-ci=? c (car args)))
+                      *joined-channels*)
               ;; Public message to a channel
               #f))))))
 
