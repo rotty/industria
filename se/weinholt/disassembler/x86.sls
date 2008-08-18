@@ -887,9 +887,9 @@ bits, which are neded in get-displacement."
                                    ((32) 64))))
 
         ((Rd/q)
-         ;; 64-bit general register in long mode, 32-bit
-         ;; otherwise?
-         (translate-displacement prefixes mode disp 64 'notmem))
+         ;; 64-bit general register in long mode, 32-bit in legacy.
+         (translate-displacement prefixes mode disp
+                                 (if (= mode 16) 32 mode) 'notmem))
         ((Rv/Mw) (translate-displacement prefixes mode disp operand-size 16))
         ((Rd/Mw) (translate-displacement prefixes mode disp 32 16))
         ((Rd/Mb) (translate-displacement prefixes mode disp 32 8))
