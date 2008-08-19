@@ -52,7 +52,7 @@
 
 ;; Should follow RFC 2812 and RFC 2813.
 
-(library (se weinholt parser irc (1 0 0))
+(library (se weinholt net irc (1 0 0))
     (export irc-format-condition? irc-parse-condition?
             parse-message parse-message-bytevector
             format-message-raw format-message-and-verify

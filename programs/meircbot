@@ -17,7 +17,7 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!ikarus
 
-(import (se weinholt parser irc)
+(import (se weinholt net irc)
         (rnrs)
         (only (ikarus) tcp-connect printf))
 
