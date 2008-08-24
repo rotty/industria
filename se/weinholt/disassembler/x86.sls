@@ -373,8 +373,9 @@ operand is an opcode extension."
                           xadd xchg xor))
     (cond ((not (enum-set-member? (prefix lock) prefixes))
            instruction)
-          ((not (exists list? (cdr instruction)))
-           (raise-UD "LOCK prefix requires a memory operand"))
+          ((or (null? (cdr instruction))
+               (not (list? (cadr instruction))))
+           (raise-UD "LOCK prefix requires a memory destination operand"))
           ((memq (car instruction) opcodes) =>
            (lambda (name)
              (cons (string->symbol
