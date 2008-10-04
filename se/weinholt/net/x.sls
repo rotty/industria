@@ -60,14 +60,15 @@
                                       (symbol->string
                                        (syntax->datum field-name)))))))
                   (ref
-                   (lambda (type offset)
+                   (lambda (type offset . base-offset)
                      (syntax-case type (u8 u16 u32 string8)
                        (u8 #`(read-u8 t #,offset))
                        (u16 #`(read-u16 t #,offset))
                        (u32 #`(read-u32 t #,offset))
                        ((string8 length)
                         #`(read-string8 t #,offset
-                                        (#,(make-accessor-name #'length) t))))))
+                                        (#,(make-accessor-name #'length)
+                                         t #,@base-offset))))))
                   (get-size
                    (lambda (type)
                      (syntax-case type (u8 u16 u32 string8)
@@ -87,9 +88,10 @@
                               ((t)
                                #,(ref #'type
                                       (cons #'+ offset)))
-                              ((t offset*)
+                              ((t base-offset)
                                #,(ref #'type
-                                      (cons #'+ (cons #'offset* offset))))))
+                                      (cons #'+ (cons #'base-offset offset))
+                                      #'base-offset))))
                           #,@(lp #'(fields* ...)
                                  (cons (get-size #'type) offset))))
                       (((type) fields* ...)
@@ -139,11 +141,20 @@
       n))
 
 (define-record-type x-display
-  (fields inport output protocol-major-version protocol-minor-version
+  (fields inport outport protocol-major-version protocol-minor-version
           release-number resource-id-base resource-id-mask motion-buffer-size
           maximum-request-length image-byte-order bitmap-format-bit-order
           bitmap-format-scanline-unit bitmap-format-scanline-pad min-keycode
-          max-keycode vendor pixmap-formats roots))
+          max-keycode vendor pixmap-formats roots
+          (mutable next-resource-id)))
+
+(define (x-display-get-resource-id! display)
+  ;; FIXME: this should support the case where some of the lower bits
+  ;; in id-mask are zero. Should also check that we don't overrun the
+  ;; ID space.
+  (let ((id (x-display-next-resource-id display)))
+    (x-display-next-resource-id-set! display (+ id 1))
+    id))
 
 (define-x-struct format
   (u8 depth)
@@ -232,6 +243,30 @@
     ((65535) 'Wild)
     (else f)))
 
+;; Fields common to all replies
+(define-x-struct reply
+  (u8)
+  (u8)
+  (u16 sequence-number)
+  (u32 length))
+
+
+;; Atom IDs for these are from 1 to 68 inclusive
+(define predefined-atoms
+  '(PRIMARY SECONDARY ARC ATOM BITMAP CARDINAL COLORMAP CURSOR
+            CUT_BUFFER0 CUT_BUFFER1 CUT_BUFFER2 CUT_BUFFER3 CUT_BUFFER4
+            CUT_BUFFER5 CUT_BUFFER6 CUT_BUFFER7 DRAWABLE FONT INTEGER PIXMAP POINT
+            RECTANGLE RESOURCE_MANAGER RGB_COLOR_MAP RGB_BEST_MAP RGB_BLUE_MAP
+            RGB_DEFAULT_MAP RGB_GRAY_MAP RGB_GREEN_MAP RGB_RED_MAP STRING VISUALID
+            WINDOW WM_COMMAND WM_HINTS WM_CLIENT_MACHINE WM_ICON_NAME WM_ICON_SIZE
+            WM_NAME WM_NORMAL_HINTS WM_SIZE_HINTS WM_ZOOM_HINTS MIN_SPACE
+            NORM_SPACE MAX_SPACE END_SPACE SUPERSCRIPT_X SUPERSCRIPT_Y SUBSCRIPT_X
+            SUBSCRIPT_Y UNDERLINE_POSITION UNDERLINE_THICKNESS STRIKEOUT_ASCENT
+            STRIKEOUT_DESCENT ITALIC_ANGLE X_HEIGHT QUAD_WIDTH WEIGHT POINT_SIZE
+            RESOLUTION COPYRIGHT NOTICE FONT_NAME FAMILY_NAME FULL_NAME CAP_HEIGHT
+            WM_CLASS WM_TRANSIENT_FOR))
+
+
 ;;; Input buffering
 
 (define-record-type buffer
@@ -290,9 +325,24 @@
 
 ;;; Output
 
+(define (put-s8 p i)
+  (let ((x (make-bytevector 1)))
+    (bytevector-s8-set! x 0 i)
+    (put-bytevector p x)))
+
+(define (put-s16 p i)
+  (let ((x (make-bytevector 2)))
+    (bytevector-s16-set! x 0 i (native-endianness))
+    (put-bytevector p x)))
+
 (define (put-u16 p i)
   (let ((x (make-bytevector 2)))
     (bytevector-u16-set! x 0 i (native-endianness))
+    (put-bytevector p x)))
+
+(define (put-u32 p i)
+  (let ((x (make-bytevector 4)))
+    (bytevector-u32-set! x 0 i (native-endianness))
     (put-bytevector p x)))
 
 
@@ -306,6 +356,28 @@
                         (bytevector-length s))))
         (put-bytevector port s)
         (put-bytevector port (make-bytevector padding 0)))))
+
+(define (put-values p values names)
+  (let lp ((mask 0)
+           (i 0)
+           (longs '())
+           (names names))
+    (cond ((null? names)
+           (put-u32 p mask)
+           (for-each (lambda (v)
+                       ;; FIXME: is the signed handling correct?
+                       (if (negative? v)
+                           (put-s32 p v)
+                           (put-u32 p v)))
+                     (reverse longs)))
+          ((assq (car names) values) =>
+           (lambda (v)
+             (lp (bitwise-ior mask (bitwise-arithmetic-shift-left 1 i))
+                 (+ i 1)
+                 (cons (cdr v) longs)
+                 (cdr names))))
+          (else
+           (lp mask (+ i 1) longs (cdr names))))))
 
 ;;; X authority
 
@@ -361,7 +433,7 @@
           (put-u16 o 0)                 ;unused
           (put-string8 o (x-authority-name auth))
           (put-string8 o (x-authority-data auth))
-          
+
           (flush-output-port o))
 
         (buffer-read! b 8)
@@ -376,66 +448,69 @@
            (error 'x-open-display "The X server demands further authorization"))
 
           ((1)
-           (letrec ((get-screens (lambda (num offset acc)
-                                   (if (zero? num)
-                                       (list->vector (reverse acc))
-                                       (call-with-values
-                                           (lambda ()
-                                             (get-depths (screen-number-of-depths b offset)
-                                                         (+ offset (screen-sizeof* b))
-                                                         '()))
-                                         (lambda (offset* depths)
-                                           (get-screens (- num 1)
-                                                        offset*
-                                                        (cons (make-x-screen
-                                                               (screen-root b offset)
-                                                               (screen-default-colormap b offset)
-                                                               (screen-white-pixel b offset)
-                                                               (screen-black-pixel b offset)
-                                                               (screen-current-input-masks b offset)
-                                                               (screen-width-in-pixels b offset)
-                                                               (screen-height-in-pixels b offset)
-                                                               (screen-width-in-millimeters b offset)
-                                                               (screen-height-in-millimeters b offset)
-                                                               (screen-min-installed-maps b offset)
-                                                               (screen-max-installed-maps b offset)
-                                                               (screen-root-visual b offset)
-                                                               (screen-backing-stores->symbol
-                                                                (screen-backing-stores b offset))
-                                                               (screen-save-unders b offset)
-                                                               (screen-root-depth b offset)
-                                                               depths)
-                                                              acc)))))))
-                    (get-depths (lambda (num offset acc)
-                                  (if (zero? num)
-                                      (values offset (reverse acc))
-                                      (call-with-values
-                                          (lambda ()
-                                            (get-visualtypes (depth-number-of-visualtypes b offset)
-                                                             (+ offset (depth-sizeof* b))
-                                                             '()))
-                                        (lambda (offset* visualtypes)
-                                          (get-depths (- num 1)
-                                                      offset*
-                                                      (cons (make-x-depth (depth-depth b offset)
-                                                                          visualtypes)
-                                                            acc)))))))
-                    (get-visualtypes (lambda (num offset acc)
-                                       (if (zero? num)
-                                           (values offset (reverse acc))
-                                           (get-visualtypes
-                                            (- num 1)
-                                            (+ offset (visualtype-sizeof* b))
-                                            (cons (make-x-visualtype
-                                                   (visualtype-visual-id b offset)
-                                                   (visualtype-class->symbol
-                                                    (visualtype-class b offset))
-                                                   (visualtype-bits-per-rgb-value b offset)
-                                                   (visualtype-colormap-entries b offset)
-                                                   (visualtype-red-mask b offset)
-                                                   (visualtype-green-mask b offset)
-                                                   (visualtype-blue-mask b offset))
-                                                  acc))))))
+           (letrec ((get-screens
+                     (lambda (num offset acc)
+                       (if (zero? num)
+                           (list->vector (reverse acc))
+                           (call-with-values
+                               (lambda ()
+                                 (get-depths (screen-number-of-depths b offset)
+                                             (+ offset (screen-sizeof* b))
+                                             '()))
+                             (lambda (offset* depths)
+                               (get-screens (- num 1)
+                                            offset*
+                                            (cons (make-x-screen
+                                                   (screen-root b offset)
+                                                   (screen-default-colormap b offset)
+                                                   (screen-white-pixel b offset)
+                                                   (screen-black-pixel b offset)
+                                                   (screen-current-input-masks b offset)
+                                                   (screen-width-in-pixels b offset)
+                                                   (screen-height-in-pixels b offset)
+                                                   (screen-width-in-millimeters b offset)
+                                                   (screen-height-in-millimeters b offset)
+                                                   (screen-min-installed-maps b offset)
+                                                   (screen-max-installed-maps b offset)
+                                                   (screen-root-visual b offset)
+                                                   (screen-backing-stores->symbol
+                                                    (screen-backing-stores b offset))
+                                                   (screen-save-unders b offset)
+                                                   (screen-root-depth b offset)
+                                                   depths)
+                                                  acc)))))))
+                    (get-depths
+                     (lambda (num offset acc)
+                       (if (zero? num)
+                           (values offset (reverse acc))
+                           (call-with-values
+                               (lambda ()
+                                 (get-visualtypes (depth-number-of-visualtypes b offset)
+                                                  (+ offset (depth-sizeof* b))
+                                                  '()))
+                             (lambda (offset* visualtypes)
+                               (get-depths (- num 1)
+                                           offset*
+                                           (cons (make-x-depth (depth-depth b offset)
+                                                               visualtypes)
+                                                 acc)))))))
+                    (get-visualtypes
+                     (lambda (num offset acc)
+                       (if (zero? num)
+                           (values offset (reverse acc))
+                           (get-visualtypes
+                            (- num 1)
+                            (+ offset (visualtype-sizeof* b))
+                            (cons (make-x-visualtype
+                                   (visualtype-visual-id b offset)
+                                   (visualtype-class->symbol
+                                    (visualtype-class b offset))
+                                   (visualtype-bits-per-rgb-value b offset)
+                                   (visualtype-colormap-entries b offset)
+                                   (visualtype-red-mask b offset)
+                                   (visualtype-green-mask b offset)
+                                   (visualtype-blue-mask b offset))
+                                  acc))))))
 
              (make-x-display
               i o
@@ -446,7 +521,7 @@
               (init-reply-resource-id-mask b)
               (init-reply-motion-buffer-size b)
               (init-reply-maximum-request-length b)
-              (init-reply-image-byte-order->symbol 
+              (init-reply-image-byte-order->symbol
                (init-reply-image-byte-order b))
               (init-reply-bitmap-format-bit-order->symbol
                (init-reply-bitmap-format-bit-order b))
@@ -466,9 +541,620 @@
                            (+ (init-reply-sizeof* b)
                               (* (format-sizeof* b)
                                  (init-reply-number-of-formats b)))
-                           '())))))))))
+                           '())
+              (init-reply-resource-id-base b)))))))))
 
-(define dpy (x-open-display "localhost" "x11-1"))
-(define screen (vector-ref (x-display-roots dpy) 0))
+;;; Error handling
 
+(define-x-struct error
+  (u8)
+  (u8 code)
+  (u16 sequence-number)
+  (u32 value)
+  (u16 minor-opcode)
+  (u8 major-opcode)
+  (u8)
+  (u32) (u32) (u32) (u32) (u32))
+
+(define-condition-type &x-error &error
+  make-x-error x-error?
+  (sequence-number x-error-sequence-number)
+  (major-opcode x-error-major-opcode)
+  (minor-opcode x-error-minor-opcode))
+
+(define-condition-type &x-request-error &x-error
+  make-x-request-error x-request-error?)
+
+(define-condition-type &x-value-error &x-error
+  make-x-value-error x-value-error?)
+
+(define-condition-type &x-window-error &x-error
+  make-x-window-error x-window-error?)
+
+(define-condition-type &x-pixmap-error &x-error
+  make-x-pixmap-error x-pixmap-error?)
+
+(define-condition-type &x-atom-error &x-error
+  make-x-atom-error x-atom-error?)
+
+(define-condition-type &x-cursor-error &x-error
+  make-x-cursor-error x-cursor-error?)
+
+(define-condition-type &x-font-error &x-error
+  make-x-font-error x-font-error?)
+
+(define-condition-type &x-match-error &x-error
+  make-x-match-error x-match-error?)
+
+(define-condition-type &x-drawable-error &x-error
+  make-x-drawable-error x-drawable-error?)
+
+(define-condition-type &x-access-error &x-error
+  make-x-access-error x-access-error?)
+
+(define-condition-type &x-alloc-error &x-error
+  make-x-alloc-error x-alloc-error?)
+
+(define-condition-type &x-colormap-error &x-error
+  make-x-colormap-error x-colormap-error?)
+
+(define-condition-type &x-gcontext-error &x-error
+  make-x-gcontext-error x-gcontext-error?)
+
+(define-condition-type &x-idchoice-error &x-error
+  make-x-idchoice-error x-idchoice-error?)
+
+(define-condition-type &x-name-error &x-error
+  make-x-name-error x-name-error?)
+
+(define-condition-type &x-length-error &x-error
+  make-x-length-error x-length-error?)
+
+(define-condition-type &x-implementation-error &x-error
+  make-x-implementation-error x-implementation-error?)
+
+(define-condition-type &x-unknown-error &x-error
+  make-x-unknown-error x-unknown-error?)
+
+;; The errors are in order of code, starting with code 1.
+(define x-errors
+  (vector (list make-x-request-error #f "An invalid major or minor opcode was sent to the X server")
+          (list make-x-value-error #t "An out of range numeric value was sent to the X server")
+          (list make-x-window-error #t "An invalid WINDOW was sent to the X server")
+          (list make-x-pixmap-error #t "An invalid PIXMAP was sent to the X server")
+          (list make-x-atom-error #t "An invalid ATOM was sent to the X server")
+          (list make-x-cursor-error #t "An invalid CURSOR was sent to the X server")
+          (list make-x-font-error #t "An invalid FONT or FONTABLE (FONT or GCONTEXT) was sent to the X server")
+          (list make-x-match-error #f "An invalid combination of arguments was sent in the request to the X server")
+          (list make-x-drawable-error #t "An invalid DRAWABLE (WINDOW or PIXMAP) was sent to the X server")
+          (list make-x-access-error #f "The X server denied access to the requested resource.")
+          (list make-x-alloc-error #f "The X server could not allocate the resource (out of memory?)")
+          (list make-x-colormap-error #t "An invalid COLORMAP was sent to the X server")
+          (list make-x-gcontext-error #t "An invalid GCONTEXT was sent to the X server")
+          (list make-x-idchoice-error #t "A resource ID was sent to the X server that was out of range or already in use")
+          (list make-x-name-error #f "A font or color that does not exist was sent to the X server")
+          (list make-x-length-error #f "The length of the request sent to the X server was too short or too long")
+          (list make-x-implementation-error #f "The X server is deficient and did not fulfill the request")))
+
+(define (raise-x-error b)
+  (raise
+   (cond ((<= 1 (error-code b) (vector-length x-errors))
+          (let* ((e (vector-ref x-errors (- (error-code b) 1)))
+                 (make-the-error (car e))
+                 (value-valid (cadr e))
+                 (msg (caddr e)))
+            (condition
+             (make-message-condition msg)
+             (make-the-error (error-sequence-number b)
+                             (error-major-opcode b)
+                             (error-minor-opcode b))
+             (make-irritants-condition
+              (if value-valid (error-value b) #f)))))
+         (else
+          (condition
+           (make-message-condition "The X server sent an unknown error code")
+           (make-x-unknown-error (error-sequence-number b)
+                                 (error-major-opcode b)
+                                 (error-minor-opcode b))
+           (make-irritants-condition (error-code b)))))))
+
+;;;
+
+
+(define (x-create-window display depth parent x y width height border-width class visual values)
+  (let ((o (x-display-outport display))
+        (wid (x-display-get-resource-id! display)))
+    (put-u8 o 1)                        ;CreateWindow
+    (put-u8 o depth)
+    (put-u16 o (+ 8 (length values)))
+    (put-u32 o wid)
+    (put-u32 o parent)
+    (put-u16 o x)
+    (put-u16 o y)
+    (put-u16 o width)
+    (put-u16 o height)
+    (put-u16 o border-width)
+    (put-u16 o class)
+    (put-u32 o visual)
+    (put-values o values
+                '(background-pixmap
+                  background-pixel
+                  border-pixmap
+                  border-pixel
+                  bit-gravity
+                  win-gravity
+                  backing-store
+                  backing-planes
+                  backing-pixel
+                  override-redirect
+                  save-under
+                  event-mask
+                  do-not-propagate-mask
+                  colormap
+                  cursor))
+    (flush-output-port o)
+    wid))
+
+(define (x-change-window-attributes display window values)
+  (let ((o (x-display-outport display)))
+    (put-u8 o 2)                        ;ChangeWindowAttributes
+    (put-u8 o 0)
+    (put-u16 o (+ 3 (length values)))
+    (put-u32 o window)
+    (put-values o values
+                '(background-pixmap
+                  background-pixel
+                  border-pixmap
+                  border-pixel
+                  bit-gravity
+                  win-gravity
+                  backing-store
+                  backing-planes
+                  backing-pixel
+                  override-redirect
+                  save-under
+                  event-mask
+                  do-not-propagate-mask
+                  colormap
+                  cursor))
+    (flush-output-port o)))
+
+(define (x-destroy-window display window)
+  (let ((o (x-display-outport display)))
+    (put-u8 o 4)                        ;DestroyWindow
+    (put-u8 o 0)
+    (put-u16 o 2)
+    (put-u32 o window)
+    (flush-output-port o)))
+
+(define (x-map-window display window)
+  (let ((o (x-display-outport display)))
+    (put-u8 o 8)                        ;MapWindow
+    (put-u8 o 0)
+    (put-u16 o 2)
+    (put-u32 o window)
+    (flush-output-port o)))
+
+(define (x-unmap-window display window)
+  (let ((o (x-display-outport display)))
+    (put-u8 o 10)                        ;UnmapWindow
+    (put-u8 o 0)
+    (put-u16 o 2)
+    (put-u32 o window)
+    (flush-output-port o)))
+
+;; FIXME: displays should have an ATOM map. symbols should be usable
+;; as atoms transparently, regardless of if they are interned or not.
+;; atoms can not be uninterned... NUL bytes might not work in atoms.
+;; they should be latin-1 apparently, but does utf8 work?
+
+(define (x-intern-atom display name only-if-exists)
+  (let ((o (x-display-outport display)))
+    (put-u8 o 16)                       ;InternAtom
+    (put-u8 o (if only-if-exists 1 0))
+    (put-u16 o (+ 2 (/ (round4 (string-length name)) 4)))
+    (put-u16 o (string-length name))
+    (put-u16 o 0)
+    (put-string8 o name)
+    (flush-output-port o)
+
+    (let ((b (make-buffer (x-display-inport display))))
+      (buffer-read! b 32)
+
+      (case (read-u8 b 0)
+
+        ((1)
+         ;; reply
+         (print "got a reply... " (reply-sequence-number b))
+         (buffer-read! b (* (reply-length b) 4))
+
+         (read-u32 b 8))
+
+        ((0)
+         (raise-x-error b))
+        (else
+         (print "what is this? first byte: " (read-u8 b 0)))))))
+
+(define (x-get-atom-name display atom)
+  (define-x-struct get-atom-name-reply
+    (u16 length-of-name)
+    (u16) (u32) (u32) (u32) (u32) (u32)
+    ((string8 length-of-name) name))
+  (let ((o (x-display-outport display)))
+    (put-u8 o 17)                       ;GetAtomName
+    (put-u8 o 0)
+    (put-u16 o 2)
+    (put-u32 o atom)
+    (flush-output-port o)
+    (let ((b (make-buffer (x-display-inport display))))
+      (buffer-read! b 32)
+      (case (read-u8 b 0)
+        ((1)
+         ;; reply
+;;          (print "got a reply... " (reply-sequence-number b))
+         (buffer-read! b (* (reply-length b) 4))
+         (get-atom-name-reply-name b (reply-sizeof* b)))
+        ((0)
+         (raise-x-error b))
+        (else
+         (print "what is this? first byte: " (read-u8 b 0)))))))
+
+(define (x-create-gc display drawable values)
+  (let ((o (x-display-outport display))
+        (cid (x-display-get-resource-id! display)))
+    (put-u8 o 55)                       ;CreateGC
+    (put-u8 o 0)                        ;unused
+    (put-u16 o (+ 4 (length values)))
+    (put-u32 o cid)
+    (put-u32 o drawable)
+    (put-values o values
+                '(function
+                  plane-mask
+                  foreground
+                  background
+                  line-width
+                  line-style
+                  cap-style
+                  join-style
+                  fill-style
+                  fill-rule
+                  tile
+                  stipple
+                  tile-stipple-x-origin
+                  tile-stipple-y-origin
+                  font
+                  subwindow-mode
+                  graphics-exposures
+                  clip-x-origin
+                  clip-y-origin
+                  clip-mask
+                  dash-offset
+                  dashes
+                  arc-mode))
+    (flush-output-port o)
+    cid))
+
+(define (x-change-gc display gc values)
+  (let ((o (x-display-outport display))
+        (cid (x-display-get-resource-id! display)))
+    (put-u8 o 56)                       ;ChangeGC
+    (put-u8 o 0)                        ;unused
+    (put-u16 o (+ 3 (length values)))
+    (put-u32 o gc)
+    (put-values o values
+                '(function
+                  plane-mask
+                  foreground
+                  background
+                  line-width
+                  line-style
+                  cap-style
+                  join-style
+                  fill-style
+                  fill-rule
+                  tile
+                  stipple
+                  tile-stipple-x-origin
+                  tile-stipple-y-origin
+                  font
+                  subwindow-mode
+                  graphics-exposures
+                  clip-x-origin
+                  clip-y-origin
+                  clip-mask
+                  dash-offset
+                  dashes
+                  arc-mode))
+    (flush-output-port o)))
+
+
+(define (x-clear-area display window x y width height exposures)
+  (let ((o (x-display-outport display))
+        (cid (x-display-get-resource-id! display)))
+    (put-u8 o 61)                       ;ClearArea
+    (put-u8 o (if exposures 1 0))
+    (put-u16 o 4)
+    (put-u32 o window)
+    (put-s16 o x)
+    (put-s16 o y)
+    (put-u16 o width)
+    (put-u16 o height)
+    (flush-output-port o)))
+
+(define (x-poly-point display drawable gc coordinate-mode points)
+  (let ((o (x-display-outport display))
+        (cid (x-display-get-resource-id! display)))
+    (put-u8 o 64)                       ;PolyPoint
+    (put-u8 o coordinate-mode)
+    (put-u16 o (+ 3 (length points)))
+    (put-u32 o drawable)
+    (put-u32 o gc)
+    (for-each (lambda (p)
+                (put-s16 o (car p))
+                (put-s16 o (cdr p)))
+              points)
+    (flush-output-port o)))
+
+(define (x-poly-line display drawable gc coordinate-mode points)
+  (let ((o (x-display-outport display))
+        (cid (x-display-get-resource-id! display)))
+    (put-u8 o 65)                       ;PolyLine
+    (put-u8 o coordinate-mode)
+    (put-u16 o (+ 3 (length points)))
+    (put-u32 o drawable)
+    (put-u32 o gc)
+    (for-each (lambda (p)
+                (put-s16 o (car p))
+                (put-s16 o (cdr p)))
+              points)
+    (flush-output-port o)))
+
+(define (x-poly-segment display drawable gc segments)
+  (let ((o (x-display-outport display))
+        (cid (x-display-get-resource-id! display)))
+    (put-u8 o 66)                       ;PolySegment
+    (put-u8 o 0)
+    (put-u16 o (+ 3 (* 2 (length segments))))
+    (put-u32 o drawable)
+    (put-u32 o gc)
+    (for-each (lambda (p)
+                (put-s16 o (car p))     ;x1
+                (put-s16 o (cadr p))    ;y1
+                (put-s16 o (caddr p))   ;x2
+                (put-s16 o (cadddr p))) ;y2
+              segments)
+    (flush-output-port o)))
+
+(define (x-poly-rectangle display drawable gc rectangles)
+  (let ((o (x-display-outport display))
+        (cid (x-display-get-resource-id! display)))
+    (put-u8 o 67)                       ;PolyRectangle
+    (put-u8 o 0)
+    (put-u16 o (+ 3 (* 2 (length rectangles))))
+    (put-u32 o drawable)
+    (put-u32 o gc)
+    (for-each (lambda (p)
+                (put-s16 o (car p))     ;x
+                (put-s16 o (cadr p))    ;y
+                (put-u16 o (caddr p))   ;width
+                (put-u16 o (cadddr p))) ;height
+              rectangles)
+    (flush-output-port o)))
+
+(define (x-poly-arc display drawable gc arcs)
+  (let ((o (x-display-outport display))
+        (cid (x-display-get-resource-id! display)))
+    (put-u8 o 68)                       ;PolyArcs
+    (put-u8 o 0)
+    (put-u16 o (+ 3 (* 3 (length arcs))))
+    (put-u32 o drawable)
+    (put-u32 o gc)
+    (for-each (lambda (p)
+                (put-s16 o (list-ref p 0)) ;x
+                (put-s16 o (list-ref p 1)) ;y
+                (put-u16 o (list-ref p 2)) ;width
+                (put-u16 o (list-ref p 3)) ;height
+                (put-s16 o (list-ref p 4)) ;angle1
+                (put-s16 o (list-ref p 5))) ;angle2
+              arcs)
+    (flush-output-port o)))
+
+(define (x-fill-poly display drawable gc shape coordinate-mode points)
+  (let ((o (x-display-outport display))
+        (cid (x-display-get-resource-id! display)))
+    (put-u8 o 69)                       ;FillPoly
+    (put-u8 o 0)
+    (put-u16 o (+ 4 (length points)))
+    (put-u32 o drawable)
+    (put-u32 o gc)
+    (put-u8 o shape)
+    (put-u8 o coordinate-mode)
+    (put-u16 o 0)
+    (for-each (lambda (p)
+                (put-s16 o (car p))     ;x
+                (put-s16 o (cdr p)))    ;y
+              points)
+    (flush-output-port o)))
+
+
+;;;
+
+(define (send-request display opcode byte1 data)
+  (when (or (not (zero? (bitwise-and (bytevector-length data) #b11)))
+            (> (bytevector-length data) (* 4 #xfffe)))
+    ;; TODO: look at the BIG-REQUEST extension
+    (error 'send-request "the request is too large to be encoded"))
+  (let ((o (x-display-outport display))
+        (cid (x-display-get-resource-id! display)))
+    (put-u8 o opcode)
+    (put-u8 o byte1)
+    (put-u16 o (+ 1 (/ (bytevector-length data) 4)))
+    (put-bytevector o data)
+    (flush-output-port o)))
+
+(define (x-fill-poly display drawable gc shape coordinate-mode points)
+  (call-with-values open-bytevector-output-port
+    (lambda (o c)
+      (let ((cid (x-display-get-resource-id! display)))
+        (put-u32 o drawable)
+        (put-u32 o gc)
+        (put-u8 o shape)
+        (put-u8 o coordinate-mode)
+        (put-u16 o 0)
+        (for-each (lambda (p)
+                    (put-s16 o (car p))  ;x
+                    (put-s16 o (cdr p))) ;y
+                  points))
+      (send-request display 69 0 (c)))))
+
+;;;
+
+(define (x-list-extensions display)
+  (let ((o (x-display-outport display)))
+    (put-u8 o 99)                       ;ListExtensions
+    (put-u8 o 0)                        ;unused
+    (put-u16 o 1)
+    (flush-output-port o)
+    (get-next-thing display)))
+
+(define (x-change-keyboard-control display values)
+  ;; Keyword arguments would be somewhat useful here
+  (let ((o (x-display-outport display)))
+    (put-u8 o 102)                      ;ChangeKeyboardControl
+    (put-u8 o 0)                        ;unused
+    (put-u16 o (+ 2 (length values)))
+
+    (put-values o values
+                '(key-click-percent
+                  bell-percent
+                  bell-pitch
+                  bell-duration
+                  led
+                  led-mode
+                  key
+                  auto-repeat-mode))
+    
+    (flush-output-port o)
+    ))
+
+
+
+(define (x-bell display percent)
+  (let ((o (x-display-outport display)))
+    (put-u8 o 104)                      ;Bell
+    (put-s8 o percent)
+    (put-u16 o 1)                       ;request length
+    (flush-output-port o)))
+
+
+(define (get-next-thing display)
+  (let ((b (make-buffer (x-display-inport display))))
+    (buffer-read! b 32)
+    (case (read-u8 b 0)
+      ((1)
+       ;; reply
+       (print "got a reply... " (reply-sequence-number b))
+       (buffer-read! b (* (reply-length b) 4))
+       )
+      ((0)
+       (raise-x-error b))
+      (else
+       (print "what is this? first byte: " (read-u8 b 0))))))
+
+(define dpy (x-open-display "localhost" "x11"))
+
+(define screen (vector-ref (x-display-roots dpy) 1))
+
+
+(define red (x-create-gc dpy (x-screen-root screen) '((background . #xff0000))))
+
+(define black (x-create-gc dpy (x-screen-root screen) '((background . #xffffff))))
+
+(define cfx-background #xbbd7a6)
+
+(define cfx-orange (x-create-gc dpy (x-screen-root screen)
+                                '((foreground . #xf25d19))))
+
+(define cfx-blue (x-create-gc dpy (x-screen-root screen)
+                              '((foreground . #x254aa5))))
+
+(define cfx-green (x-create-gc dpy (x-screen-root screen)
+                               '((foreground . #x1aaf59))))
+
+
+(define w (x-create-window dpy 0 (x-screen-root screen)
+                           0 0 100 100
+                           1
+                           1
+                           0
+                           (list (cons 'background-pixel cfx-background)
+                                 '(border-pixel . 0)
+                                 '(bit-gravity . 1))))
+
+(x-map-window dpy w)
+
+
+
+(do ((points '() (cons (cons (random 300) (random 300)) points))
+     (i 0 (+ i 1)))
+    ((= i 500)
+     (x-poly-line dpy w cfx-green 0 points)))
+
+(x-poly-segment dpy w black '((0 0 10 10)
+                              (2 0 12 10)
+                              (4 0 14 10)
+                              (6 0 16 10)))
+
+
+(x-poly-rectangle dpy w cfx-orange '((0 0 10 10)
+                                     (10 10 40 40)
+                                     (50 50 100 100)
+                                     ))
+
+
+
+(x-poly-line dpy w cfx-orange 0 '((0 . 0) (10 . 10)))
+
+(x-poly-line dpy w cfx-green 0 '((11 . 11) (30 . 30)))
+
+(x-poly-line dpy w cfx-blue 0 '((31 . 31) (40 . 40)))
+
+(x-poly-arc dpy w cfx-green '((1 10 400 400 2000 3300)))
+
+(x-fill-poly dpy w cfx-green 0 0 '((0 . 0) (300 . 0) (150 . 150)))
+
+(x-destroy-window dpy w)
+
+
+(x-change-gc dpy cfx-orange '((function . 3)
+                              (foreground . #xf25d19)
+                              (background . #xbbd7a6)
+                              (fill-style . 2)))
+
+
+(x-change-window-attributes dpy w
+                            (list (cons 'background-pixel cfx-orange)
+                                  '(border-pixel . 0)
+                                  '(bit-gravity . 1)))
+
+
+
+(x-clear-area dpy w 0 0 0 0 #f)         ;"clear screen"
+
+
+(get-next-thing dpy)
+
+(x-change-keyboard-control dpy '((led-mode . 1)))
+
+
+
+(x-intern-atom dpy "TEST" #f)
+
+(do ((i 1 (+ i 1)))
+    ((= i 69))
+  (display (x-get-atom-name dpy i))
+  (display " "))
+
+
+(x-get-atom-name dpy 0)
 
