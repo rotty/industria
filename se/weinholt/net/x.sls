@@ -20,6 +20,18 @@
 
 ;; This library is not ready for any sort of use!
 
+;; Should conform to this specification:
+
+;; X Window System Protocol
+;;   X Consortium Standard
+;; X Version 11, Release 6.9/7.0
+
+;; Why does that document use Lisp syntax for hexadecimal numbers?
+
+;; FIXME: Drop the x- prefix, the user can prefix it themselves if they like.
+
+;; FIXME: angles in arcs should be in radians and converted to X's weird format
+
 (library (se weinholt net x)
     (export (x-open-display))
     (import (rnrs))
@@ -33,7 +45,7 @@
 
 (define (print . x) (for-each display x) (newline))
 
-(define (seq from to)
+(define (seq from to)                   ;FIXME: not needed?
   (if (= from to)
       '()
       (cons from (seq (+ from 1) to))))
@@ -41,6 +53,9 @@
 (define (round4 x)
   ;; Round to next multiple of four
   (+ x (bitwise-and (- 4 (bitwise-and x #b11)) #b11)))
+
+(define (s8->u8 x)
+  (if (negative? x) (+ 256 x) x))
 
 ;;; Delicious syntax to sweeten the protocol
 
@@ -141,20 +156,27 @@
       n))
 
 (define-record-type x-display
-  (fields inport outport protocol-major-version protocol-minor-version
+  (fields inport outport inbuffer protocol-major-version protocol-minor-version
           release-number resource-id-base resource-id-mask motion-buffer-size
           maximum-request-length image-byte-order bitmap-format-bit-order
           bitmap-format-scanline-unit bitmap-format-scanline-pad min-keycode
           max-keycode vendor pixmap-formats roots
-          (mutable next-resource-id)))
+          (mutable next-resource-id)
+          (mutable next-sequence-number)))
 
 (define (x-display-get-resource-id! display)
   ;; FIXME: this should support the case where some of the lower bits
   ;; in id-mask are zero. Should also check that we don't overrun the
-  ;; ID space.
+  ;; ID space. Resource id's can also be freed...
   (let ((id (x-display-next-resource-id display)))
     (x-display-next-resource-id-set! display (+ id 1))
     id))
+
+(define (x-display-get-sequence-number! display)
+  ;; FIXME: check that the wrap-around here is correct
+  (let ((number (x-display-next-sequence-number display)))
+    (x-display-next-sequence-number-set! display (bitwise-and (+ number 1) #xffff))
+    number))
 
 (define-x-struct format
   (u8 depth)
@@ -513,7 +535,7 @@
                                   acc))))))
 
              (make-x-display
-              i o
+              i o b
               (init-reply-protocol-major-version b)
               (init-reply-protocol-minor-version b)
               (init-reply-release-number b)
@@ -542,7 +564,8 @@
                               (* (format-sizeof* b)
                                  (init-reply-number-of-formats b)))
                            '())
-              (init-reply-resource-id-base b)))))))))
+              (init-reply-resource-id-base b)
+              1))))))))
 
 ;;; Error handling
 
@@ -658,8 +681,30 @@
                                  (error-minor-opcode b))
            (make-irritants-condition (error-code b)))))))
 
-;;;
+;;; Requests
 
+(define (send-request display major-opcode minor-opcode data)
+  ;; FIXME: should the data simply be padded modulo 4 with zeros?
+  (let ((len (round4 (bytevector-length data))))
+    
+    (when (> len (* 4 #xfffe))
+      ;; TODO: look at the BIG-REQUEST extension
+      (error 'send-request "the request is too large to be encoded"))
+    (let ((o (x-display-outport display))
+          (seq (x-display-get-sequence-number! display)))
+      (print "Sending at seqno " seq " now.")
+      (put-u8 o major-opcode)
+      (put-u8 o minor-opcode)           ;can be a data field
+      (put-u16 o (+ 1 (/ len 4)))
+      (put-bytevector o data)
+      (put-bytevector o (make-bytevector (- len (bytevector-length data)) 0))
+      (flush-output-port o))))
+
+(define (call-with-x-output display major-opcode minor-opcode proc)
+  (call-with-values open-bytevector-output-port
+    (lambda (o c)
+      (proc o)
+      (send-request display major-opcode minor-opcode (c)))))
 
 (define (x-create-window display depth parent x y width height border-width class visual values)
   (let ((o (x-display-outport display))
@@ -760,16 +805,12 @@
 
     (let ((b (make-buffer (x-display-inport display))))
       (buffer-read! b 32)
-
       (case (read-u8 b 0)
-
         ((1)
          ;; reply
          (print "got a reply... " (reply-sequence-number b))
          (buffer-read! b (* (reply-length b) 4))
-
          (read-u32 b 8))
-
         ((0)
          (raise-x-error b))
         (else
@@ -798,6 +839,19 @@
          (raise-x-error b))
         (else
          (print "what is this? first byte: " (read-u8 b 0)))))))
+
+(define (x-change-property display mode window property type format data)
+  (call-with-x-output display 18 mode
+    (lambda (o)
+      (put-u32 o window)
+      (put-u32 o property)
+      (put-u32 o type)
+      (put-u8 o format)
+      (put-bytevector o '#vu8(0 0 0))
+      (put-u32 o (/ (bytevector-length data)
+                    (case format
+                      ((8) 1) ((16) 2) ((32) 4))))
+      (put-bytevector o data))))
 
 (define (x-create-gc display drawable values)
   (let ((o (x-display-outport display))
@@ -942,55 +996,19 @@
     (flush-output-port o)))
 
 (define (x-poly-arc display drawable gc arcs)
-  (let ((o (x-display-outport display))
-        (cid (x-display-get-resource-id! display)))
-    (put-u8 o 68)                       ;PolyArcs
-    (put-u8 o 0)
-    (put-u16 o (+ 3 (* 3 (length arcs))))
-    (put-u32 o drawable)
-    (put-u32 o gc)
-    (for-each (lambda (p)
-                (put-s16 o (list-ref p 0)) ;x
-                (put-s16 o (list-ref p 1)) ;y
-                (put-u16 o (list-ref p 2)) ;width
-                (put-u16 o (list-ref p 3)) ;height
-                (put-s16 o (list-ref p 4)) ;angle1
-                (put-s16 o (list-ref p 5))) ;angle2
-              arcs)
-    (flush-output-port o)))
-
-(define (x-fill-poly display drawable gc shape coordinate-mode points)
-  (let ((o (x-display-outport display))
-        (cid (x-display-get-resource-id! display)))
-    (put-u8 o 69)                       ;FillPoly
-    (put-u8 o 0)
-    (put-u16 o (+ 4 (length points)))
-    (put-u32 o drawable)
-    (put-u32 o gc)
-    (put-u8 o shape)
-    (put-u8 o coordinate-mode)
-    (put-u16 o 0)
-    (for-each (lambda (p)
-                (put-s16 o (car p))     ;x
-                (put-s16 o (cdr p)))    ;y
-              points)
-    (flush-output-port o)))
-
-
-;;;
-
-(define (send-request display opcode byte1 data)
-  (when (or (not (zero? (bitwise-and (bytevector-length data) #b11)))
-            (> (bytevector-length data) (* 4 #xfffe)))
-    ;; TODO: look at the BIG-REQUEST extension
-    (error 'send-request "the request is too large to be encoded"))
-  (let ((o (x-display-outport display))
-        (cid (x-display-get-resource-id! display)))
-    (put-u8 o opcode)
-    (put-u8 o byte1)
-    (put-u16 o (+ 1 (/ (bytevector-length data) 4)))
-    (put-bytevector o data)
-    (flush-output-port o)))
+  (call-with-x-output display 68 0
+    (lambda (o)
+      (let ((cid (x-display-get-resource-id! display)))
+        (put-u32 o drawable)
+        (put-u32 o gc)
+        (for-each (lambda (p)
+                    (put-s16 o (list-ref p 0)) ;x
+                    (put-s16 o (list-ref p 1)) ;y
+                    (put-u16 o (list-ref p 2)) ;width
+                    (put-u16 o (list-ref p 3)) ;height
+                    (put-s16 o (list-ref p 4)) ;angle1
+                    (put-s16 o (list-ref p 5))) ;angle2
+                  arcs)))))
 
 (define (x-fill-poly display drawable gc shape coordinate-mode points)
   (call-with-values open-bytevector-output-port
@@ -1007,15 +1025,41 @@
                   points))
       (send-request display 69 0 (c)))))
 
-;;;
+(define (x-poly-fill-rectangle display drawable gc rectangles)
+  (call-with-x-output display 70 0
+    (lambda (o)
+      (let ((cid (x-display-get-resource-id! display)))
+        (put-u32 o drawable)
+        (put-u32 o gc)
+        (for-each (lambda (p)
+                    (put-s16 o (car p))     ;x
+                    (put-s16 o (cadr p))    ;y
+                    (put-u16 o (caddr p))   ;width
+                    (put-u16 o (cadddr p))) ;height
+                  rectangles)))))
+
+(define (x-poly-fill-arc display drawable gc arcs)
+  (call-with-x-output display 71 0
+    (lambda (o)
+      (let ((cid (x-display-get-resource-id! display)))
+        (put-u32 o drawable)
+        (put-u32 o gc)
+        (for-each (lambda (p)
+                    (put-s16 o (list-ref p 0)) ;x
+                    (put-s16 o (list-ref p 1)) ;y
+                    (put-u16 o (list-ref p 2)) ;width
+                    (put-u16 o (list-ref p 3)) ;height
+                    (put-s16 o (list-ref p 4)) ;angle1
+                    (put-s16 o (list-ref p 5))) ;angle2
+                  arcs)))))
 
 (define (x-list-extensions display)
+  ;; expects an answer
   (let ((o (x-display-outport display)))
     (put-u8 o 99)                       ;ListExtensions
     (put-u8 o 0)                        ;unused
     (put-u16 o 1)
-    (flush-output-port o)
-    (get-next-thing display)))
+    (flush-output-port o)))
 
 (define (x-change-keyboard-control display values)
   ;; Keyword arguments would be somewhat useful here
@@ -1039,27 +1083,43 @@
 
 
 
-(define (x-bell display percent)
-  (let ((o (x-display-outport display)))
-    (put-u8 o 104)                      ;Bell
-    (put-s8 o percent)
-    (put-u16 o 1)                       ;request length
-    (flush-output-port o)))
+(define (bell display percent)
+  "Somehow there is a bell in every keyboard connected to an X
+terminal. This procedure rings that bell. See XBell(3) in your UNIX
+manual."
+  (unless (<= -100 percent 100)
+    (raise (condition
+            (make-who-condition 'bell)
+            (make-message-condition "Invalid percentage (must be between -100 and 100 inclusive)")
+            (make-x-value-error #f 104 0)
+            (make-irritants-condition percent))))
+  (send-request display 104 (s8->u8 percent) '#vu8()))
+
+(define-x-struct event
+  (u8 code)
+  (u8 detail)
+  (u16 sequence-number)
+  (u32 time))
 
 
 (define (get-next-thing display)
-  (let ((b (make-buffer (x-display-inport display))))
+  (let ((b (x-display-inbuffer display)))
+    (buffer-reset! b)
     (buffer-read! b 32)
     (case (read-u8 b 0)
       ((1)
-       ;; reply
+       ;; Reply
        (print "got a reply... " (reply-sequence-number b))
        (buffer-read! b (* (reply-length b) 4))
        )
       ((0)
        (raise-x-error b))
       (else
-       (print "what is this? first byte: " (read-u8 b 0))))))
+       ;; Event
+       (print "event: " (event-code b)
+              " detail: " (event-detail b)
+              " sequence-number: " (event-sequence-number b)
+              " time: " (event-time b))))))
 
 (define dpy (x-open-display "localhost" "x11"))
 
@@ -1091,14 +1151,25 @@
                                  '(border-pixel . 0)
                                  '(bit-gravity . 1))))
 
+(x-change-property dpy 0 w
+                   (x-intern-atom dpy "_NET_WM_NAME" #f)
+                   (x-intern-atom dpy "UTF8_STRING" #f)
+                   8
+                   (string->utf8 "X library for R6RS Scheme"))
+
+;; (replace-property/utf8 w '_NET_WM_NAME "X library for R6RS Scheme")
+
+
 (x-map-window dpy w)
 
 
 
 (do ((points '() (cons (cons (random 300) (random 300)) points))
      (i 0 (+ i 1)))
-    ((= i 500)
-     (x-poly-line dpy w cfx-green 0 points)))
+    ((= i 50)
+     (x-poly-line dpy w (vector-ref (vector cfx-green cfx-orange cfx-blue black)
+                                    (random 4))
+                  0 points)))
 
 (x-poly-segment dpy w black '((0 0 10 10)
                               (2 0 12 10)
@@ -1119,9 +1190,34 @@
 
 (x-poly-line dpy w cfx-blue 0 '((31 . 31) (40 . 40)))
 
-(x-poly-arc dpy w cfx-green '((1 10 400 400 2000 3300)))
+(x-poly-arc dpy w cfx-orange '((1 10 400 400 2000 3300)))
 
 (x-fill-poly dpy w cfx-green 0 0 '((0 . 0) (300 . 0) (150 . 150)))
+
+(x-poly-fill-rectangle dpy w cfx-green '((0 0 10 10)
+                                         (10 10 10 10)
+                                         (20 20 10 10)
+                                         (30 30 10 10)))
+
+(define (xdeg rad)
+  ;; FIXME: modulo 2 pi?
+  "Converts from radians to degrees scaled by 64, as used by X."
+  (exact (round (* 64 360 (/ rad 2 (angle -1))))))
+
+(define (deg->xdeg d) (exact (round (* 64 d))))
+
+;; pacman
+(x-poly-fill-arc dpy w cfx-orange (list (list 1 10 200 200
+                                              (deg->xdeg 45)
+                                              (deg->xdeg (- 360 45 45)))
+                                        (list 200 105 10 10
+                                             (deg->xdeg 0)
+                                             (deg->xdeg 360))
+                                        (list 250 105 10 10
+                                             (deg->xdeg 0)
+                                             (deg->xdeg 360))))
+
+(x-clear-area dpy w 0 0 0 0 #f)         ;"clear screen"
 
 (x-destroy-window dpy w)
 
@@ -1133,10 +1229,12 @@
 
 
 (x-change-window-attributes dpy w
-                            (list (cons 'background-pixel cfx-orange)
-                                  '(border-pixel . 0)
-                                  '(bit-gravity . 1)))
+                            (list (cons 'event-mask (fxior KeyPress KeyRelease))
+                                  ))
 
+(let lp ()
+  (get-next-thing dpy)
+  (lp))
 
 
 (x-clear-area dpy w 0 0 0 0 #f)         ;"clear screen"
@@ -1158,3 +1256,29 @@
 
 (x-get-atom-name dpy 0)
 
+;; event-mask
+(define KeyPress #x00000001)
+(define KeyRelease #x00000002)
+(define ButtonPress #x00000004)
+(define ButtonRelease #x00000008)
+(define EnterWindow #x00000010)
+(define LeaveWindow #x00000020)
+(define PointerMotion #x00000040)
+(define PointerMotionHint #x00000080)
+(define Button1Motion #x00000100)
+(define Button2Motion #x00000200)
+(define Button3Motion #x00000400)
+(define Button4Motion #x00000800)
+(define Button5Motion #x00001000)
+(define ButtonMotion #x00002000)
+(define KeymapState #x00004000)
+(define Exposure #x00008000)
+(define VisibilityChange #x00010000)
+(define StructureNotify #x00020000)
+(define ResizeRedirect #x00040000)
+(define SubstructureNotify #x00080000)
+(define SubstructureRedirect #x00100000)
+(define FocusChange #x00200000)
+(define PropertyChange #x00400000)
+(define ColormapChange #x00800000)
+(define OwnerGrabButton #x01000000)
