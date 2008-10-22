@@ -20,6 +20,10 @@
 
 ;; (1 0 0) - Unreleased - Initial version.
 
+;; (1 1 0) - Unreleased - Added opsyntax for test registers and a few
+;; AMD Geode instructions. All could not be added, since they conflict
+;; with newer AMD instructions.
+
 ;;; Versioning scheme
 
 ;; The version is made of (major minor patch) sub-versions.
@@ -120,7 +124,7 @@
 ;; For AMD SSE5, the Z, VW and WV opcode syntaxes are not official
 ;; either.
 
-(library (se weinholt disassembler x86-opcodes (1 0 0))
+(library (se weinholt disassembler x86-opcodes (1 1 0))
     (export opcodes pseudo-mnemonics mnemonic-aliases)
     (import (rnrs))
 
@@ -169,6 +173,10 @@
       (*3dnow* #xB7 pmulhrw)
       (*3dnow* #xBB pswapd)
       (*3dnow* #xBF pavgusb)
+
+      ;; These two are from AMD Geode:
+      (*3dnow* #x86 pfrcpv)
+      (*3dnow* #x87 pfrsqrtv)
 
       (aam #x0A aam)
       (aad #x0A aad)
@@ -395,7 +403,9 @@
       (cmovnge . cmovl)
       (cmovge . cmovnl)
       (cmovng . cmovle)
-      (cmovg . cmovnle)))
+      (cmovg . cmovnle)
+      (int1 . icebp)
+      (setalc . salc)))
 
   (define opcodes
     '#((add Eb Gb)
@@ -511,6 +521,7 @@
          (mov Rd/q Dd/q)
          (mov Cd/q Rd/q)
          (mov Dd/q Rd/q)
+         ;; 0F 24: AMD SSE5 instructions (also MOV r32,tr)
          #((fmaddps Zps Zps WVps VWps)
            (fmaddpd Zpd Zpd WVpd VWpd)
            (fmaddss Zss Zss WVss VWss)
@@ -694,7 +705,7 @@
            #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f
            ;; 0F 25 F0
            #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f)
-         #f
+         (mov Td Ed)
          #f
          ;; 0F 28
          #(Prefix #(VEX (movaps Vps Wps) (vmovaps Vps Wps))
@@ -903,8 +914,8 @@
            #f #f #f #f #f #f
            ;; 0F 38 F8
            #f #f #f #f #f #f #f #f)
-         #f
-         ;; 0F 3A: Three-byte opcode
+         (dmint)
+         ;; 0F 3A: Three-byte opcode (also RDM in AMD Geode)
          #(#f
            #f
            #f
@@ -1206,18 +1217,19 @@
          #(Prefix (pcmpeqd Pq Qq) #f #(VEX (pcmpeqd Vdq Wdq) (vpcmpeqd Vdq Bdq Wdq) #f) #f)
          #(Prefix #(VEX (emms) (vzeroupper) (vzeroall)) #f #f #f)
          ;; 0F 78
-         #(Prefix #(Mode (vmread Ed Gd)
+         #(Prefix #(Mode (vmread Ed Gd) ;SVDC sr, m80 on AMD Geode
                          (vmread Eq Gq))
                   #f
                   #(Group "Group 17"
                           #((extrq Vdq Ib Ib)
                             #f #f #f #f #f #f #f))
                   (insertq Vdq Uq Ib Ib))
-         #(Prefix #(Mode (vmwrite Gd Ed)
+         #(Prefix #(Mode (vmwrite Gd Ed) ;RSDC sr, m80 on AMD Geode
                          (vmwrite Gq Eq))
                   #f
                   (extrq Vdq Uq)
                   (insertq Vdq Udq))
+         ;; 0F 7A: AMD SSE5 (also SVLDT m80 on AMD Geode)
          #(#f #f #f #f #f #f #f #f
            ;; 0F 7A 08
            #f #f #f #f #f #f #f #f
@@ -1289,6 +1301,7 @@
            #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f
            ;; 0F 7A F0
            #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f)
+         ;; AMD SSE5 (RSLDT m80 on AMD Geode)
          #(#f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f
               #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f
               #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f
@@ -1309,10 +1322,12 @@
               #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f
               #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f
               #f #f #f #f #f #f #f #f #f #f)
-         #(Prefix #f #f
+         #(Prefix (svts Mem80)
+                  #f
                   #(VEX (haddpd Vpd Wpd) (vhaddpd Vpd Bpd Wpd))
                   #(VEX (haddps Vps Wps) (vhaddps Vps Bps Wps)))
-         #(Prefix #f #f
+         #(Prefix (rsts Mem80)
+                  #f
                   #(VEX (hsubpd Vpd Wpd) (vhsubpd Vpd Bpd Wpd))
                   #(VEX (hsubps Vps Wps) (vhsubps Vps Bps Wps)))
          #(Prefix #(Datasize #f
@@ -1469,7 +1484,7 @@
                   #(VEX (movq Wq Vq) (vmovq Wq Vq) #f)
                   (movdq2q Pq Nq))
          #(Prefix (pmovmskb Gd Nq) #f #(VEX (pmovmskb Gd Udq) (vpmovmskb Gd Udq) #f) #f)
-         ;; 0F D8
+         ;; 0F D8 (also SMINT)
          #(Prefix (psubusb Pq Qq) #f #(VEX (psubusb Vdq Wdq) (vpsubusb Vdq Bdq Wdq) #f) #f)
          #(Prefix (psubusw Pq Qq) #f #(VEX (psubusw Vdq Wdq) (vpsubusw Vdq Bdq Wdq) #f) #f)
          #(Prefix (pminub Pq Qq) #f #(VEX (pminub Vdq Wdq) (vpminub Vdq Bdq Wdq) #f) #f)
@@ -1971,7 +1986,7 @@
        (out *DX *eAX)
        ;; F0
        (*prefix* lock)
-       (int1)
+       (icebp)
        (*prefix* repnz)
        (*prefix* repz)
        (hlt)

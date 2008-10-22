@@ -60,7 +60,7 @@
 (library (se weinholt disassembler x86 (1 0 0))
     (export get-instruction invalid-opcode?)
     (import (except (rnrs) get-u8)
-            (se weinholt disassembler x86-opcodes (1 0 (>= 0))))
+            (se weinholt disassembler x86-opcodes (1 (<= 1) (>= 0))))
 
   (define debug #f)
 
@@ -328,6 +328,10 @@ no conflict with LES/LDS)."
 
   (define reg-names-sreg '#(es cs ss ds fs gs #f #f
                                es cs ss ds fs gs #f #f))
+
+  ;; "Test Registers". Used e.g. by DMI handlers on AMD Geode.
+  (define reg-names-treg '#(tr0 tr1 tr2 tr3 tr4 tr5 tr6 tr7
+                                tr0 tr1 tr2 tr3 tr4 tr5 tr6 tr7))
 
   (define reg-names-creg '#(cr0 cr1 cr2 cr3 cr4 cr5 cr6 cr7 cr8 cr9
                                 cr10 cr11 cr12 cr13 cr14 cr15))
@@ -745,6 +749,8 @@ bits, which are neded in get-displacement."
         ((Dd/q) (vector-ref reg-names-dreg (ModR/M-reg modr/m prefixes)))
         ((Sw) (or (vector-ref reg-names-sreg (ModR/M-reg modr/m))
                   (raise-UD "Invalid segment register encoded")))
+        ;; "T" is not official
+        ((Td) (vector-ref reg-names-treg (ModR/M-reg modr/m)))
 
         ;; SSE. "Packed" is also "vector" in some documentation. It
         ;; means that the register is packed with more than one
