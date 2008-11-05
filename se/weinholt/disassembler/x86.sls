@@ -60,7 +60,7 @@
 (library (se weinholt disassembler x86 (1 0 0))
     (export get-instruction invalid-opcode?)
     (import (except (rnrs) get-u8)
-            (se weinholt disassembler x86-opcodes (1 (<= 1) (>= 0))))
+            (se weinholt disassembler x86-opcodes (1 (<= 1) (>= 1))))
 
   (define debug #f)
 
@@ -372,15 +372,12 @@ operand is an opcode extension."
                 (else instr))))))
 
   (define (fix-lock instruction prefixes)
-    (define opcodes '(adc add and btc btr bts cmpxchg cmpxchg8b
-                          cmpxchg16b dec inc neg not or sbb sub
-                          xadd xchg xor))
     (cond ((not (enum-set-member? (prefix lock) prefixes))
            instruction)
           ((or (null? (cdr instruction))
                (not (list? (cadr instruction))))
            (raise-UD "LOCK prefix requires a memory destination operand"))
-          ((memq (car instruction) opcodes) =>
+          ((memq (car instruction) lock-instructions) =>
            (lambda (name)
              (cons (string->symbol
                     (string-append "lock." (symbol->string (car instruction))))
@@ -389,11 +386,8 @@ operand is an opcode extension."
            (raise-UD "LOCK prefix invalid for this instruction"))))
 
   (define (fix-branches instruction prefixes)
-    (define opcodes '(jo jno jb jnb jz jnz jbe jnbe js jns jp jnp jl
-                         jnl jle jnle))
-    ;; TODO: Can these use hints? loopnz loopz loop jcxz jecxz jrcxz
     "Annotate instructions with branch hints in IA-64 style."
-    (cond ((memq (car instruction) opcodes) =>
+    (cond ((memq (car instruction) branch-hint-instructions) =>
            (lambda (name)
              (cond ((enum-set-member? (prefix cs) prefixes)
                     (cons (string->symbol
@@ -412,30 +406,19 @@ operand is an opcode extension."
 
   (define (fix-rep instruction prefixes)
     (cond ((enum-set-member? (prefix repz) prefixes)
-           (cond ((memq (car instruction) '(insb insw insd insq
-                                            outsb outsw outsd outsq
-                                            movsb movsw movsd movsq
-                                            lodsb lodsw lodsd lodsq
-                                            stosb stosw stosd stosq
-                                            ;; VIA PadLock:
-                                            montmul xsha1 xsha256
-                                            xstore xcryptecb
-                                            xcryptcbc xcryptctr
-                                            xcryptcfb xcryptofb))
+           (cond ((memq (car instruction) rep-instructions)
                   (cons (string->symbol
                          (string-append "rep."
                                         (symbol->string (car instruction))))
                         (cdr instruction)))
-                 ((memq (car instruction) '(cmpsb cmpsw cmpsd cmpsq
-                                            scasb scasw scasd scasq))
+                 ((memq (car instruction) repz-instructions)
                   (cons (string->symbol
                          (string-append "repz."
                                         (symbol->string (car instruction))))
                         (cdr instruction)))
                  (else instruction)))
           ((enum-set-member? (prefix repnz) prefixes)
-           (cond ((memq (car instruction) '(cmpsb cmpsw cmpsd cmpsq
-                                            scasb scasw scasd scasq))
+           (cond ((memq (car instruction) repz-instructions)
                   (cons (string->symbol
                          (string-append "repnz."
                                         (symbol->string (car instruction))))

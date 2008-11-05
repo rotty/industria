@@ -24,6 +24,9 @@
 ;; AMD Geode instructions. All could not be added, since they conflict
 ;; with newer AMD instructions.
 
+;; (1 1 1) - Unreleased - Export lists of instructions that work with
+;; the LOCK/REP/REPZ prefixes and branch hints.
+
 ;;; Versioning scheme
 
 ;; The version is made of (major minor patch) sub-versions.
@@ -124,9 +127,39 @@
 ;; For AMD SSE5, the Z, VW and WV opcode syntaxes are not official
 ;; either.
 
-(library (se weinholt disassembler x86-opcodes (1 1 0))
-    (export opcodes pseudo-mnemonics mnemonic-aliases)
+(library (se weinholt disassembler x86-opcodes (1 1 1))
+    (export opcodes pseudo-mnemonics mnemonic-aliases
+            lock-instructions
+            branch-hint-instructions
+            rep-instructions
+            repz-instructions)
     (import (rnrs))
+
+  (define lock-instructions
+    '(adc add and btc btr bts cmpxchg cmpxchg8b
+          cmpxchg16b dec inc neg not or sbb sub
+          xadd xchg xor))
+
+  ;; TODO: Can these use hints? loopnz loopz loop jcxz jecxz jrcxz
+  (define branch-hint-instructions
+    '(jo jno jb jnb jz jnz jbe jnbe js jns jp jnp jl
+         jnl jle jnle))
+
+  (define rep-instructions
+    '(insb insw insd insq
+           outsb outsw outsd outsq
+           movsb movsw movsd movsq
+           lodsb lodsw lodsd lodsq
+           stosb stosw stosd stosq
+           ;; VIA PadLock:
+           montmul xsha1 xsha256
+           xstore xcryptecb
+           xcryptcbc xcryptctr
+           xcryptcfb xcryptofb))
+
+  (define repz-instructions
+    '(cmpsb cmpsw cmpsd cmpsq
+            scasb scasw scasd scasq))
 
   ;; (mnemonic immediate pseudo-op). This table contains a list of
   ;; pseudo-ops, where `mnemonic' is used in the opcode table,
