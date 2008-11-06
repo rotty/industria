@@ -27,6 +27,9 @@
 ;; (1 1 1) - Unreleased - Export lists of instructions that work with
 ;; the LOCK/REP/REPZ prefixes and branch hints.
 
+;; (1 1 2) - Unreleased - Remove the operand size suffix from ins,
+;; outs, movs, lods, stos, cmps, and scas. Fix the xlat alias.
+
 ;;; Versioning scheme
 
 ;; The version is made of (major minor patch) sub-versions.
@@ -127,7 +130,7 @@
 ;; For AMD SSE5, the Z, VW and WV opcode syntaxes are not official
 ;; either.
 
-(library (se weinholt disassembler x86-opcodes (1 1 1))
+(library (se weinholt disassembler x86-opcodes (1 1 2))
     (export opcodes pseudo-mnemonics mnemonic-aliases
             lock-instructions
             branch-hint-instructions
@@ -146,20 +149,15 @@
          jnl jle jnle))
 
   (define rep-instructions
-    '(insb insw insd insq
-           outsb outsw outsd outsq
-           movsb movsw movsd movsq
-           lodsb lodsw lodsd lodsq
-           stosb stosw stosd stosq
-           ;; VIA PadLock:
-           montmul xsha1 xsha256
-           xstore xcryptecb
-           xcryptcbc xcryptctr
-           xcryptcfb xcryptofb))
+    '(ins outs movs lods stos
+          ;; VIA PadLock:
+          montmul xsha1 xsha256
+          xstore xcryptecb
+          xcryptcbc xcryptctr
+          xcryptcfb xcryptofb))
 
   (define repz-instructions
-    '(cmpsb cmpsw cmpsd cmpsq
-            scasb scasw scasd scasq))
+    '(cmps scas))
 
   ;; (mnemonic immediate pseudo-op). This table contains a list of
   ;; pseudo-ops, where `mnemonic' is used in the opcode table,
@@ -398,7 +396,7 @@
   (define mnemonic-aliases
     '((wait . fwait)
       (sal . shl)
-      (xlatb . xlat)
+      (xlat . xlatb)
       (loope . loopz)
       (loopne . loopnz)
       (jnae . jb)
@@ -1685,14 +1683,10 @@
        (imul Gv Ev Iz)
        (push Ib)
        (imul Gv Ev Ib)
-       (insb Yb *DX)
-       #(Datasize (insw Yz *DX)
-                  (insd Yz *DX)
-                  (insd Yz *DX))
-       (outsb *DX Xb)
-       #(Datasize (outsw *DX Xz)
-                  (outsd *DX Xz)
-                  (outsd *DX Xz))
+       (ins Yb *DX)
+       (ins Yz *DX)
+       (outs *DX Xb)
+       (outs *DX Xz)
        ;; 70
        (jo Jb)
        (jno Jb)
@@ -1773,29 +1767,19 @@
        (mov *rAX Ov)
        (mov Ob *AL)
        (mov Ov *rAX)
-       (movsb Yb Xb)
-       #(Datasize (movsw Yv Xv)
-                  (movsd Yv Xv)
-                  (movsq Yv Xv))
-       (cmpsb Xb Yb)
-       #(Datasize (cmpsw Xv Yv)
-                  (cmpsd Xv Yv)
-                  (cmpsq Xv Yv))
+       (movs Yb Xb)
+       (movs Yv Xv)
+       (cmps Xb Yb)
+       (cmps Xv Yv)
        ;; A8
        (test *AL Ib)
        (test *rAX Iz)
-       (stosb Yb *AL)
-       #(Datasize (stosw Yv *rAX)
-                  (stosd Yv *rAX)
-                  (stosq Yv *rAX))
-       (lodsb *AL Xb)
-       #(Datasize (lodsw *rAX Xv)
-                  (lodsd *rAX Xv)
-                  (lodsq *rAX Xv))
-       (scasb *AL Yb)
-       #(Datasize (scasw *rAX Yv)
-                  (scasd *rAX Yv)
-                  (scasq *rAX Yv))
+       (stos Yb *AL)
+       (stos Yv *rAX)
+       (lods *AL Xb)
+       (lods *rAX Xv)
+       (scas *AL Yb)
+       (scas *rAX Yv)
        ;; B0
        (mov *AL/R8L Ib)
        (mov *CL/R9L Ib)

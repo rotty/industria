@@ -146,9 +146,9 @@ of indented test case, given a file and a mode."
 (test64 '#vu8(#xF3 #xAC
                    #xF3 #xAD
                    #xF3 #x48 #xAD)
-        '(rep.lodsb al (mem8+ rsi))
-        '(rep.lodsd eax (mem32+ rsi))
-        '(rep.lodsq rax (mem64+ rsi)))
+        '(rep.lods al (mem8+ rsi))
+        '(rep.lods eax (mem32+ rsi))
+        '(rep.lods rax (mem64+ rsi)))
 
 (test64 '#vu8(#xF3 #x6E
                    #xF3 #x66 #x6F
@@ -156,41 +156,41 @@ of indented test case, given a file and a mode."
                    #x6E
                    #x66 #x6F
                    #x6F)
-        '(rep.outsb dx (mem8+ rsi))
-        '(rep.outsw dx (mem16+ rsi))
-        '(rep.outsd dx (mem32+ rsi))
-        '(outsb dx (mem8+ rsi))
-        '(outsw dx (mem16+ rsi))
-        '(outsd dx (mem32+ rsi)))
+        '(rep.outs dx (mem8+ rsi))
+        '(rep.outs dx (mem16+ rsi))
+        '(rep.outs dx (mem32+ rsi))
+        '(outs dx (mem8+ rsi))
+        '(outs dx (mem16+ rsi))
+        '(outs dx (mem32+ rsi)))
 
 (test64 '#vu8(#xF3 #xAA
                    #xF3 #x66 #xAB
                    #xF3 #xAB
                    #xF3 #x48 #xAB
                    #x66 #xAB)
-        '(rep.stosb (mem8+ rdi) al)
-        '(rep.stosw (mem16+ rdi) ax)
-        '(rep.stosd (mem32+ rdi) eax)
-        '(rep.stosq (mem64+ rdi) rax)
-        '(stosw (mem16+ rdi) ax))
+        '(rep.stos (mem8+ rdi) al)
+        '(rep.stos (mem16+ rdi) ax)
+        '(rep.stos (mem32+ rdi) eax)
+        '(rep.stos (mem64+ rdi) rax)
+        '(stos (mem16+ rdi) ax))
 
 (test64 '#vu8(#xF3 #xA6
                    #xF2 #xA6
                    #xF3 #x48 #xA7
                    #xF2 #x66 #xA7
                    #xA6)
-        '(repz.cmpsb (mem8+ rsi) (mem8+ rdi))
-        '(repnz.cmpsb (mem8+ rsi) (mem8+ rdi))
-        '(repz.cmpsq (mem64+ rsi) (mem64+ rdi))
-        '(repnz.cmpsw (mem16+ rsi) (mem16+ rdi))
-        '(cmpsb (mem8+ rsi) (mem8+ rdi)))
+        '(repz.cmps (mem8+ rsi) (mem8+ rdi))
+        '(repnz.cmps (mem8+ rsi) (mem8+ rdi))
+        '(repz.cmps (mem64+ rsi) (mem64+ rdi))
+        '(repnz.cmps (mem16+ rsi) (mem16+ rdi))
+        '(cmps (mem8+ rsi) (mem8+ rdi)))
 
 (test64 '#vu8(#xF2 #x66 #xAF
                    #xF3 #xAE
                    #x48 #xAF)
-        '(repnz.scasw ax (mem16+ rdi))
-        '(repz.scasb al (mem8+ rdi))
-        '(scasq rax (mem64+ rdi)))
+        '(repnz.scas ax (mem16+ rdi))
+        '(repz.scas al (mem8+ rdi))
+        '(scas rax (mem64+ rdi)))
 
 (test64 '#vu8(#xf3 #xae
                    #xf3 #xaa
@@ -200,19 +200,19 @@ of indented test case, given a file and a mode."
                    #xf3 #xac
                    #xf3 #x6e)
         ;;repz scas %es:(%rdi),%al
-        '(repz.scasb al (mem8+ rdi))
+        '(repz.scas al (mem8+ rdi))
         ;;rep stos %al,%es:(%rdi)
-        '(rep.stosb (mem8+ rdi) al)
+        '(rep.stos (mem8+ rdi) al)
         ;;rep insb (%dx),%es:(%rdi)
-        '(rep.insb (mem8+ rdi) dx)
+        '(rep.ins (mem8+ rdi) dx)
         ;;repz cmpsb %es:(%rdi),%ds:(%rsi)
-        '(repz.cmpsb (mem8+ rsi) (mem8+ rdi))
+        '(repz.cmps (mem8+ rsi) (mem8+ rdi))
         ;;rep movsb %ds:(%rsi),%es:(%rdi)
-        '(rep.movsb (mem8+ rdi) (mem8+ rsi))
+        '(rep.movs (mem8+ rdi) (mem8+ rsi))
         ;;rep lods %ds:(%rsi),%al
-        '(rep.lodsb al (mem8+ rsi))
+        '(rep.lods al (mem8+ rsi))
         ;;rep outsb %ds:(%rsi),(%dx)
-        '(rep.outsb dx (mem8+ rsi)))
+        '(rep.outs dx (mem8+ rsi)))
 
 ;;; Test a bunch of ModR/M bytes
 (test64 '#vu8(#x8D #x0
@@ -1029,9 +1029,9 @@ of indented test case, given a file and a mode."
                    #xF3 #xA7
                    #xF2 #x48 #xAF)
         '(rep.xcryptctr)
-        '(rep.stosq (mem64+ rdi) rax)
-        '(repz.cmpsd (mem32+ rsi) (mem32+ rdi))
-        '(repnz.scasq rax (mem64+ rdi)))
+        '(rep.stos (mem64+ rdi) rax)
+        '(repz.cmps (mem32+ rsi) (mem32+ rdi))
+        '(repnz.scas rax (mem64+ rdi)))
 
 ;;; Test the special handling of NOP/PAUSE
 (test16 '#vu8(#x90
