@@ -1,8 +1,8 @@
 -*- mode: outline; coding: utf-8 -*-
 
 * WHAT THIS IS
-These are the Industria libraries for R6RS Scheme. They are more or
-less a place for me to put the Scheme code I write. 
+These are the Industria libraries for R6RS Scheme. It's are more or
+less a place for me to put the Scheme code I write.
 
 * LICENSING
 Copyright © 2008 Göran Weinholt <goran@weinholt.se>

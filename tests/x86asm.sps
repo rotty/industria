@@ -21,6 +21,8 @@
         (se weinholt disassembler x86))
 
 (define (test instruction mode . rest)
+  ;; Check that it's possible to encode the given instruction, and
+  ;; compare the disassembly with the input.
   (let ((expected (if (pair? rest) (car rest) instruction)))
     (call-with-values open-bytevector-output-port
       (lambda (port extract)
@@ -45,6 +47,14 @@
                    bytes-returned (bytevector-length bv)))))))
   (display "OK\n"))
 
+(define (testf instruction mode)
+  ;; Check that it's not possible to encode the given instruction
+  (unless (guard (con (else (display "OK\n")))
+             (call-with-values open-bytevector-output-port
+               (lambda (port extract)
+                 (put-instruction instruction port mode)))
+                 #f)
+    (error 'testf "test did not fail" instruction mode)))
 
 (test '(hlt) 64)
 
@@ -73,19 +83,30 @@
 (test '(mov cr15 r15) 64)
 (test '(mov dr5 r13) 64)
 
-(for-each (lambda (i) (test i 64))
-          '(;; (stos (mem+ edi es) al)
-            (stos (mem8+ rdi) al)
-            (stos (mem16+ rdi) ax)
-            (stos (mem32+ rdi) eax)
-            (stos (mem64+ rdi) rax)
-            (movs (mem32+ rdi) (mem32+ rsi))))
 
 (test '(mov (mem8+ rax) #xff) 64)
 (test '(mov (mem16+ rax) #xffff) 64)
 (test '(mov (mem32+ rax) #xffffffff) 64)
 (test '(mov (mem64+ rax) #x-7fffffff) 64
       '(mov (mem64+ rax) #xffffffff80000001))
+
+;;; Segment and address size override
+
+(for-each (lambda (i) (test i 64))
+          '((stos (mem8+ edi) al)
+            (stos (mem8+ rdi) al)
+            (stos (mem16+ rdi) ax)
+            (stos (mem32+ rdi) eax)
+            (stos (mem64+ rdi) rax)
+            (movs (mem32+ rdi) (mem32+ rsi))))
+
+(for-each (lambda (i) (test i 32))
+          '((movs (mem8+ es edi) (mem8+ ds esi))
+            (movs (mem8+ es edi) (mem8+ es esi))
+            (movs (mem8+ es edi) (mem8+ fs esi))))
+
+(test '(movs (mem+ es edi) (mem16+ esi)) 32
+      '(movs (mem16+ es edi) (mem16+ ds esi)))
 
 
 ;;; Various memory references
@@ -141,6 +162,11 @@
 (test '(mov r15 (mem64+ 0)) 64)
 (test '(mov r15d (mem32+ edi -1)) 64)
 (test '(mov eax (mem32+ ebp 0)) 64) 
+
+;;; 64-bit stuff in 32-bit mode
+
+(testf '(mov r15d eax) 32)
+(testf '(addpd xmm14 xmm15) 32)
 
 ;;; SSE
 

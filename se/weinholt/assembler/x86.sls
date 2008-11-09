@@ -78,7 +78,7 @@
       (hashtable-set! tmp 'Mdq
                       (vector
                        #f
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (memory? o)
                               (memv (memory-datasize o) '(#f 128))))
                        'mem             ;encoded as memory with ModR/M, SIB, etc
@@ -86,7 +86,7 @@
       (hashtable-set! tmp 'Mq
                       (vector
                        #f
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (memory? o)
                               (memv (memory-datasize o) '(#f 64))))
                        'mem             ;encoded as memory with ModR/M, SIB, etc
@@ -96,7 +96,7 @@
       (hashtable-set! tmp 'Vpd
                       (vector
                        #f
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (register? o)
                               (eq? (register-type o) 'xmm)))
                        'reg
@@ -104,7 +104,7 @@
       (hashtable-set! tmp 'Wpd
                       (vector
                        #f
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (cond ((register? o)
                                 (eq? (register-type o) 'xmm))
                                ((memory? o)
@@ -116,7 +116,7 @@
       (hashtable-set! tmp 'Ev
                       (vector
                        'operand-size
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (cond ((register? o)
                                 (memv (register-type o) '(16 32 64)))
                                ((memory? o)
@@ -128,7 +128,7 @@
       (hashtable-set! tmp 'Eb
                       (vector
                        #f
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (cond ((register? o)
                                 (memq (register-type o) '(8 rex8 norex8)))
                                ((memory? o)
@@ -141,7 +141,7 @@
       (hashtable-set! tmp 'Gv
                       (vector
                        'operand-size
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (register? o)
                               (memv (register-type o) '(16 32 64))))
                        'reg             ;register is encoded in ModR/M.reg etc
@@ -151,7 +151,7 @@
       (hashtable-set! tmp 'Yv
                       (vector
                        'operand-size
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (memory? o)
                               (memv (memory-datasize o) '(#f 16 32 64))
                               ;; Make sure this is rDI
@@ -159,17 +159,17 @@
                               (not (memory-SIB o))
                               (zero? (memory-REX o))
                               (= (memory-ModR/M o) 7)
-                              ;; Check ES. FIXME: this depends on machine target mode, not addressing mode. save that in the memory record
-                              (case (memory-addressing-mode o)
+                              ;; Check ES
+                              (case mode
                                 ((64) (not (memory-segment o)))
                                 (else (and (register? (memory-segment o))
                                            (zero? (register-index (memory-segment o))))))))
-                       #f               ;implicit
+                       #f
                        'Yv))
       (hashtable-set! tmp 'Yb
                       (vector
                        #f
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (memory? o)
                               (memv (memory-datasize o) '(#f 8))
                               (not (memory-disp o))
@@ -177,43 +177,37 @@
                               (zero? (memory-REX o))
                               (= (memory-ModR/M o) 7)
                               ;; Check ES
-                              (case (memory-addressing-mode o)
+                              (case mode
                                 ((64) (not (memory-segment o)))
                                 (else (and (register? (memory-segment o))
                                            (zero? (register-index (memory-segment o))))))))
-                       #f               ;implicit
+                       #f
                        'Yb))
 
       (hashtable-set! tmp 'Xv
                       (vector
                        'operand-size
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (memory? o)
                               (memv (memory-datasize o) '(#f 16 32 64))
                               ;; Make sure this is rSI
                               (not (memory-disp o))
                               (not (memory-SIB o))
                               (zero? (memory-REX o))
-                              (= (memory-ModR/M o) 6)
-                              ;; Require a segment override for legacy mode
-                              (or (= (memory-addressing-mode o) 64)
-                                  (memory-segment o))))
+                              (= (memory-ModR/M o) 6)))
                        #f               ;implicit
                        'Xv))
 
       (hashtable-set! tmp 'Xb
                       (vector
                        #f
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (memory? o)
                               (memv (memory-datasize o) '(#f 8))
                               (not (memory-disp o))
                               (not (memory-SIB o))
                               (zero? (memory-REX o))
-                              (= (memory-ModR/M o) 6)
-                              ;; Require a segment override for legacy mode
-                              (or (= (memory-addressing-mode o) 64)
-                                  (memory-segment o))))
+                              (= (memory-ModR/M o) 6)))
                        #f               ;implicit
                        'Xb))
 
@@ -222,17 +216,16 @@
       (hashtable-set! tmp 'Rd/q
                       (vector
                        #f
-                       (lambda (o opsize)
-                         (let ((mode 64)) ;FIXME: requires mode
-                           (and (register? o)
-                                (eqv? (register-type o) mode))))
+                       (lambda (o opsize mode)
+                         (and (register? o)
+                              (eqv? (register-type o) mode)))
                        'r/m
                        'Rd/q))
 
       (hashtable-set! tmp 'Cd/q
                       (vector
                        #f
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (register? o)
                               (eqv? (register-type o) 'creg)))
                        'reg
@@ -241,7 +234,7 @@
       (hashtable-set! tmp 'Dd/q
                       (vector
                        #f
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (register? o)
                               (eqv? (register-type o) 'dreg)))
                        'reg
@@ -252,7 +245,7 @@
       (hashtable-set! tmp 'Iz
                       (vector
                        #f
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (integer? o)
                               (case opsize
                                 ((64 #f)
@@ -276,7 +269,7 @@
       (hashtable-set! tmp 'Iv
                       (vector
                        #f
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (integer? o)
                               (case opsize
                                 ((64) (<= (- (expt 2 63)) o (- (expt 2 64) 1)))
@@ -288,7 +281,7 @@
       (hashtable-set! tmp 'Ib
                       (vector
                        #f
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (integer? o)
                               (<= (- (expt 2 7)) o (- (expt 2 8) 1))))
                        'imm8
@@ -296,7 +289,7 @@
       (hashtable-set! tmp 'Iw
                       (vector
                        #f
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (integer? o)
                               (<= (- (expt 2 15)) o (- (expt 2 16) 1))))
                        'imm16
@@ -306,7 +299,7 @@
       (hashtable-set! tmp '*AL
                       (vector
                        #f
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (register? o)
                               (eqv? (register-type o) 8)
                               (= (register-index o) 0)))
@@ -315,7 +308,7 @@
       (hashtable-set! tmp '*eAX
                       (vector
                        'operand-size
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (register? o)
                               (memv (register-type o) '(16 32))
                               (= (register-index o) 0)))
@@ -324,7 +317,7 @@
       (hashtable-set! tmp '*DX
                       (vector
                        #f
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (register? o)
                               (eqv? (register-type o) 16)
                               (= (register-index o) 2)))
@@ -333,7 +326,7 @@
       (hashtable-set! tmp '*rAX
                       (vector
                        'operand-size
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (register? o)
                               (memv (register-type o) '(16 32 64))
                               (= (register-index o) 0)))
@@ -342,7 +335,7 @@
       (hashtable-set! tmp '*rAX/r8
                       (vector
                        'operand-size
-                       (lambda (o opsize)
+                       (lambda (o opsize mode)
                          (and (register? o)
                               (memv (register-type o) '(16 32 64))
                               (= (bitwise-and (register-index o) #b111) 0)))
@@ -372,9 +365,9 @@
     ;; reg or r/m when the operand is encoded in ModR/M.
     (vector-ref opsyntax 2))
 
-  (define (operand-compatible-with-opsyntax? operand opsyntax opsize)
+  (define (operand-compatible-with-opsyntax? operand opsyntax opsize mode)
     ;; FIXME: no need to change into boolean here
-    (if ((vector-ref opsyntax 1) operand opsize) #t #f))
+    (if ((vector-ref opsyntax 1) operand opsize mode) #t #f))
 
 
 ;;; Opcode map transformation
@@ -649,7 +642,7 @@
        (let* ((opsyntax (template-opsyntax template)))
          (and (for-all vector? opsyntax) ;FIXME: unimplemented opsyntax
               (cond ((for-all (lambda (operand opsyntax)
-                                (operand-compatible-with-opsyntax? operand opsyntax os))
+                                (operand-compatible-with-opsyntax? operand opsyntax os mode))
                               operands opsyntax)
                      (when (and (exists opsyntax-requires-operand-size-override? opsyntax)
                                 (not os))

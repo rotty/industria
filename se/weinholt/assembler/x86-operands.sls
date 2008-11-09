@@ -521,14 +521,20 @@
            (cond ((integer? op)
                   op)
                  ((symbol? op)
-                  ;; FIXME: check for 64-bit registers in legacy mode
-                  (lookup-register op))
+                  (let ((reg (lookup-register op)))
+                    (when (and (not (= mode 64))
+                               (or (> (register-index reg) 7)
+                                   (eq? (register-type reg) 'rex8)))
+                      (error 'translate-operands
+                             "This register is only reachable in 64-bit mode" op))
+                    reg))
                  ((list? op)
                   (translate-memory op mode))
                  ((or (register? op) (memory? op))
                   op)
                  (else
-                  (error "Invalid assembler operand"
+                  (error 'translate-operands
+                         "Invalid assembler operand"
                          op operands))))
          operands))
 
