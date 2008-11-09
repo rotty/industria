@@ -101,7 +101,7 @@
 Usage: fcdisasm [-b|--bits <bits>] [--nocolor] [--] <filename>
 
 The <bits> argument can be either 16, 32 or 64 (default).
-The -nocolor flag suppresses the color output.
+The --nocolor flag suppresses the color output.
 
 The colors used are:
  * Blue for ModR/M and SIB bytes
