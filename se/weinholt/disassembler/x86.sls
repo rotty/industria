@@ -680,9 +680,9 @@ bits, which are neded in get-displacement."
         ;; String operation operands
         ((Xb)
          (let ((seg (prefixes->segment-override prefixes mode 'ds)))
-           (case mode
+           (case address-size
              ((16) `(mem8+ ,seg si))
-             ((32) `(mem8+ ,seg esi))
+             ((32) (if seg `(mem8+ ,seg esi) '(mem8+ esi)))
              ((64) (if seg `(mem8+ ,seg rsi) '(mem8+ rsi))))))
         ((Xv)
          (let ((seg (prefixes->segment-override prefixes mode 'ds))
@@ -690,41 +690,41 @@ bits, which are neded in get-displacement."
                        ((16) 'mem16+)
                        ((32) 'mem32+)
                        ((64) 'mem64+))))
-           (case mode
+           (case address-size
              ((16) `(,size ,seg si))
-             ((32) `(,size ,seg esi))
+             ((32) (if seg `(,size ,seg esi) `(,size esi)))
              ((64) (if seg `(,size ,seg rsi) `(,size rsi))))))
         ((Xz)
          (let ((seg (prefixes->segment-override prefixes mode 'ds))
                (size (case operand-size
                        ((16) 'mem16+)
                        ((32 64) 'mem32+))))
-           (case mode
+           (case address-size
              ((16) `(,size ,seg si))
-             ((32) `(,size ,seg esi))
+             ((32) (if seg `(,size ,seg esi) `(,size esi)))
              ((64) (if seg `(,size ,seg rsi) `(,size rsi))))))
 
         ((Yb)
-         (case mode
+         (case address-size
            ((16) '(mem8+ es di))
-           ((32) '(mem8+ es edi))
+           ((32) (if (= mode 64) '(mem8+ edi) '(mem8+ es edi)))
            ((64) '(mem8+ rdi))))
         ((Yv)
          (let ((size (case operand-size
                        ((16) 'mem16+)
                        ((32) 'mem32+)
                        ((64) 'mem64+))))
-           (case mode
+           (case address-size
              ((16) `(,size es di))
-             ((32) `(,size es edi))
+             ((32) (if (= mode 64) `(,size edi) `(,size es edi)))
              ((64) `(,size rdi)))))
         ((Yz)
          (let ((size (case operand-size
                        ((16) 'mem16+)
                        ((32 64) 'mem32+))))
-           (case mode
+           (case address-size
              ((16) `(,size es di))
-             ((32) `(,size es edi))
+             ((32) (if (= mode 64) `(,size edi) `(,size es edi)))
              ((64) `(,size rdi)))))
 
         ;; Special registers
@@ -1018,6 +1018,8 @@ the port will be passed to the collector."
 
                ((and (list? instr) (eq? (car instr) '*prefix*)) ;Prefix
                 (if collect (collect (tag prefix) opcode))
+                (when (enum-set-member? (prefix rex) prefixes)
+                  (raise-UD "Other prefixes can not follow the REX prefix"))
                 (more-opcode opcode-table
                              vex.v
                              (enum-set-union
