@@ -18,7 +18,8 @@
 
 ;; X11 library
 
-;; This library is not ready for any sort of use!
+;; This library is not ready for any sort of use! It's just a
+;; half-finished draft of a library.
 
 ;; Should conform to this specification:
 
@@ -29,23 +30,65 @@
 ;; Why does that document use Lisp syntax for hexadecimal numbers?
 
 ;; FIXME: Drop the x- prefix, the user can prefix it themselves if they like.
-
 ;; FIXME: angles in arcs should be in radians and converted to X's weird format
 
+;; TODO: a synchronize function which does a GetInputFocus, waits for
+;; a reply and discards it
+
+
+;; This library will likely use lazy evaluation in order to minimize
+;; the penalty for network latency. This is an example of how it might
+;; work:
+
+;; (intern-atom dpy "R6RS" #f)
+
+;; The InternAtom request is put in the output queue. The return value
+;; is an atom record, where the name field is "R6RS", the conn field
+;; is the current connection, and the ID field is a promise record
+;; containing the sequence number of the request.
+
+;; When the corresponding answer arrives, the atom record is modified
+;; such that the promise record is replaced with the ID as returned
+;; from the server.
+
+;; When an atom is passed to another request, e.g. change-property,
+;; there is not yet a need to have the real ID. The procedure that
+;; encodes change-property notices that the ID is a promise, and
+;; registers itself as a callback for the reply associated with the
+;; promise(s). When the reply has been received, the reply handler for
+;; intern-atom updates the atom record and the callback for
+;; change-property is called.
+
+;; If you need to read the ID number of an atom yourself, and the ID
+;; is currently a promise, the record accessor sees that and waits for
+;; the reply from the X server.
+
+;; When you call get-next-event, any replies from the server will be
+;; processed in the above manner.
+
+;; Since encoding of requests might be delayed while waiting for
+;; replies, the sequence number of a request can't always be
+;; determined until the request has been fully encoded and written to
+;; the output port.
+
+(define-record-type atom
+  (fields name conn id))
+
+(define-record-type promise
+  (fields sequence-number k r))
+
+
 (library (se weinholt net x)
-    (export (x-open-display))
+    (export (open-display))
     (import (rnrs))
   ...)
 
-;;; Utilities
 
-;; temporary bug fixes for ikarus
-(define (bytevector-u16-native-ref b i) (bytevector-u16-ref b i 'little))
-(define (bytevector-u32-native-ref b i) (bytevector-u32-ref b i 'little))
+;;; Utilities
 
 (define (print . x) (for-each display x) (newline))
 
-(define (seq from to)                   ;FIXME: not needed?
+(define (seq from to)
   (if (= from to)
       '()
       (cons from (seq (+ from 1) to))))
@@ -56,6 +99,9 @@
 
 (define (s8->u8 x)
   (if (negative? x) (+ 256 x) x))
+
+(define (bool->u8 x)
+  (if x 1 0))
 
 ;;; Delicious syntax to sweeten the protocol
 
@@ -118,138 +164,55 @@
 
 ;;; Data structures
 
-(define-x-struct init-reply
-  (u8 status)
-  (u8 reason-length)
-  (u16 protocol-major-version)
-  (u16 protocol-minor-version)
-  (u16 additional-data)
-  ((string8 reason-length) reason)
-  (u32 release-number)
-  (u32 resource-id-base)
-  (u32 resource-id-mask)
-  (u32 motion-buffer-size)
-  (u16 vendor-length)
-  (u16 maximum-request-length)
-  (u8 number-of-screens)
-  (u8 number-of-formats)
-  (u8 image-byte-order)
-  (u8 bitmap-format-bit-order)
-  (u8 bitmap-format-scanline-unit)
-  (u8 bitmap-format-scanline-pad)
-  (u8 min-keycode)
-  (u8 max-keycode)
-  (u32)
-  ((string8 vendor-length) vendor))
-;; followed by a list of FORMAT and a list of SCREEN
+;; Fields common to all replies
+(define-x-struct reply
+  (u8)
+  (u8)
+  (u16 sequence-number)
+  (u32 length))
 
-(define (init-reply-image-byte-order->symbol n)
-  (define x '#(LSBFirst MSBFirst))
-  (if (< n (vector-length x))
-      (vector-ref x n)
-      n))
-
-(define (init-reply-bitmap-format-bit-order->symbol n)
-  (define x '#(LeastSignificant MostSignificant))
-  (if (< n (vector-length x))
-      (vector-ref x n)
-      n))
-
-(define-record-type x-display
+(define-record-type connection
   (fields inport outport inbuffer protocol-major-version protocol-minor-version
           release-number resource-id-base resource-id-mask motion-buffer-size
           maximum-request-length image-byte-order bitmap-format-bit-order
           bitmap-format-scanline-unit bitmap-format-scanline-pad min-keycode
           max-keycode vendor pixmap-formats roots
+          default-root                  ;from the display's name
           (mutable next-resource-id)
           (mutable next-sequence-number)))
 
-(define (x-display-get-resource-id! display)
+(define (connection-get-resource-id! display)
   ;; FIXME: this should support the case where some of the lower bits
   ;; in id-mask are zero. Should also check that we don't overrun the
   ;; ID space. Resource id's can also be freed...
-  (let ((id (x-display-next-resource-id display)))
-    (x-display-next-resource-id-set! display (+ id 1))
+  (let ((id (connection-next-resource-id display)))
+    (connection-next-resource-id-set! display (+ id 1))
     id))
 
-(define (x-display-get-sequence-number! display)
+(define (connection-get-sequence-number! display)
   ;; FIXME: check that the wrap-around here is correct
-  (let ((number (x-display-next-sequence-number display)))
-    (x-display-next-sequence-number-set! display (bitwise-and (+ number 1) #xffff))
+  (let ((number (connection-next-sequence-number display)))
+    (connection-next-sequence-number-set! display (bitwise-and (+ number 1) #xffff))
     number))
 
-(define-x-struct format
-  (u8 depth)
-  (u8 bits-per-pixel)
-  (u8 scanline-pad)
-  (u8)
-  (u32))
-
-(define-record-type x-format
+(define-record-type format
   (fields depth bits-per-pixel scanline-pad))
 
-(define-x-struct screen
-  (u32 root)
-  (u32 default-colormap)
-  (u32 white-pixel)
-  (u32 black-pixel)
-  (u32 current-input-masks)
-  (u16 width-in-pixels)
-  (u16 height-in-pixels)
-  (u16 width-in-millimeters)
-  (u16 height-in-millimeters)
-  (u16 min-installed-maps)
-  (u16 max-installed-maps)
-  (u32 root-visual)
-  (u8 backing-stores)
-  (u8 save-unders)
-  (u8 root-depth)
-  (u8 number-of-depths))
-;; followed by a list of DEPTHs
+(define-record-type visualtype
+  (fields visual-id class bits-per-rgb-value colormap-entries
+          red-mask green-mask blue-mask))
 
-(define (screen-backing-stores->symbol bs)
-  (define x '#(Never WhenMapped Always))
-  (if (< bs (vector-length x))
-      (vector-ref x bs)
-      bs))
-
-(define-record-type x-screen
+(define-record-type screen
   (fields root default-colormap white-pixel black-pixel
           current-input-masks width-in-pixels height-in-pixels
           width-in-millimeters height-in-millimeters min-installed-maps
           max-installed-maps root-visual backing-stores save-unders root-depth
           allowed-depths))
 
-(define-x-struct depth
-  (u8 depth)
-  (u8)
-  (u16 number-of-visualtypes)
-  (u32))
-;; followed by a list of VISUALTYPEs
 
-(define-record-type x-depth
+(define-record-type depth
   (fields depth visualtypes))
 
-(define-x-struct visualtype
-  (u32 visual-id)
-  (u8 class)
-  (u8 bits-per-rgb-value)
-  (u16 colormap-entries)
-  (u32 red-mask)
-  (u32 green-mask)
-  (u32 blue-mask)
-  (u32))
-
-(define (visualtype-class->symbol class)
-  (define x '#(StaticGray GrayScale StaticColor PseudoColor TrueColor DirectColor))
-  (if (< class (vector-length x))
-      (vector-ref x class)
-      class))
-
-
-(define-record-type x-visualtype
-  (fields visual-id class bits-per-rgb-value colormap-entries
-          red-mask green-mask blue-mask))
 
 (define (family->symbol f)
   (case f
@@ -264,14 +227,6 @@
     ((256) 'Local)                      ;UNIX domain socket
     ((65535) 'Wild)
     (else f)))
-
-;; Fields common to all replies
-(define-x-struct reply
-  (u8)
-  (u8)
-  (u16 sequence-number)
-  (u32 length))
-
 
 ;; Atom IDs for these are from 1 to 68 inclusive
 (define predefined-atoms
@@ -403,10 +358,10 @@
 
 ;;; X authority
 
-(define-record-type x-authority
+(define-record-type authority
   (fields family address number name data))
 
-(define (get-xauthority file)
+(define (get-authority file)
   ;; The .Xauthority file is in big endian format.
   (define (really-get-bytevector-n port n)
     (let ((bv (get-bytevector-n port n)))
@@ -428,33 +383,74 @@
                     (number (read-bv p))
                     (name (read-bv p))
                     (data (read-bv p)))
-               (lp (cons (make-x-authority (family->symbol family)
-                                           address
-                                           (utf8->string number)
-                                           (utf8->string name)
-                                           data)
+               (lp (cons (make-authority (family->symbol family)
+                                         address
+                                         (utf8->string number)
+                                         (utf8->string name)
+                                         data)
                          entries))))))))
 
 ;;;
 
-
-(define (x-open-display host port)
+(define (open-display host port)
+  (define-x-struct init-reply
+    (u8 status)
+    (u8 reason-length)
+    (u16 protocol-major-version)
+    (u16 protocol-minor-version)
+    (u16 additional-data)
+    ((string8 reason-length) reason)
+    (u32 release-number)
+    (u32 resource-id-base)
+    (u32 resource-id-mask)
+    (u32 motion-buffer-size)
+    (u16 vendor-length)
+    (u16 maximum-request-length)
+    (u8 number-of-screens)
+    (u8 number-of-formats)
+    (u8 image-byte-order)
+    (u8 bitmap-format-bit-order)
+    (u8 bitmap-format-scanline-unit)
+    (u8 bitmap-format-scanline-pad)
+    (u8 min-keycode)
+    (u8 max-keycode)
+    (u32)
+    ((string8 vendor-length) vendor))
+  ;; followed by a list of FORMAT and a list of SCREEN
+  (define (init-reply-image-byte-order->symbol n)
+    (define x '#(LSBFirst MSBFirst))
+    (if (< n (vector-length x))
+        (vector-ref x n)
+        n))
+  (define (init-reply-bitmap-format-bit-order->symbol n)
+    (define x '#(LeastSignificant MostSignificant))
+    (if (< n (vector-length x))
+        (vector-ref x n)
+        n))
+  (define-x-struct format
+    (u8 depth)
+    (u8 bits-per-pixel)
+    (u8 scanline-pad)
+    (u8)
+    (u32))
   (call-with-values (lambda () (tcp-connect host port))
     (lambda (o i)
       (let ((b (make-buffer i)))
-        (let ((auth (car (get-xauthority "/home/weinholt/.Xauthority"))))
+        ;; (get-authority "SYS$LOGIN:DECW$XAUTHORITY.DECW$XAUTH")
+        (let ((auth (car (get-authority "/home/weinholt/.Xauthority"))))
           (put-u8 o (case (native-endianness)
                       ((little) #x6C)
                       ((big) #x42)
-                      (else (error 'x-connect "Unsupported native endianness"))))
+                      (else (error 'open-display "Unsupported native endianness"
+                                   (native-endianness)))))
           (put-u8 o #x00)               ;unused
           (put-u16 o 11)                ;major version
           (put-u16 o 0)                 ;minor version
-          (put-u16 o (string-length (x-authority-name auth)))
-          (put-u16 o (bytevector-length (x-authority-data auth)))
+          (put-u16 o (string-length (authority-name auth)))
+          (put-u16 o (bytevector-length (authority-data auth)))
           (put-u16 o 0)                 ;unused
-          (put-string8 o (x-authority-name auth))
-          (put-string8 o (x-authority-data auth))
+          (put-string8 o (authority-name auth))
+          (put-string8 o (authority-data auth))
 
           (flush-output-port o))
 
@@ -463,15 +459,38 @@
 
         (case (init-reply-status b)
           ((0)
-           (error 'x-open-display "Connection to X server denied"
+           (error 'open-display "Connection to X server denied"
                   (init-reply-reason b)))
 
           ((2)
-           (error 'x-open-display "The X server demands further authorization"))
+           (error 'open-display "The X server demands further authorization"))
 
           ((1)
            (letrec ((get-screens
                      (lambda (num offset acc)
+                       (define-x-struct screen
+                         (u32 root)
+                         (u32 default-colormap)
+                         (u32 white-pixel)
+                         (u32 black-pixel)
+                         (u32 current-input-masks)
+                         (u16 width-in-pixels)
+                         (u16 height-in-pixels)
+                         (u16 width-in-millimeters)
+                         (u16 height-in-millimeters)
+                         (u16 min-installed-maps)
+                         (u16 max-installed-maps)
+                         (u32 root-visual)
+                         (u8 backing-stores)
+                         (u8 save-unders)
+                         (u8 root-depth)
+                         (u8 number-of-depths))
+                       (define (screen-backing-stores->symbol bs)
+                         (define x '#(Never WhenMapped Always))
+                         (if (< bs (vector-length x))
+                             (vector-ref x bs)
+                             bs))
+                       ;; followed by a list of DEPTHs
                        (if (zero? num)
                            (list->vector (reverse acc))
                            (call-with-values
@@ -482,7 +501,7 @@
                              (lambda (offset* depths)
                                (get-screens (- num 1)
                                             offset*
-                                            (cons (make-x-screen
+                                            (cons (make-screen
                                                    (screen-root b offset)
                                                    (screen-default-colormap b offset)
                                                    (screen-white-pixel b offset)
@@ -503,6 +522,12 @@
                                                   acc)))))))
                     (get-depths
                      (lambda (num offset acc)
+                       (define-x-struct depth
+                         (u8 depth)
+                         (u8)
+                         (u16 number-of-visualtypes)
+                         (u32))
+                       ;; followed by a list of VISUALTYPEs
                        (if (zero? num)
                            (values offset (reverse acc))
                            (call-with-values
@@ -513,17 +538,31 @@
                              (lambda (offset* visualtypes)
                                (get-depths (- num 1)
                                            offset*
-                                           (cons (make-x-depth (depth-depth b offset)
-                                                               visualtypes)
+                                           (cons (make-depth (depth-depth b offset)
+                                                             visualtypes)
                                                  acc)))))))
                     (get-visualtypes
                      (lambda (num offset acc)
+                       (define-x-struct visualtype
+                         (u32 visual-id)
+                         (u8 class)
+                         (u8 bits-per-rgb-value)
+                         (u16 colormap-entries)
+                         (u32 red-mask)
+                         (u32 green-mask)
+                         (u32 blue-mask)
+                         (u32))
+                       (define (visualtype-class->symbol class)
+                         (define x '#(StaticGray GrayScale StaticColor PseudoColor TrueColor DirectColor))
+                         (if (< class (vector-length x))
+                             (vector-ref x class)
+                             class))
                        (if (zero? num)
                            (values offset (reverse acc))
                            (get-visualtypes
                             (- num 1)
                             (+ offset (visualtype-sizeof* b))
-                            (cons (make-x-visualtype
+                            (cons (make-visualtype
                                    (visualtype-visual-id b offset)
                                    (visualtype-class->symbol
                                     (visualtype-class b offset))
@@ -534,38 +573,40 @@
                                    (visualtype-blue-mask b offset))
                                   acc))))))
 
-             (make-x-display
-              i o b
-              (init-reply-protocol-major-version b)
-              (init-reply-protocol-minor-version b)
-              (init-reply-release-number b)
-              (init-reply-resource-id-base b)
-              (init-reply-resource-id-mask b)
-              (init-reply-motion-buffer-size b)
-              (init-reply-maximum-request-length b)
-              (init-reply-image-byte-order->symbol
-               (init-reply-image-byte-order b))
-              (init-reply-bitmap-format-bit-order->symbol
-               (init-reply-bitmap-format-bit-order b))
-              (init-reply-bitmap-format-scanline-unit b)
-              (init-reply-bitmap-format-scanline-pad b)
-              (init-reply-min-keycode b)
-              (init-reply-max-keycode b)
-              (init-reply-vendor b)
-              (map (lambda (x)
-                     (make-x-format (format-depth b x)
+             (let ((roots (get-screens (init-reply-number-of-screens b)
+                                       (+ (init-reply-sizeof* b)
+                                          (* (format-sizeof* b)
+                                             (init-reply-number-of-formats b)))
+                                       '())))
+               (make-connection
+                i o b
+                (init-reply-protocol-major-version b)
+                (init-reply-protocol-minor-version b)
+                (init-reply-release-number b)
+                (init-reply-resource-id-base b)
+                (init-reply-resource-id-mask b)
+                (init-reply-motion-buffer-size b)
+                (init-reply-maximum-request-length b)
+                (init-reply-image-byte-order->symbol
+                 (init-reply-image-byte-order b))
+                (init-reply-bitmap-format-bit-order->symbol
+                 (init-reply-bitmap-format-bit-order b))
+                (init-reply-bitmap-format-scanline-unit b)
+                (init-reply-bitmap-format-scanline-pad b)
+                (init-reply-min-keycode b)
+                (init-reply-max-keycode b)
+                (init-reply-vendor b)
+                (map (lambda (x)
+                       (make-format (format-depth b x)
                                     (format-bits-per-pixel b x)
                                     (format-scanline-pad b x)))
-                   (map (lambda (o)
-                          (+ (init-reply-sizeof* b) (* (format-sizeof* b) o)))
-                        (seq 0 (init-reply-number-of-formats b))))
-              (get-screens (init-reply-number-of-screens b)
-                           (+ (init-reply-sizeof* b)
-                              (* (format-sizeof* b)
-                                 (init-reply-number-of-formats b)))
-                           '())
-              (init-reply-resource-id-base b)
-              1))))))))
+                     (map (lambda (o)
+                            (+ (init-reply-sizeof* b) (* (format-sizeof* b) o)))
+                          (seq 0 (init-reply-number-of-formats b))))
+                roots
+                1 ;FIXME: get the actual default from the connection string!
+                (init-reply-resource-id-base b)
+                1)))))))))
 
 ;;; Error handling
 
@@ -639,9 +680,11 @@
 (define-condition-type &x-unknown-error &x-error
   make-x-unknown-error x-unknown-error?)
 
-;; The errors are in order of code, starting with code 1.
-(define x-errors
-  (vector (list make-x-request-error #f "An invalid major or minor opcode was sent to the X server")
+;; The errors are in order of code, starting with the invalid code
+;; zero that is used when an unknown error code is returned.
+(define error-codes
+  (vector (list make-x-unknown-error #t "The X server returned an unknown error code")
+          (list make-x-request-error #f "An invalid major or minor opcode was sent to the X server")
           (list make-x-value-error #t "An out of range numeric value was sent to the X server")
           (list make-x-window-error #t "An invalid WINDOW was sent to the X server")
           (list make-x-pixmap-error #t "An invalid PIXMAP was sent to the X server")
@@ -659,46 +702,53 @@
           (list make-x-length-error #f "The length of the request sent to the X server was too short or too long")
           (list make-x-implementation-error #f "The X server is deficient and did not fulfill the request")))
 
+;; In order of major opcode
+(define opcodes
+  (vector #f 'create-window 'change-window-attributes
+          'get-window-attributes 'destroy-window))
+
 (define (raise-x-error b)
   (raise
-   (cond ((<= 1 (error-code b) (vector-length x-errors))
-          (let* ((e (vector-ref x-errors (- (error-code b) 1)))
-                 (make-the-error (car e))
-                 (value-valid (cadr e))
-                 (msg (caddr e)))
-            (condition
-             (make-message-condition msg)
-             (make-the-error (error-sequence-number b)
-                             (error-major-opcode b)
-                             (error-minor-opcode b))
-             (make-irritants-condition
-              (if value-valid (error-value b) #f)))))
-         (else
-          (condition
-           (make-message-condition "The X server sent an unknown error code")
-           (make-x-unknown-error (error-sequence-number b)
-                                 (error-major-opcode b)
-                                 (error-minor-opcode b))
-           (make-irritants-condition (error-code b)))))))
+   (let* ((code (error-code b))
+          (e (vector-ref error-codes (if (< code (vector-length error-codes))
+                                      code 0)))
+          (major (error-major-opcode b))
+          (who (vector-ref opcodes (if (< major (vector-length opcodes))
+                                       major 0))))
+     (let ((make-the-error (car e))
+           (value-valid (cadr e))
+           (msg (caddr e)))
+       (condition
+        (make-who-condition who)
+        (make-message-condition msg)
+        (make-the-error (error-sequence-number b)
+                        (error-major-opcode b)
+                        (error-minor-opcode b))
+        (make-irritants-condition
+         (if value-valid
+             (error-value b)
+             (if (zero? code) (error-code b) #f))))))))
+
 
 ;;; Requests
 
 (define (send-request display major-opcode minor-opcode data)
-  ;; FIXME: should the data simply be padded modulo 4 with zeros?
+  "Send an X request to the server and return the sequence number that
+will be used in the reply or error."
   (let ((len (round4 (bytevector-length data))))
-    
     (when (> len (* 4 #xfffe))
       ;; TODO: look at the BIG-REQUEST extension
       (error 'send-request "the request is too large to be encoded"))
-    (let ((o (x-display-outport display))
-          (seq (x-display-get-sequence-number! display)))
+    (let ((o (connection-outport display))
+          (seq (connection-get-sequence-number! display)))
       (print "Sending at seqno " seq " now.")
       (put-u8 o major-opcode)
       (put-u8 o minor-opcode)           ;can be a data field
       (put-u16 o (+ 1 (/ len 4)))
       (put-bytevector o data)
       (put-bytevector o (make-bytevector (- len (bytevector-length data)) 0))
-      (flush-output-port o))))
+      (flush-output-port o)
+      seq)))
 
 (define (call-with-x-output display major-opcode minor-opcode proc)
   (call-with-values open-bytevector-output-port
@@ -706,9 +756,17 @@
       (proc o)
       (send-request display major-opcode minor-opcode (c)))))
 
-(define (x-create-window display depth parent x y width height border-width class visual values)
-  (let ((o (x-display-outport display))
-        (wid (x-display-get-resource-id! display)))
+(define (call-with-x-output/new display major-opcode minor-opcode proc reply)
+  (call-with-values open-bytevector-output-port
+    (lambda (o c)
+      (proc o)
+      (let ((seq (send-request display major-opcode minor-opcode (c))))
+        (when reply
+          (add-reply-handler! display seq reply))))))
+
+(define (create-window display depth parent x y width height border-width class visual values)
+  (let ((o (connection-outport display))
+        (wid (connection-get-resource-id! display)))
     (put-u8 o 1)                        ;CreateWindow
     (put-u8 o depth)
     (put-u16 o (+ 8 (length values)))
@@ -741,7 +799,7 @@
     wid))
 
 (define (x-change-window-attributes display window values)
-  (let ((o (x-display-outport display)))
+  (let ((o (connection-outport display)))
     (put-u8 o 2)                        ;ChangeWindowAttributes
     (put-u8 o 0)
     (put-u16 o (+ 3 (length values)))
@@ -765,7 +823,7 @@
     (flush-output-port o)))
 
 (define (x-destroy-window display window)
-  (let ((o (x-display-outport display)))
+  (let ((o (connection-outport display)))
     (put-u8 o 4)                        ;DestroyWindow
     (put-u8 o 0)
     (put-u16 o 2)
@@ -773,7 +831,7 @@
     (flush-output-port o)))
 
 (define (x-map-window display window)
-  (let ((o (x-display-outport display)))
+  (let ((o (connection-outport display)))
     (put-u8 o 8)                        ;MapWindow
     (put-u8 o 0)
     (put-u16 o 2)
@@ -781,7 +839,7 @@
     (flush-output-port o)))
 
 (define (x-unmap-window display window)
-  (let ((o (x-display-outport display)))
+  (let ((o (connection-outport display)))
     (put-u8 o 10)                        ;UnmapWindow
     (put-u8 o 0)
     (put-u16 o 2)
@@ -793,8 +851,26 @@
 ;; atoms can not be uninterned... NUL bytes might not work in atoms.
 ;; they should be latin-1 apparently, but does utf8 work?
 
+
+;;;
+;;;
+;;;
+(define (intern-atom display name only-if-exists)
+  ;; Lazy version
+  (define-x-struct atom-reply
+    (u32 atom))
+  (call-with-x-output/new display 16 (bool->u8 only-if-exists)
+    (lambda (o)
+      (put-u16 o (string-length name))
+      (put-u16 o 0)
+      (put-string8 o name)
+      (make-atom name ))
+    
+    (lambda (b r)
+      (atom-id-set! r (atom-reply-atom b (reply-sizeof* b))))))
+
 (define (x-intern-atom display name only-if-exists)
-  (let ((o (x-display-outport display)))
+  (let ((o (connection-outport display)))
     (put-u8 o 16)                       ;InternAtom
     (put-u8 o (if only-if-exists 1 0))
     (put-u16 o (+ 2 (/ (round4 (string-length name)) 4)))
@@ -803,12 +879,11 @@
     (put-string8 o name)
     (flush-output-port o)
 
-    (let ((b (make-buffer (x-display-inport display))))
+    (let ((b (make-buffer (connection-inport display))))
       (buffer-read! b 32)
       (case (read-u8 b 0)
         ((1)
          ;; reply
-         (print "got a reply... " (reply-sequence-number b))
          (buffer-read! b (* (reply-length b) 4))
          (read-u32 b 8))
         ((0)
@@ -821,13 +896,13 @@
     (u16 length-of-name)
     (u16) (u32) (u32) (u32) (u32) (u32)
     ((string8 length-of-name) name))
-  (let ((o (x-display-outport display)))
+  (let ((o (connection-outport display)))
     (put-u8 o 17)                       ;GetAtomName
     (put-u8 o 0)
     (put-u16 o 2)
     (put-u32 o atom)
     (flush-output-port o)
-    (let ((b (make-buffer (x-display-inport display))))
+    (let ((b (make-buffer (connection-inport display))))
       (buffer-read! b 32)
       (case (read-u8 b 0)
         ((1)
@@ -853,9 +928,9 @@
                       ((8) 1) ((16) 2) ((32) 4))))
       (put-bytevector o data))))
 
-(define (x-create-gc display drawable values)
-  (let ((o (x-display-outport display))
-        (cid (x-display-get-resource-id! display)))
+(define (create-gc display drawable values)
+  (let ((o (connection-outport display))
+        (cid (connection-get-resource-id! display)))
     (put-u8 o 55)                       ;CreateGC
     (put-u8 o 0)                        ;unused
     (put-u16 o (+ 4 (length values)))
@@ -889,8 +964,8 @@
     cid))
 
 (define (x-change-gc display gc values)
-  (let ((o (x-display-outport display))
-        (cid (x-display-get-resource-id! display)))
+  (let ((o (connection-outport display))
+        (cid (connection-get-resource-id! display)))
     (put-u8 o 56)                       ;ChangeGC
     (put-u8 o 0)                        ;unused
     (put-u16 o (+ 3 (length values)))
@@ -923,8 +998,8 @@
 
 
 (define (x-clear-area display window x y width height exposures)
-  (let ((o (x-display-outport display))
-        (cid (x-display-get-resource-id! display)))
+  (let ((o (connection-outport display))
+        (cid (connection-get-resource-id! display)))
     (put-u8 o 61)                       ;ClearArea
     (put-u8 o (if exposures 1 0))
     (put-u16 o 4)
@@ -936,8 +1011,8 @@
     (flush-output-port o)))
 
 (define (x-poly-point display drawable gc coordinate-mode points)
-  (let ((o (x-display-outport display))
-        (cid (x-display-get-resource-id! display)))
+  (let ((o (connection-outport display))
+        (cid (connection-get-resource-id! display)))
     (put-u8 o 64)                       ;PolyPoint
     (put-u8 o coordinate-mode)
     (put-u16 o (+ 3 (length points)))
@@ -950,8 +1025,8 @@
     (flush-output-port o)))
 
 (define (x-poly-line display drawable gc coordinate-mode points)
-  (let ((o (x-display-outport display))
-        (cid (x-display-get-resource-id! display)))
+  (let ((o (connection-outport display))
+        (cid (connection-get-resource-id! display)))
     (put-u8 o 65)                       ;PolyLine
     (put-u8 o coordinate-mode)
     (put-u16 o (+ 3 (length points)))
@@ -964,8 +1039,8 @@
     (flush-output-port o)))
 
 (define (x-poly-segment display drawable gc segments)
-  (let ((o (x-display-outport display))
-        (cid (x-display-get-resource-id! display)))
+  (let ((o (connection-outport display))
+        (cid (connection-get-resource-id! display)))
     (put-u8 o 66)                       ;PolySegment
     (put-u8 o 0)
     (put-u16 o (+ 3 (* 2 (length segments))))
@@ -980,8 +1055,8 @@
     (flush-output-port o)))
 
 (define (x-poly-rectangle display drawable gc rectangles)
-  (let ((o (x-display-outport display))
-        (cid (x-display-get-resource-id! display)))
+  (let ((o (connection-outport display))
+        (cid (connection-get-resource-id! display)))
     (put-u8 o 67)                       ;PolyRectangle
     (put-u8 o 0)
     (put-u16 o (+ 3 (* 2 (length rectangles))))
@@ -998,7 +1073,7 @@
 (define (x-poly-arc display drawable gc arcs)
   (call-with-x-output display 68 0
     (lambda (o)
-      (let ((cid (x-display-get-resource-id! display)))
+      (let ((cid (connection-get-resource-id! display)))
         (put-u32 o drawable)
         (put-u32 o gc)
         (for-each (lambda (p)
@@ -1013,7 +1088,7 @@
 (define (x-fill-poly display drawable gc shape coordinate-mode points)
   (call-with-values open-bytevector-output-port
     (lambda (o c)
-      (let ((cid (x-display-get-resource-id! display)))
+      (let ((cid (connection-get-resource-id! display)))
         (put-u32 o drawable)
         (put-u32 o gc)
         (put-u8 o shape)
@@ -1028,7 +1103,7 @@
 (define (x-poly-fill-rectangle display drawable gc rectangles)
   (call-with-x-output display 70 0
     (lambda (o)
-      (let ((cid (x-display-get-resource-id! display)))
+      (let ((cid (connection-get-resource-id! display)))
         (put-u32 o drawable)
         (put-u32 o gc)
         (for-each (lambda (p)
@@ -1041,7 +1116,7 @@
 (define (x-poly-fill-arc display drawable gc arcs)
   (call-with-x-output display 71 0
     (lambda (o)
-      (let ((cid (x-display-get-resource-id! display)))
+      (let ((cid (connection-get-resource-id! display)))
         (put-u32 o drawable)
         (put-u32 o gc)
         (for-each (lambda (p)
@@ -1055,7 +1130,7 @@
 
 (define (x-list-extensions display)
   ;; expects an answer
-  (let ((o (x-display-outport display)))
+  (let ((o (connection-outport display)))
     (put-u8 o 99)                       ;ListExtensions
     (put-u8 o 0)                        ;unused
     (put-u16 o 1)
@@ -1063,7 +1138,7 @@
 
 (define (x-change-keyboard-control display values)
   ;; Keyword arguments would be somewhat useful here
-  (let ((o (x-display-outport display)))
+  (let ((o (connection-outport display)))
     (put-u8 o 102)                      ;ChangeKeyboardControl
     (put-u8 o 0)                        ;unused
     (put-u16 o (+ 2 (length values)))
@@ -1095,15 +1170,20 @@ manual."
             (make-irritants-condition percent))))
   (send-request display 104 (s8->u8 percent) '#vu8()))
 
+
+
 (define-x-struct event
   (u8 code)
   (u8 detail)
-  (u16 sequence-number)
-  (u32 time))
+  (u16 sequence-number))
 
+(define (read-event display b)
+  (print "event: " (event-code b)
+         " detail: " (event-detail b)
+         " sequence-number: " (event-sequence-number b)))
 
 (define (get-next-thing display)
-  (let ((b (x-display-inbuffer display)))
+  (let ((b (connection-inbuffer display)))
     (buffer-reset! b)
     (buffer-read! b 32)
     (case (read-u8 b 0)
@@ -1116,33 +1196,31 @@ manual."
        (raise-x-error b))
       (else
        ;; Event
-       (print "event: " (event-code b)
-              " detail: " (event-detail b)
-              " sequence-number: " (event-sequence-number b)
-              " time: " (event-time b))))))
-
-(define dpy (x-open-display "localhost" "x11"))
-
-(define screen (vector-ref (x-display-roots dpy) 1))
+       (read-event display b)))))
 
 
-(define red (x-create-gc dpy (x-screen-root screen) '((background . #xff0000))))
+(define dpy (open-display "localhost" "x11"))
 
-(define black (x-create-gc dpy (x-screen-root screen) '((background . #xffffff))))
+(define screen (vector-ref (connection-roots dpy) 1))
+
+
+(define red (create-gc dpy (screen-root screen) '((background . #xff0000))))
+
+(define black (create-gc dpy (screen-root screen) '((background . #xffffff))))
 
 (define cfx-background #xbbd7a6)
 
-(define cfx-orange (x-create-gc dpy (x-screen-root screen)
+(define cfx-orange (create-gc dpy (screen-root screen)
                                 '((foreground . #xf25d19))))
 
-(define cfx-blue (x-create-gc dpy (x-screen-root screen)
+(define cfx-blue (create-gc dpy (screen-root screen)
                               '((foreground . #x254aa5))))
 
-(define cfx-green (x-create-gc dpy (x-screen-root screen)
+(define cfx-green (create-gc dpy (screen-root screen)
                                '((foreground . #x1aaf59))))
 
 
-(define w (x-create-window dpy 0 (x-screen-root screen)
+(define w (create-window dpy 0 (screen-root screen)
                            0 0 100 100
                            1
                            1
@@ -1232,6 +1310,18 @@ manual."
                             (list (cons 'event-mask (fxior KeyPress KeyRelease))
                                   ))
 
+(x-change-window-attributes dpy w
+                            (list (cons 'event-mask (fxxor #xffffffff #xFE000000))
+                                  ))
+
+
+(x-change-window-attributes dpy w
+                            (list (cons 'event-mask #xffffffff)
+                                  ))
+
+
+
+
 (let lp ()
   (get-next-thing dpy)
   (lp))
@@ -1282,3 +1372,8 @@ manual."
 (define PropertyChange #x00400000)
 (define ColormapChange #x00800000)
 (define OwnerGrabButton #x01000000)
+;; #xFE000000 must be zero
+
+;; for set of pointer event: #xFFFF8003 unused but must be zero
+
+;; for set of device event: #xFFFFC0B0 unused but must be zero
