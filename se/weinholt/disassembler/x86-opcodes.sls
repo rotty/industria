@@ -1974,7 +1974,7 @@
                  #f
                  #f
                  #f
-                 #((fnstsw AX) #f #f #f #f #f #f #f)
+                 #((fnstsw *AX) #f #f #f #f #f #f #f)
                  (fucomip *st0 *st)
                  (fcomip *st0 *st)
                  #f))
