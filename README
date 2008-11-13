@@ -53,6 +53,19 @@ A parser and formatter for the Internet Relay Chat protocol. Should be
 usable both for clients and servers. It can split IRC messages into
 prefix, command and argument parts and it also does the inverse.
 
+** (se weinholt struct pack)
+C compatible structure packer and unpacker. The pack function produces
+a bytevector from a format string and some values and the unpack
+syntax does the opposite. They are similar to Python's struct module
+or Perl's pack/unpack functions. Fields are aligned with their natural
+alignment, i.e. their own size. Useful for reading and writing binary
+files or network protocols. See the top of the library source code for
+documentation.
+
+> (unpack "!2S" (pack "!2s" -1 1))
+65535
+1
+
 * TEST ROUTINES
 The tests/ directory contains scripts that test the libraries. Can
 also be useful if you want to see how a library is used.
