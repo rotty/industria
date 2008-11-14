@@ -81,7 +81,9 @@ the format string. Then see if pack/unpack give the expected result."
     (lambda (p extract)
       (let ((count (random 10)))
         (let lp ((i 0)
-                 (codes '())
+                 (codes (case endianness
+                          ((little) '(#\<))
+                          ((big) '(#\>))))
                  (values '())
                  (o 0))
           (let ((t (vector-ref types (random (vector-length types)))))
