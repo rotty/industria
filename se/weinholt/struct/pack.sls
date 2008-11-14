@@ -40,6 +40,8 @@
 
 ;; (1 0 0) - Initial version.
 
+;; (1 1 0) - `unpack' can now be used as a function.
+
 ;;; Versioning scheme
 
 ;; The version is made of (major minor patch) sub-versions.
@@ -50,21 +52,16 @@
 
 ;; `major' is incremented when backwards compatibility is broken.
 
-;;; TODOs
-
-;; Let unpack be used with a non-constant string and let it be used as
-;; a function value.
-
-(library (se weinholt struct pack (1 0 0))
+(library (se weinholt struct pack (1 1 0))
     (export format-size pack pack! unpack)
     (import (rnrs)
             (se weinholt struct pack-aux (1 0 0)))
 
-  (define-syntax unpack
+  (define-syntax unpack*
     (lambda (x)
       (syntax-case x ()
         ((_ fmt bytevector)
-         #'(unpack fmt bytevector 0))
+         #'(unpack* fmt bytevector 0))
         ((_ fmt bytevector offset)
          (letrec ((type (lambda (c)
                           (case c
@@ -144,6 +141,98 @@
                           "The bytevector size does not match the format"
                           fmt (bytevector-length bv)))
                       (values refs ...))))))))
+
+  (define unpack**
+    (case-lambda
+      ((fmt bv offset)
+       (letrec ((type (lambda (c)
+                        (case c
+                          ((#\c) (values 's8 bytevector-s8-ref 1)) ;special cases
+                          ((#\C) (values 'u8 bytevector-u8-ref 1))
+                          ((#\s) (values bytevector-s16-ref
+                                         bytevector-s16-native-ref 2))
+                          ((#\S) (values bytevector-u16-ref
+                                         bytevector-u16-native-ref 2))
+                          ((#\l) (values bytevector-s32-ref
+                                         bytevector-s32-native-ref 4))
+                          ((#\L) (values bytevector-u32-ref
+                                         bytevector-u32-native-ref 4))
+                          ((#\q) (values bytevector-s64-ref
+                                         bytevector-s64-native-ref 8))
+                          ((#\Q) (values bytevector-u64-ref
+                                         bytevector-u64-native-ref 8))
+                          ((#\f) (values bytevector-ieee-single-ref
+                                         bytevector-ieee-single-native-ref 4))
+                          ((#\d) (values bytevector-ieee-double-ref
+                                         bytevector-ieee-double-native-ref 8))
+                          (else (error 'unpack "Bad character in format string" fmt c))))))
+         (unless (= (format-size fmt) (- (bytevector-length bv) offset))
+           ;; Don't report the bytevector here, as it might
+           ;; contain sensitive information.
+           (error 'unpack
+                  "The bytevector size does not match the format"
+                  fmt (bytevector-length bv)))
+         (let lp ((i 0)
+                  (o offset)
+                  (rep #f)
+                  (endian #f)
+                  (refs '()))
+           (cond ((= i (string-length fmt))
+                  (apply values (reverse refs)))
+                 ((char-whitespace? (string-ref fmt i))
+                  (lp (+ i 1) o rep endian refs))
+                 (else
+                  (case (string-ref fmt i)
+                    ((#\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9)
+                     (lp (+ i 1) o
+                         (+ (- (char->integer (string-ref fmt i))
+                               (char->integer #\0))
+                            (* (if rep rep 0) 10))
+                         endian refs))
+                    ((#\=)
+                     (lp (+ i 1) o #f #f refs))
+                    ((#\<)
+                     (lp (+ i 1) o #f (endianness little) refs))
+                    ((#\> #\!)
+                     (lp (+ i 1) o #f (endianness big) refs))
+                    ((#\x)
+                     (lp (+ i 1) (+ o (or rep 1)) #f endian refs))
+                    (else
+                     (call-with-values (lambda ()
+                                         (type (string-ref fmt i)))
+                       (lambda (ref nref n)
+                         (let ((o (roundb o n))
+                               (rep (or rep 1)))
+                           (lp (+ i 1) (+ o (* n rep)) #f
+                               endian
+                               (let lp ((o o) (rep rep) (refs refs))
+                                 (if (zero? rep) refs
+                                     (lp (+ o n) (- rep 1)
+                                         (cons (cond ((eq? ref 's8)
+                                                      (bytevector-s8-ref bv o))
+                                                     ((eq? ref 'u8)
+                                                      (bytevector-u8-ref bv o))
+                                                     (endian
+                                                      (ref bv o endian))
+                                                     (else
+                                                      (nref bv o)))
+                                               refs)))))))))))))))
+      ((fmt bv)
+       (unpack** fmt bv 0))))
+
+  ;; Use the unpack* expander if possible, otherwise use the unpack**
+  ;; function.
+  (define-syntax unpack
+    (make-variable-transformer
+     (lambda (x)
+       (syntax-case x ()
+         ((_ fmt bytevector) #'(unpack fmt bytevector 0))
+         ((_ fmt bytevector offset)
+          (if (string? (syntax->datum #'fmt))
+              #'(unpack* fmt bytevector offset)
+              #'(unpack** fmt bytevector offset)))
+         ((_ . rest) #'(unpack** . rest))
+         (_ #'unpack**)))))
 
   (define (pack fmt . values)
     (let ((bv (make-bytevector (format-size fmt))))

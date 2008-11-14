@@ -38,8 +38,13 @@
            (eval `(call-with-values (lambda () (unpack ,fmt ',result)) list)
                  (environment '(rnrs) '(se weinholt struct pack)))))
       (unless (equal? values result2)
-        (error 'check-pack "Bad result from unpack"
+        (error 'check-pack "Bad result from unpack syntax"
+               result2 values fmt)))
+    (let ((result2 (call-with-values (lambda () (unpack fmt result)) list)))
+      (unless (equal? values result2)
+        (error 'check-pack "Bad result from unpack function"
                result2 values fmt)))))
+
 
 (define-syntax check
   (lambda (x)
