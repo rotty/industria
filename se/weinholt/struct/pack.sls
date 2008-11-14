@@ -70,17 +70,25 @@
                           (case c
                             ((#\c) (values 's8 #'bytevector-s8-ref 1)) ;special cases
                             ((#\C) (values 'u8 #'bytevector-u8-ref 1))
-                            ((#\s) (values #'bytevector-s16-ref #'bytevector-s16-native-ref 2))
-                            ((#\S) (values #'bytevector-u16-ref #'bytevector-u16-native-ref 2))
-                            ((#\l) (values #'bytevector-s32-ref #'bytevector-s32-native-ref 4))
-                            ((#\L) (values #'bytevector-u32-ref #'bytevector-u32-native-ref 4))
-                            ((#\q) (values #'bytevector-s64-ref #'bytevector-s64-native-ref 8))
-                            ((#\Q) (values #'bytevector-u64-ref #'bytevector-u64-native-ref 8))
-                            ((#\f) (values #'bytevector-ieee-single-ref #'bytevector-ieee-single-native-ref 4))
-                            ((#\d) (values #'bytevector-ieee-double-ref #'bytevector-ieee-double-native-ref 8))
-                            (else (syntax-violation 'unpack "Bad character in format string" x c))))))
-           (with-syntax (
-                         ((refs ...)
+                            ((#\s) (values #'bytevector-s16-ref
+                                           #'bytevector-s16-native-ref 2))
+                            ((#\S) (values #'bytevector-u16-ref
+                                           #'bytevector-u16-native-ref 2))
+                            ((#\l) (values #'bytevector-s32-ref
+                                           #'bytevector-s32-native-ref 4))
+                            ((#\L) (values #'bytevector-u32-ref
+                                           #'bytevector-u32-native-ref 4))
+                            ((#\q) (values #'bytevector-s64-ref
+                                           #'bytevector-s64-native-ref 8))
+                            ((#\Q) (values #'bytevector-u64-ref
+                                           #'bytevector-u64-native-ref 8))
+                            ((#\f) (values #'bytevector-ieee-single-ref
+                                           #'bytevector-ieee-single-native-ref 4))
+                            ((#\d) (values #'bytevector-ieee-double-ref
+                                           #'bytevector-ieee-double-native-ref 8))
+                            (else (syntax-violation
+                                   'unpack "Bad character in format string" x c))))))
+           (with-syntax (((refs ...)
                           (let ((fmt (syntax->datum #'fmt)))
                             (let lp ((i 0)
                                      (o (syntax->datum #'offset))
@@ -99,12 +107,17 @@
                                                   (char->integer #\0))
                                                (* (if rep rep 0) 10))
                                             endian refs))
-                                       ((#\=) (lp (+ i 1) o #f #f refs))
-                                       ((#\<) (lp (+ i 1) o #f #'(endianness little) refs))
-                                       ((#\> #\!) (lp (+ i 1) o #f #'(endianness big) refs))
-                                       ((#\x) (lp (+ i 1) (+ o (or rep 1)) #f endian refs))
+                                       ((#\=)
+                                        (lp (+ i 1) o #f #f refs))
+                                       ((#\<)
+                                        (lp (+ i 1) o #f #'(endianness little) refs))
+                                       ((#\> #\!)
+                                        (lp (+ i 1) o #f #'(endianness big) refs))
+                                       ((#\x)
+                                        (lp (+ i 1) (+ o (or rep 1)) #f endian refs))
                                        (else
-                                        (call-with-values (lambda () (type (string-ref fmt i)))
+                                        (call-with-values (lambda ()
+                                                            (type (string-ref fmt i)))
                                           (lambda (ref nref n)
                                             (let ((o (roundb o n))
                                                   (rep (or rep 1)))
