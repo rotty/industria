@@ -47,7 +47,7 @@
 ;; you wish to show the destination for branches, or the actual offset
 ;; for amd64's RIP-relative addressing, you will need to compute the
 ;; offset yourself. This way the disassembler doesn't need to keep
-;; track of rIP, and it's also permits a pretty printer for Intel or
+;; track of rIP, and it also allows a pretty printer for Intel or
 ;; AT&T syntax to work better.
 
 ;; Read the note about versioning above and decide on a version

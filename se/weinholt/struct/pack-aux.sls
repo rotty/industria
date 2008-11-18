@@ -1,5 +1,4 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Actual - the scheming operating system
 ;; Copyright © 2008 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
