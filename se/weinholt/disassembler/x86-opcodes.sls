@@ -411,6 +411,8 @@
       (jge . jnl)
       (jng . jle)
       (jg . jnle)
+      (jc . jb)
+      (jnc . jnb)
       (setnae . setb)
       (setae . setnb)
       (sete . setz)
