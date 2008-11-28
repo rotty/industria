@@ -18,17 +18,7 @@
 
 ;;; Version history
 
-;; (1 0 0) - Unreleased - Initial version.
-
-;; (1 1 0) - Unreleased - Added opsyntax for test registers and a few
-;; AMD Geode instructions. All could not be added, since they conflict
-;; with newer AMD instructions.
-
-;; (1 1 1) - Unreleased - Export lists of instructions that work with
-;; the LOCK/REP/REPZ prefixes and branch hints.
-
-;; (1 1 2) - Unreleased - Remove the operand size suffix from ins,
-;; outs, movs, lods, stos, cmps, and scas. Fix the xlat alias.
+;; (1 0 0) - Unreleased.
 
 ;;; Versioning scheme
 
@@ -130,7 +120,7 @@
 ;; For AMD SSE5, the Z, VW and WV opcode syntaxes are not official
 ;; either.
 
-(library (se weinholt disassembler x86-opcodes (1 1 2))
+(library (se weinholt disassembler x86-opcodes (1 0 0))
     (export opcodes pseudo-mnemonics mnemonic-aliases
             lock-instructions
             branch-hint-instructions
@@ -738,7 +728,7 @@
            #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f
            ;; 0F 25 F0
            #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f #f)
-         (mov Td Ed)
+         #f                             ;(MOV tr,r32)
          #f
          ;; 0F 28
          #(Prefix #(VEX (movaps Vps Wps) (vmovaps Vps Wps))
