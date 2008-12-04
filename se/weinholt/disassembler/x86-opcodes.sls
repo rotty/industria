@@ -2000,11 +2000,12 @@
        (*prefix* repz)
        (hlt)
        (cmc)
+       ;; On AMD's CPU, the #f here duplicates the test instruction.
        #(Group "Unary Group 3"
-               #((test Eb Ib) (test Eb Ib) (not Eb) (neg Eb)
+               #((test Eb Ib) #f (not Eb) (neg Eb)
                  (mul Eb) (imul Eb) (div Eb) (idiv Eb)))
        #(Group "Unary Group 3"
-               #((test Ev Iz) (test Ev Iz) (not Ev) (neg Ev)
+               #((test Ev Iz) #f (not Ev) (neg Ev)
                  (mul Ev) (imul Ev) (div Ev) (idiv Ev)))
        ;; F8
        (clc) (stc)
