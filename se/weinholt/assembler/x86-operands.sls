@@ -22,6 +22,9 @@
             memory?
             memory-addressing-mode memory-datasize memory-segment
             memory-disp memory-SIB memory-ModR/M memory-REX
+            expression?
+            expression-operand-size
+            build-expression eval-expression expression-in-range?
             translate-operands)
     (import (rnrs)
             (se weinholt assembler x86-misc (1 0 (>= 0))))
@@ -101,7 +104,6 @@
 
       ;; 64-bit
       (rax 64 0)
-      (rax 64 0)
       (rcx 64 1)
       (rdx 64 2)
       (rbx 64 3)
@@ -127,14 +129,6 @@
       (mm5 mm 5)
       (mm6 mm 6)
       (mm7 mm 7)
-      (mm8 mm 8)
-      (mm9 mm 9)
-      (mm10 mm 10)
-      (mm11 mm 11)
-      (mm12 mm 12)
-      (mm13 mm 13)
-      (mm14 mm 14)
-      (mm15 mm 15)
       ;; aliases:
       (mmx0 mm 0)
       (mmx1 mm 1)
@@ -144,14 +138,6 @@
       (mmx5 mm 5)
       (mmx6 mm 6)
       (mmx7 mm 7)
-      (mmx8 mm 8)
-      (mmx9 mm 9)
-      (mmx10 mm 10)
-      (mmx11 mm 11)
-      (mmx12 mm 12)
-      (mmx13 mm 13)
-      (mmx14 mm 14)
-      (mmx15 mm 15)
 
       ;; 128-bit vector
       (xmm0 xmm 0)
@@ -259,10 +245,12 @@
                 register-list)
       tmp))
 
-  (define (lookup-register name)
+  (define (lookup-register name . default)
     (or (hashtable-ref registers name #f)
-        (error 'lookup-register
-               "Unknown register" name)))
+        (if (null? default)
+            (error 'lookup-register
+                   "Unknown register" name)
+            (car default))))
 
 ;;; Memory operands
 
@@ -275,6 +263,7 @@
   (define (encode-memory addressing-mode datasize segment
                          disp scale index base)
     (define (rBP/13? x) (and x (fx=? #b101 (fxand #b111 (register-index x)))))
+    (define (rSP/12? x) (and x (fx=? #b100 (fxand #b111 (register-index x)))))
     (define (rIP? x) (and x (eq? 'rip (register-name x))))
     (define (disp32 x) (number->bytevector x 32))
     (define (disp8 x) (number->bytevector x 8))
@@ -301,6 +290,22 @@
               (ret #b00 rbp
                    (disp32 disp)
                    #f 0 0))
+
+             ;; [rSP] [r12]
+             ((and (rSP/12? base) (zero? disp) (not index))
+              (ret #b00 rsp
+                   #f
+                   1 rsp (register-index base)))
+
+             ;; [rSP+base] [r12+base]
+             ((and (rSP/12? base) (not index))
+              (if (bitwidth<= disp 7 7)
+                  (ret #b01 (register-index base)
+                       (disp8 disp)
+                       1 rsp (register-index base))
+                  (ret #b10 (register-index base)
+                       (disp32 disp)
+                       1 rsp (register-index base))))
 
              ((and (not index) (not base))
               ;; [disp32] in 64-bit mode
@@ -364,7 +369,7 @@
                      addressing-mode datasize segment
                      disp scale index base))))
       (else
-       (error 'encode-memory "16-bit memory encodings are not supported yet"))))
+       (error 'encode-memory "16-bit memory addressing is not supported"))))
 
   (define (translate-memory ref mode)
     ;; Translates from list form to record form (via encode memory).
@@ -391,10 +396,7 @@
         (error who "This register isn't permitted in addressing forms"
                reg ref))
       (define wordsize
-        (case mode
-          ((16) 2)
-          ((32) 4)
-          ((64) 8)))
+        (fxarithmetic-shift-right mode 3))
       (for-each
        (lambda (x)
          (cond ((eq? x 'wordsize)
@@ -432,8 +434,6 @@
                          (set-index! reg)
                          (set-base! reg)))
                     ((32)
-                     (when (> (register-index reg) 7)
-                       (bad-reg reg))
                      (if base
                          (set-index! reg)
                          (set-base! reg)))
@@ -493,7 +493,7 @@
            (error who "Displacements are at most 16 bits signed in 16-bit mode"
                   disp ref)))
         ((32 64)
-         (when (and disp (not (<= (- (expt 2 31)) disp (- (expt 2 35) 1))))
+         (when (and disp (not (<= (- (expt 2 31)) disp (- (expt 2 31) 1))))
            (error who "Displacements are at most 32 bits signed in 32-bit and 64-bit mode"
                   disp ref))))
 
@@ -508,30 +508,107 @@
                        ((mem64+) 64)
                        ((mem128+) 128)
                        ((mem256+) 256)
+                       ((mem+) #f)
                        ;; FIXME: fill this in
-                       (else #f))
+                       (else
+                        (error 'translate-memory
+                               "Invalid memory operation"
+                               ref)))
                      segment
                      disp
                      scale
                      index
                      base)))
 
+;;; Expressions
+
+  ;; These should possibly be called relocations.
+
+  ;; One assumption that makes things a lot easier, is that if an
+  ;; expression contains labels then it will not fit in an 8 or 16 bit
+  ;; wide encoding.
+
+  (define empty-hashtable (make-eq-hashtable))
+
+  (define-record-type expression
+    (fields operand-size rel? code))
+  (define expression-mode expression-operand-size)
+
+  (define (eval-expr expr mode labels)
+    ;; Returns an integer, or, #f if some labels could not be found.
+    (let eval-expr ((expr expr))
+      (cond ((integer? expr) expr)
+            ((eq? expr 'wordsize) (fxarithmetic-shift-right mode 3))
+            ((symbol? expr) (hashtable-ref labels expr #f))
+            (else
+             (let ((operands (map eval-expr (cdr expr))))
+               (and (for-all number? operands)
+                    (case (car expr)
+                      ((+) (apply + operands))
+                      ((-) (apply - operands)))))))))
+
+  (define (build-expression op mode)
+    (define (check-syntax op)
+      (cond ((or (integer? op) (symbol? op)))
+            ((list? op)
+             (unless (and (memq (car op) '(+ -)) (>= (length op) 2))
+               (error 'build-expression "Bad assembler operand" op))
+             (when (and (eqv? (cadr op) '(eip rip))
+                        (not (integer? (caddr op)))
+                        (not (null? (cdddr op))))
+               (error 'build-expression "Bad rip-relative assembler operand" op)))
+            (for-each check-syntax (cdr op))))
+    (check-syntax op)
+    (if (and (list? op) (eqv? (cadr op) '(eip rip)))
+        (make-expression (if (eq? (cadr op) 'rip) 64 32)
+                         #t (caddr op))
+        (make-expression #f #f (or (eval-expr op mode empty-hashtable)
+                                   op))))
+
+  (define (eval-expression expression labels)
+    (eval-expr (expression-code expression)
+               (expression-mode expression)
+               labels))
+
+  (define (expression-in-range? expression min max)
+    (cond ((eval-expression expression empty-hashtable) =>
+           (lambda (v)
+             (<= min v max)))
+          (else #f)))
+
+
+;;   (let ((labels (make-eq-hashtable)))
+;;     (hashtable-set! labels 'start 0)
+;;     (hashtable-set! labels 'end 40)
+;;     (eval-expression (build-expression '(- end start) 64) labels))
+
+;;;
+
   (define (translate-operands operands mode)
     (map (lambda (op)
-           (cond ((integer? op)
+           (cond ((or (register? op) (memory? op) (expression? op))
                   op)
+
+                 ((integer? op)
+                  (build-expression op mode))
+
                  ((symbol? op)
-                  (let ((reg (lookup-register op)))
-                    (when (and (not (= mode 64))
-                               (or (> (register-index reg) 7)
-                                   (eq? (register-type reg) 'rex8)))
-                      (error 'translate-operands
-                             "This register is only reachable in 64-bit mode" op))
-                    reg))
+                  (cond ((lookup-register op #f) =>
+                         (lambda (reg)
+                           (when (and (not (= mode 64))
+                                      (or (> (register-index reg) 7)
+                                          (eq? (register-type reg) 'rex8)))
+                             (error 'translate-operands
+                                    "This register is only reachable in 64-bit mode" op))
+                           reg))
+                        (else
+                         (build-expression op mode))))
+
                  ((list? op)
-                  (translate-memory op mode))
-                 ((or (register? op) (memory? op))
-                  op)
+                  (if (memq (car op) '(+ -))
+                      (build-expression op mode)
+                      (translate-memory op mode)))
+
                  (else
                   (error 'translate-operands
                          "Invalid assembler operand"

@@ -24,37 +24,46 @@
   ;; Check that it's possible to encode the given instruction, and
   ;; compare the disassembly with the input.
   (let ((expected (if (pair? rest) (car rest) instruction)))
-    (call-with-values open-bytevector-output-port
-      (lambda (port extract)
-        (put-instruction instruction port mode)
-        (let* ((bv (extract))
-               (port (open-bytevector-input-port bv))
-               (bytes-returned 0))
-          (let ((instruction
-                 (get-instruction port mode
-                                  (lambda (_ . bytes)
-                                    (set! bytes-returned (+ (length bytes)
-                                                            bytes-returned))))))
-            (unless (equal? instruction expected)
-              (error 'test "Disassembly is not as expected"
-                     expected instruction)))
+    (let* ((bv (assemble (list '(%origin 0)
+                               `(%mode ,mode)
+                               instruction)))
+           (port (open-bytevector-input-port bv))
+           (bytes-returned 0))
+      (let ((instruction
+             (get-instruction port mode
+                              (lambda (_ . bytes)
+                                (set! bytes-returned (+ (length bytes)
+                                                        bytes-returned))))))
+        (unless (equal? instruction expected)
+          (error 'test "Disassembly is not as expected"
+                 expected instruction)))
 
-          (unless (eof-object? (lookahead-u8 port))
-            (error 'test "After disassembly there are bytes unread."
-                   (get-instruction port mode #f)))
-          (unless (= bytes-returned (bytevector-length bv))
-            (error 'test "There are bytes missing in the collector function."
-                   bytes-returned (bytevector-length bv)))))))
+      (unless (eof-object? (lookahead-u8 port))
+        (error 'test "After disassembly there are bytes unread."
+               (get-instruction port mode #f)))
+      (unless (= bytes-returned (bytevector-length bv))
+        (error 'test "There are bytes missing in the collector function."
+               bytes-returned (bytevector-length bv)))))
   (display "OK\n"))
 
 (define (testf instruction mode)
   ;; Check that it's not possible to encode the given instruction
   (unless (guard (con (else (display "OK\n")))
-             (call-with-values open-bytevector-output-port
-               (lambda (port extract)
-                 (put-instruction instruction port mode)))
-                 #f)
+             (assemble (list '(%origin 0)
+                             `(%mode ,mode)
+                             instruction))
+             #f)
     (error 'testf "test did not fail" instruction mode)))
+
+(define (test= instruction mode expected)
+  ;; Encode the instruction and compare it with the given bytevector
+  (let ((bv (assemble (list '(%origin 0)
+                            `(%mode ,mode)
+                            instruction))))
+    (unless (bytevector=? expected bv)
+      (error 'test "Assembly is not as expected"
+             instruction expected bv))))
+
 
 (test '(hlt) 64)
 
@@ -81,14 +90,29 @@
 (test '(in eax dx) 64)
 
 (test '(mov cr15 r15) 64)
+(test '(mov cr15 rax) 64)
+(test '(mov cr3 r15) 64)
 (test '(mov dr5 r13) 64)
-
+(test '(mov dr5 rax) 64)
+(test '(mov dr14 rax) 64)
 
 (test '(mov (mem8+ rax) #xff) 64)
 (test '(mov (mem16+ rax) #xffff) 64)
 (test '(mov (mem32+ rax) #xffffffff) 64)
 (test '(mov (mem64+ rax) #x-7fffffff) 64
       '(mov (mem64+ rax) #xffffffff80000001))
+
+(for-each (lambda (i) (test i 64))
+          '((cbw) (cwde) (cdqe)
+            (cwd) (cdq) (cqo)))
+
+
+;; Default operand size of 64:
+(test= '(jmp rax) 64 '#vu8(#xff #xe0))
+(testf '(jmp eax) 64)
+(test= '(jmp ax) 64 '#vu8(#x66 #xff #xe0))
+
+(test= '(jmp eax) 32 '#vu8(#xff #xe0))
 
 ;;; Segment and address size override
 
@@ -98,7 +122,10 @@
             (stos (mem16+ rdi) ax)
             (stos (mem32+ rdi) eax)
             (stos (mem64+ rdi) rax)
-            (movs (mem32+ rdi) (mem32+ rsi))))
+            (movs (mem32+ rdi) (mem32+ rsi))
+            (movs (mem32+ rdi) (mem32+ fs rsi))))
+
+(testf '(movs (mem32+ rdi) (mem32+ rsi es)) 64)
 
 (for-each (lambda (i) (test i 32))
           '((movs (mem8+ es edi) (mem8+ ds esi))
@@ -108,6 +135,14 @@
 (test '(movs (mem+ es edi) (mem16+ esi)) 32
       '(movs (mem16+ es edi) (mem16+ ds esi)))
 
+;;; Prefixes
+
+(for-each (lambda (i) (test i 64))
+          '((rep.stos (mem8+ rdi) al)
+            (rep.stos (mem32+ rdi) eax)
+            (repz.scas rax (mem64+ rdi))
+            (repnz.scas rax (mem64+ rdi))
+            (lock.xchg (mem64+ rax) rbx)))
 
 ;;; Various memory references
 
