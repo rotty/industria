@@ -1029,7 +1029,8 @@
             (mutable port)
             (mutable ip)
             (mutable labels)
-            (mutable relocs)))
+            (mutable relocs)
+            (mutable comm)))
 
   (define (put-immediate imm type state)
     (let ((size (case type
@@ -1127,6 +1128,11 @@
       ((%origin)
        (assembler-state-ip-set! state (cadr instr))
        instr)
+      ((%comm)
+       ;; (%comm label size alignment)
+       (assembler-state-comm-set! state (cons (cdr instr)
+                                              (assembler-state-comm state)))
+       instr)
       ((%u8 %u16 %u32)
        (let ((pos (port-position (assembler-state-port state)))
              (operands (translate-operands (cdr instr) (assembler-state-mode state))))
@@ -1163,6 +1169,27 @@
          (assembler-state-ip-set! state (+ (assembler-state-ip state) pad)))
        instr)
 
+      ((%section)
+       (when (eq? (cadr instr) 'bss)
+         ;; %comm statements are used here
+         (for-each
+          (lambda (comm)
+            (let ((label (car comm))
+                  (size (cadr comm))
+                  (alignment (caddr comm)))
+              ;; Alignment
+              (let ((pad (- alignment
+                            (mod (assembler-state-ip state)
+                                 alignment))))
+                ;; Label
+                (hashtable-set! (assembler-state-labels state)
+                                label
+                                (assembler-state-ip state))
+                ;; Size
+                (assembler-state-ip-set! state (+ (assembler-state-ip state) pad size)))))
+          (assembler-state-comm state)))
+       instr)
+
       (else
        (let ((pos (port-position (assembler-state-port state))))
          (let ((i (put-instruction instr state)))
@@ -1175,7 +1202,8 @@
                                        #f
                                        0
                                        (make-eq-hashtable)
-                                       #f)))
+                                       #f
+                                       '())))
       (let lp ((code code))
         (call-with-values open-bytevector-output-port
           (lambda (tmpport extract)
@@ -1200,7 +1228,8 @@
                                                        #f
                                                        0
                                                        (assembler-state-labels state)
-                                                       #f))
+                                                       #f
+                                                       '()))
                      (lp newcode))
                     (else
                      (print "Assembly complete.")
@@ -1218,14 +1247,13 @@
 ;;                       (assemble `((%mode 64)
 ;;                                   (%origin 0)
 ;;                                   (%label start)
-;; ;;                                   (mov (mem32+ start) 0)
-;;                                   (test edx 1)
-;;                                   (mov eax end)
-;;                                   (jmp end)
-;;                                   (jmp start)
-;;                                   (mov eax start)
-;;                                   (%label end)
-;;                                   (cli)
+;;                                   (%comm stack 1 8)
+;;                                   ;; (mov (mem32+ start) 0)
+;;                                   (mov eax bss)
+;;                                   (mov eax end-bss)
+;;                                   (%label bss)
+;;                                   (%section bss)
+;;                                   (%label end-bss)
 ;;                                   )))
 ;;       (close-port p)
 ;;       (system "objdump -b binary -m i386:x86-64 -M intel -D /tmp/hmm")
@@ -1240,4 +1268,4 @@
 
 
 
-    ))
+    )

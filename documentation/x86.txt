@@ -1,0 +1,222 @@
+-*- coding: utf-8; mode: outline -*-
+
+This documents the (se weinholt assembler x86) library for R6RS
+Scheme.
+
+It’s not yet ready to use! Features are missing and it has not been
+debugged. Lots of instructions can't be generated.
+
+* LICENSING
+Copyright © 2008 Göran Weinholt <goran@weinholt.se>
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+* What the assembler does
+Currently the assembler can operate in 32-bit and 64-bit mode. It
+takes your instructions as a list and returns a bytevector if
+everything went ok. The result is a statically linked binary.
+
+* TODOs
+** Output ELF relocatable object files?
+I personally don’t need this right now.
+
+** Dump the symbol table
+This could be useful to make it easier to use gdb.
+
+* Basic operation of the assembler
+(assemble '((cli))) => #vu8(250)
+
+* Output format
+The output format is currently a raw binary without headers or
+anything.
+
+* Syntax
+The instruction mnemonic and operand order is like in Intel's
+syntax: in general there is no size suffix and the first operand is
+the destination.
+
+Instructions are given as lists where the CAR is the instruction
+mnemonic, possibly combined with a prefix or suffix.
+
+** Registers
+Registers are given as symbols:
+
+8-bit: al cl dl bl ah ch dh bh
+In long mode: spl bpl sil dil r8b r9b r10b r11b r12b r13b r14b r15b
+(and aliases: r8l r9l r10l r11l r12l r13l r14l r15l).
+
+16-bit: ax cx dx bx sp bp si di
+In long mode: r8w r9w r10w r11w r12w r13w r14w r15w
+
+32-bit: eax ecx edx ebx esp ebp esi edi
+In long mode: r8d r9d r10d r11d r12d r13d r14d r15d
+
+64-bit (long mode only): rax rcx rdx rbx rsp rbp rsi rdi r8 r9 r10
+r11 r12 r13 r14 r15
+
+64-bit MMX registers: mm0 mm1 mm2 mm3 mm4 mm5 mm6 mm7 (aliases:
+mmx0 mmx1 mmx2 mmx3 mmx4 mmx5 mmx6 mmx7)
+
+128-bit SSE registers: xmm0 xmm1 xmm2 xmm3 xmm4 xmm5 xmm6 xmm7
+In long mode: xmm8 xmm9 xmm10 xmm11 xmm12 xmm13 xmm14 xmm15
+
+256-bit AVX registers: ymm0 ymm1 ymm2 ymm3 ymm4 ymm5 ymm6 ymm7
+In long mode: ymm8 ymm9 ymm10 ymm11 ymm12 ymm13 ymm14 ymm15
+
+Segment registers: es cs ss ds fs gs. Only fs and gs are usable in
+long mode.
+
+Control registers: cr0 cr1 cr2 cr3 cr4 cr5 cr6 cr7
+In long mode: cr8 cr9 cr10 cr11 cr12 cr13 cr14 cr15
+(All of these are not necessarily defined)
+
+Debug registers: dr0 dr1 dr2 dr3 dr4 dr5 dr6 dr7
+In long mode: dr8 dr9 dr10 dr11 dr12 dr13 dr14 dr15
+(All of these are not necessarily defined)
+
+x87 floating point registers: st0 st1 st2 st3 st4 st5 st6 st7
+
+For PC-relative addressing modes: ip, eip, rip
+
+** Expressions
+<expr> ::= <integer>
+        | <label>
+        | wordsize
+        | (+ <expr> ...)
+        | (- <expr> ...)
+<rel-expr> ::= (+ rip <integer>)
+
+Expressions are used as branch destinations, immediate operands, and
+for calculating the diplacement in memory operands.
+
+Branch instructions can also be given special RIP relative
+expressions, which directly specify the branch offset operand.
+
+*** Expression examples
+hello (%utf8z "Not Hello world...\n")
+
+main
+(push (+ hello 4))  ; The label “hello” + 4 bytes
+(call printf)       ; Prints “Hello world...”
+(sub esp 4)         ; 4 is also an expression
+(jmp main)          ; Also main/printf
+(ret)
+
+(lea edi (mem+ hello))      ; “hello” is the expression here
+(lea esi (mem+ (+ hello 4))
+
+`(mov esp (+ stack ,stack-size))
+
+(call (mem64+ rip some-symbol))  ; RIP-relative addressing
+
+(out #x80 al)
+(jmp (+ rip 2))   ; Skip the next instruction
+(mov al ah)
+(out #x80 al)
+
+** Memory in 32-bit and 64-bit mode
+(memBITS+ segment base-register expr (* scale index-register))
+
+“BITS+” can be omitted if the instruction can be sized in some other
+way, e.g. if another operand is a general purpose register, or if the
+instruction does not require sizing. Sizing lets the assembler emit
+the correct operand size override or REX.W prefix. This is required
+when the same opcode can specify an operation on 16, 32 or 64 bits.
+
+“scale” is 1, 2, 4, 8 or “wordsize”. When the CPU calculates the
+address, it multiplies the index register by this amount.
+
+“base-register” and “index-register” are general purpose registers. In
+64-bit mode it is possible to give “rip” as base, but then the scale
+and the index register must be omitted.
+
+“segment” is a segment register.
+
+“expr” evaluates to a displacement.
+
+Addresses are calculated like this: 
+ segment base + base register + expr + scale * index.
+
+esp/rsp can not be used as an index register.
+
+** Memory in 16-bit mode
+Not implemented.
+
+** Mnemonics
+Mnemonics are generally the same as in Intel's or AMD's manuals.
+
+Prefixes work by prepending the prefix to the instruction mnenonic,
+separated by a dot. These are available: lock. rep. repz. repnz. repe.
+repne.
+
+*** Prefix examples
+(rep.movs (mem8+ rdi) (mem8+ rsi))
+(lock.cmpxchg (mem64+ rbx #x7) r12)
+(jnz.spnt fatal-error)
+
+** Assembler directives
+*** (%origin address)
+Set the instruction pointer to the given address. The labels, data and
+instructions that follow will start at this address. Default is 0.
+
+*** (%mode bits)
+Set the assembler to a different processor mode. “bits” can be 16, 32
+or 64. Default is 16.
+
+*** (%label name)
+This creates the label “name” at the current value of the instruction
+pointer. As a short-hand you can omit the (%label _) part and just
+write the name.
+
+FIXME: i might decide that that's stupid..
+
+*** (%comm name size alignment)
+Allocates “size” bytes in the .bss section and assigns this location
+the label “name”. When your program is loaded the .bss (Block Started
+by Symbol) section is filled with zeroes. This does not take up any
+space in the program binary.
+
+The .bss section starts at the address exactly after all the program
+code and data.
+
+Future versions of the assembler might rearrange %comm statements to
+minimize memory usage.
+
+*** (%align alignment)
+*** (%align alignment filler-byte)
+Output padding until the instruction pointer is aligned to “alignment”
+bytes, which must be a power of two. Normally the assembler tries to
+generate an optimal sequence of NOPs as filler, but if you specify a
+“filler-byte” that will be used instead.
+
+*** (%align alignment register)
+If you do want NOPs to be generated as padding then you can specify a
+register. This should be the register with the oldest value. It must
+also be of the default operand size (e.g. 32-bit in 64-bit mode) and
+must not require a REX prefix to access. So you’re limited to these:
+eax ecx edx ebx esp ebp esi edi. This is currently not implemented, so
+eax will be used instead.
+
+*** (%u8 bytes ...)
+*** (%u16 words ...)
+*** (%u32 double-words ...)
+*** (%u64 quad-words ...)
+These output data instead of instructions. The data is encoded in
+little endian.
+*** (%utf8z string)
+Output a string as UTF-8 characters and zero-terminate it.
+
+*** (%section bss)
+Allocate space for the %comm directives at the instruction pointer.
+Any other section name is ignored.
