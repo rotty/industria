@@ -671,7 +671,7 @@ bits, which are neded in get-displacement."
                          (get-u32/collect port collect (tag disp))
                          (get-u16/collect port collect (tag disp))))
                 (ss (get-u16/collect port collect (tag disp))))
-           (list ': ss off)))
+           (list 'far ss off)))
 
         ;; String operation operands
         ((Xb)
