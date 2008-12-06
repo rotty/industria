@@ -916,7 +916,8 @@
                ;; FIXME: 16-bit mode? And what do they look like in 64-bit mode?
                (let ((bv (make-bytevector (+ 4 2))))
                  (bytevector-u32-set! bv 0 (or offset 0) (endianness little))
-                 (bytevector-u16-set! bv 4 (far-pointer-seg operand) (endianness little)))))))
+                 (bytevector-u16-set! bv 4 (far-pointer-seg operand) (endianness little))
+                 bv)))))
     (map encode-operand! operands opsyntax))
 
 
@@ -1183,6 +1184,12 @@
            (assembler-state-ip-set! state (+ (assembler-state-ip state)
                                              (- (port-position (assembler-state-port state)) pos)))
            (cons (car instr) operands))))
+      ((%vu8)
+       (put-bytevector (assembler-state-port state)
+                       (cadr instr))
+       (assembler-state-ip-set! state (+ (assembler-state-ip state)
+                                         (bytevector-length (cadr instr))))
+       instr)
       ((%utf8z)
        (let ((bv (string->utf8 (string-append (cadr instr) "\x0;"))))
          (put-bytevector (assembler-state-port state) bv)

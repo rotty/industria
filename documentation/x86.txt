@@ -214,6 +214,10 @@ eax will be used instead.
 *** (%u64 quad-words ...)
 These output data instead of instructions. The data is encoded in
 little endian.
+
+*** (%vu8 bytevector)
+Output a bytevector as it is.
+
 *** (%utf8z string)
 Output a string as UTF-8 characters and zero-terminate it.
 
