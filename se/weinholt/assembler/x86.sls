@@ -103,6 +103,15 @@
 
 ;;; Operand syntax handling
 
+  (define (memory-base-only mem)
+    ;; Returns #f if the addressing mode has a disp or index,
+    ;; otherwise returns the index of the base register.
+    (and (expression-in-range? (memory-expr mem) 0 0)
+         (= (memory-scale mem) 1)
+         (not (memory-index mem))
+         (memory-base mem)
+         (register-index (memory-base mem))))
+
   (define opsyntaxen
     (let ((tmp (make-eq-hashtable)))
       (hashtable-set! tmp 'Mdq
@@ -137,6 +146,15 @@
                               (eqv? (memory-datasize o) 16)))
                        'mem
                        'Mw))
+      (hashtable-set! tmp 'Ms
+                      (vector
+                       #f
+                       (lambda (o opsize mode)
+                         ;; Segment descriptor
+                         (and (memory? o)
+                              (not (memory-datasize o))))
+                       'mem
+                       'Ms))
 
       ;; xmm
       (hashtable-set! tmp 'Vpd
@@ -199,6 +217,15 @@
                                (else #f)))
                        'r/m
                        'Eq/w))
+      (hashtable-set! tmp 'Ew
+                      (vector
+                       #f
+                       (lambda (o opsize mode)
+                         (cond ((register? o) (eqv? (register-type o) 16))
+                               ((memory? o) (memv (memory-datasize o) '(#f 16)))
+                               (else #f)))
+                       'r/m
+                       'Ew))
       (hashtable-set! tmp 'Eb
                       (vector
                        #f
@@ -236,11 +263,7 @@
                        (lambda (o opsize mode)
                          (and (memory? o)
                               (memv (memory-datasize o) '(#f 16 32 64))
-                              ;; Make sure this is rDI
-                              (not (memory-disp o))
-                              (not (memory-SIB o))
-                              (zero? (memory-REX o))
-                              (= (memory-ModR/M o) 7)
+                              (eqv? (memory-base-only o) 7) ;rDI
                               ;; Check ES
                               (case mode
                                 ((64) (not (memory-segment o)))
@@ -254,10 +277,7 @@
                        (lambda (o opsize mode)
                          (and (memory? o)
                               (memv (memory-datasize o) '(#f 8))
-                              (not (memory-disp o))
-                              (not (memory-SIB o))
-                              (zero? (memory-REX o))
-                              (= (memory-ModR/M o) 7)
+                              (eqv? (memory-base-only o) 7) ;rDI
                               ;; Check ES
                               (case mode
                                 ((64) (not (memory-segment o)))
@@ -272,11 +292,7 @@
                        (lambda (o opsize mode)
                          (and (memory? o)
                               (memv (memory-datasize o) '(#f 16 32 64))
-                              ;; Make sure this is rSI
-                              (not (memory-disp o))
-                              (not (memory-SIB o))
-                              (zero? (memory-REX o))
-                              (= (memory-ModR/M o) 6)))
+                              (eqv? (memory-base-only o) 6))) ;rSI
                        #f               ;implicit
                        'Xv))
 
@@ -286,10 +302,7 @@
                        (lambda (o opsize mode)
                          (and (memory? o)
                               (memv (memory-datasize o) '(#f 8))
-                              (not (memory-disp o))
-                              (not (memory-SIB o))
-                              (zero? (memory-REX o))
-                              (= (memory-ModR/M o) 6)))
+                              (eqv? (memory-base-only o) 6))) ;rSI
                        #f               ;implicit
                        'Xb))
 
@@ -463,6 +476,14 @@
                          (expression? o))
                        'destZ
                        'Jz))
+
+      (hashtable-set! tmp 'Ap
+                      (vector
+                       #f
+                       (lambda (o opsize mode)
+                         (far-pointer? o))
+                       'seg:off
+                       'Ap))
 
       tmp))
 
@@ -868,26 +889,34 @@
 
     (define (encode-operand! operand opsyntax)
       ;; return #(value bits) if ip-relative, bytevector if not.
-      (and (expression? operand)
-           (let ((value (eval-expression operand (assembler-state-labels state))))
-             (unless value
-               (print "I CAN'T GET NO SATISFACTION! (expr=" operand ")")
-               (assembler-state-relocs-set! state #t))
-             (case (opsyntax-encoding-position opsyntax)
-               ((imm) (number->bytevector (or value 0) os))
-               ((imm8) (number->bytevector (or value 0) 8))
-               ((imm16) (number->bytevector (or value 0) 16))
-               ((immZ)
-                ;; If the operand size is 64 bit, then the
-                ;; immediate value here is encoded in 32
-                ;; bits and sign-extended.
-                (number->bytevector (or value 0) (if (= os 64) 32 os)))
-               ((destZ)
-                (vector (or value 0) 32))
-
-               ((#f) #f)
-               (else
-                (error 'put-instruction "Unimplemented encoding position" operand opsyntax))))))
+      (cond ((expression? operand)
+             (let ((value (eval-expression operand (assembler-state-labels state))))
+               (unless value
+                 (print "I CAN'T GET NO SATISFACTION! (expr=" operand ")")
+                 (assembler-state-relocs-set! state #t))
+               (case (opsyntax-encoding-position opsyntax)
+                 ((imm) (number->bytevector (or value 0) os))
+                 ((imm8) (number->bytevector (or value 0) 8))
+                 ((imm16) (number->bytevector (or value 0) 16))
+                 ((immZ)
+                  ;; If the operand size is 64 bit, then the
+                  ;; immediate value here is encoded in 32
+                  ;; bits and sign-extended.
+                  (number->bytevector (or value 0) (if (= os 64) 32 os)))
+                 ((destZ)
+                  (vector (or value 0) 32))
+                 ((#f) #f)
+                 (else
+                  (error 'put-instruction "Unimplemented encoding position" operand opsyntax)))))
+            ((far-pointer? operand)
+             (let ((offset (eval-expression (far-pointer-offset operand)
+                                            (assembler-state-labels state))))
+               (unless offset
+                 (print "Far pointer doesn't get satisfaction either: " operand))
+               ;; FIXME: 16-bit mode? And what do they look like in 64-bit mode?
+               (let ((bv (make-bytevector (+ 4 2))))
+                 (bytevector-u32-set! bv 0 (or offset 0) (endianness little))
+                 (bytevector-u16-set! bv 4 (far-pointer-seg operand) (endianness little)))))))
     (map encode-operand! operands opsyntax))
 
 
@@ -981,12 +1010,24 @@
                          (unless (opsyntax-default-segment=? (car opsyntax) seg)
                            (put-u8 port (vector-ref segment-overrides seg)))))
                      (cond ((opsyntax-encoding-position (car opsyntax))
-                            (lp (cdr operands)
-                                (cdr opsyntax)
-                                (fxior REX (memory-REX o))
-                                (fxior (or ModR/M 0) (memory-ModR/M o))
-                                (memory-SIB o)
-                                (memory-disp o)))
+                            (let ((disp (eval-expression (memory-expr o)
+                                                         (assembler-state-labels state))))
+                              (unless disp
+                                (print "No satisfaction: " disp)
+                                (assembler-state-relocs-set! state #t))
+                              (call-with-values
+                                  (lambda ()
+                                    (encode-memory (memory-addressing-mode o)
+                                                   (or disp #x100) ;bigger than disp8
+                                                   (memory-scale o)
+                                                   (memory-index o)
+                                                   (memory-base o)))
+                                (lambda (disp SIB ModR/M* REX*)
+                                  (lp (cdr operands)
+                                      (cdr opsyntax)
+                                      (fxior REX REX*)
+                                      (fxior (or ModR/M 0) ModR/M*)
+                                      SIB disp)))))
                            (else
                             ;; Implicit
                             (lp (cdr operands)
@@ -1016,7 +1057,8 @@
                                (car operands)
                                (car opsyntax))))))
 
-                  ((or (integer? (car operands)) (expression? (car operands)))
+                  ((or (integer? (car operands)) (expression? (car operands))
+                       (far-pointer? (car operands)))
                    (lp (cdr operands) (cdr opsyntax) REX ModR/M SIB disp))
 
                   (else
@@ -1133,7 +1175,7 @@
        (assembler-state-comm-set! state (cons (cdr instr)
                                               (assembler-state-comm state)))
        instr)
-      ((%u8 %u16 %u32)
+      ((%u8 %u16 %u32 %u64)
        (let ((pos (port-position (assembler-state-port state)))
              (operands (translate-operands (cdr instr) (assembler-state-mode state))))
          (let ((i (map (lambda (b) (put-immediate b (car instr) state))

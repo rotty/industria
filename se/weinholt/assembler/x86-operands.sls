@@ -21,10 +21,13 @@
             register-name register-type register-index
             memory?
             memory-addressing-mode memory-datasize memory-segment
-            memory-disp memory-SIB memory-ModR/M memory-REX
+            memory-expr memory-scale memory-index memory-base
+            encode-memory
             expression?
             expression-operand-size
             build-expression eval-expression expression-in-range?
+            far-pointer?
+            far-pointer-seg far-pointer-offset
             translate-operands)
     (import (rnrs)
             (se weinholt assembler x86-misc (1 0 (>= 0))))
@@ -233,9 +236,7 @@
       (rip rel -1)))
 
   (define-record-type register
-    (fields name type index)
-    (nongenerative
-     register-cc91dcaf-8e9e-4a25-8bf4-9fe54711046f))
+    (fields name type index))
 
   (define registers
     (let ((tmp (make-eq-hashtable)))
@@ -252,16 +253,17 @@
                    "Unknown register" name)
             (car default))))
 
+  (define (register-name? name)
+    (hashtable-ref registers name #f))
+
 ;;; Memory operands
 
   (define-record-type memory
     (fields addressing-mode datasize segment
-            disp SIB ModR/M REX)
-    (nongenerative
-     memory-255030a2-5e9b-4ad1-9967-3e7a33f47e54))
+            expr scale index base))
 
-  (define (encode-memory addressing-mode datasize segment
-                         disp scale index base)
+  (define (encode-memory addressing-mode disp scale index base)
+    ;; Returns disp, SIB, ModR/M, REX
     (define (rBP/13? x) (and x (fx=? #b101 (fxand #b111 (register-index x)))))
     (define (rSP/12? x) (and x (fx=? #b100 (fxand #b111 (register-index x)))))
     (define (rIP? x) (and x (eq? 'rip (register-name x))))
@@ -272,20 +274,23 @@
     (define (ret mod r/m disp scale index base)
       (let ((X (fxarithmetic-shift-right index 3))
             (B (fxarithmetic-shift-right (fxior r/m base) 3)))
-        (make-memory addressing-mode datasize segment
-                     disp
-                     (and scale (make-sib scale index base))
-                     (make-modr/m mod 0 r/m)
-                     (if (zero? (+ X B))
-                         0
-                         (fxior #x40 (fxior (fxarithmetic-shift-left X 1)
-                                            B))))))
+        (values disp
+                (and scale (make-sib scale index base))
+                (make-modr/m mod 0 r/m)
+                (if (zero? (+ X B))
+                    0
+                    (fxior #x40 (fxior (fxarithmetic-shift-left X 1)
+                                       B))))))
     (case addressing-mode
       ((32 64)
-       (cond ((or (rIP? base)
-                  (and (not index) (not base)
-                       (= addressing-mode 32)))
+       (cond ((rIP? base)
               ;; [rIP+disp32] in 64-bit mode
+              (ret #b00 rbp
+                   (vector disp 32)     ;cf. disp in put-instruction
+                   #f 0 0))
+
+             ((and (not index) (not base)
+                   (= addressing-mode 32))
               ;; [disp32] in 32-bit mode
               (ret #b00 rbp
                    (disp32 disp)
@@ -336,7 +341,6 @@
                   (ret #b01 (register-index base)
                        (disp8 disp)
                        #f 0 0)
-
                   (ret #b10 (register-index base)
                        (disp32 disp)
                        #f 0 0)))
@@ -366,20 +370,20 @@
              (else
               (error 'encode-memory
                      "Unimplemented addressing mode"
-                     addressing-mode datasize segment
-                     disp scale index base))))
+                     addressing-mode disp scale index base))))
       (else
        (error 'encode-memory "16-bit memory addressing is not supported"))))
 
+  ;; FIXME: test the RIP relative stuff
   (define (translate-memory ref mode)
     ;; Translates from list form to record form (via encode memory).
     (define who 'translate-memory)
     (let ((addressing-mode mode)
           (segment #f)
           (base #f)
-          (disp 0)
           (scale 1)
-          (index #f))
+          (index #f)
+          (expr '()))
       (define (set-base! reg)
         (set! addressing-mode (register-type reg))
         (when base
@@ -399,14 +403,9 @@
         (fxarithmetic-shift-right mode 3))
       (for-each
        (lambda (x)
-         (cond ((eq? x 'wordsize)
-                (set! disp (+ disp wordsize)))
-
-               ((integer? x)
-                (set! disp (+ disp x)))
-
-               ((and (list? x) (eq? (car x) '*)
+         (cond ((and (list? x) (eq? (car x) '*)
                      (exists symbol? (cdr x)))
+                ;; FIXME: this needs to be stricter, so it never matches expressions
                 (for-each (lambda (s/i)
                             (cond ((eq? s/i 'wordsize)
                                    (set! scale (* scale wordsize)))
@@ -425,7 +424,7 @@
                                           s/i ref))))
                           (cdr x)))
 
-               ((symbol? x)
+               ((register-name? x)
                 ;; A register!
                 (let ((reg (lookup-register x)))
                   (case (register-type reg)
@@ -456,6 +455,10 @@
                     (else
                      (bad-reg reg)))))
 
+               ((or (symbol? x) (list? x) (integer? x))
+                ;; Part of an expression!
+                (set! expr (cons x expr)))
+
                (else
                 (error who "Unknown addressing mode"
                        x ref))))
@@ -476,7 +479,7 @@
                base index ref))
 
       (when (not (memq scale '(1 2 4 8)))
-        (error who "Only scales 1, 2, 4 or 8 are possible"
+        (error who "Only scales 1, 2, 4 and 8 are possible"
                scale ref))
 
       (case mode
@@ -489,36 +492,49 @@
          (when (= mode 64)
            (error who "16-bit addressing modes are not possible in 64-bit mode"
                   ref))
-         (when (and disp (not (<= (- (expt 2 15)) disp (- (expt 2 15) 1))))
-           (error who "Displacements are at most 16 bits signed in 16-bit mode"
-                  disp ref)))
-        ((32 64)
-         (when (and disp (not (<= (- (expt 2 31)) disp (- (expt 2 31) 1))))
-           (error who "Displacements are at most 32 bits signed in 32-bit and 64-bit mode"
-                  disp ref))))
+;;          (when (and disp (not (<= (- (expt 2 15)) disp (- (expt 2 15) 1))))
+;;            (error who "Displacements are at most 16 bits signed in 16-bit mode"
+;;                   disp ref))
+         )
+;;         ((32 64)
+;;          (when (and disp (not (<= (- (expt 2 31)) disp (- (expt 2 31) 1))))
+;;            (error who "Displacements are at most 32 bits signed in 32-bit and 64-bit mode"
+;;                   disp ref)))
+        )
 
       (when (and segment (= mode 64) (not (memv (register-index segment) '(4 5))))
         (error who "Only FS and GS are valid segment overrides in 64-bit mode" segment))
 
-      (encode-memory addressing-mode
-                     (case (car ref)
-                       ((mem8+) 8)
-                       ((mem16+) 16)
-                       ((mem32+) 32)
-                       ((mem64+) 64)
-                       ((mem128+) 128)
-                       ((mem256+) 256)
-                       ((mem+) #f)
-                       ;; FIXME: fill this in
-                       (else
-                        (error 'translate-memory
-                               "Invalid memory operation"
-                               ref)))
-                     segment
-                     disp
-                     scale
-                     index
-                     base)))
+      (make-memory addressing-mode
+                   (case (car ref)
+                     ((mem8+) 8)
+                     ((mem16+) 16)
+                     ((mem32+) 32)
+                     ((mem64+) 64)
+                     ((mem128+) 128)
+                     ((mem256+) 256)
+                     ((mem+) #f)
+                     ;; FIXME: fill this in
+                     (else
+                      (error 'translate-memory
+                             "Invalid memory operation"
+                             ref)))
+                   segment
+                   (build-expression (if (null? expr) 0 (cons '+ (reverse expr)))
+                                     mode)
+                   scale
+                   index
+                   base)))
+
+;;   (let* ((op (translate-memory '(mem32+ 1 2 3) 64))
+;;          (disp (eval-expression (memory-expr op) empty-hashtable)))
+;;     (unless disp
+;;       (display "No satisfaction...\n"))
+;;     (encode-memory (memory-addressing-mode op)
+;;                    (or disp 0)
+;;                    (memory-scale op)
+;;                    (memory-index op)
+;;                    (memory-base op)))
 
 ;;; Expressions
 
@@ -531,8 +547,7 @@
   (define empty-hashtable (make-eq-hashtable))
 
   (define-record-type expression
-    (fields operand-size rel? code))
-  (define expression-mode expression-operand-size)
+    (fields mode operand-size rel? code))
 
   (define (eval-expr expr mode labels)
     ;; Returns an integer, or, #f if some labels could not be found.
@@ -545,14 +560,19 @@
                (and (for-all number? operands)
                     (case (car expr)
                       ((+) (apply + operands))
-                      ((-) (apply - operands)))))))))
+                      ((-) (apply - operands))
+                      ((bitwise-and) (apply bitwise-and operands))
+                      ((bitwise-ior) (apply bitwise-ior operands))
+                      ((<<) (apply bitwise-arithmetic-shift-left operands))
+                      ((>>) (apply bitwise-arithmetic-shift-right operands)))))))))
 
   (define (build-expression op mode)
     (define (check-syntax op)
+      ;; FIXME: use better syntax checking... or use EVAL?
       (cond ((or (integer? op) (symbol? op)))
             ((list? op)
-             (unless (and (memq (car op) '(+ -)) (>= (length op) 2))
-               (error 'build-expression "Bad assembler operand" op))
+;;              (unless (and (memq (car op) '(+ -)) (>= (length op) 2))
+;;                (error 'build-expression "Bad assembler operand" op))
              (when (and (eqv? (cadr op) '(eip rip))
                         (not (integer? (caddr op)))
                         (not (null? (cdddr op))))
@@ -560,10 +580,10 @@
             (for-each check-syntax (cdr op))))
     (check-syntax op)
     (if (and (list? op) (eqv? (cadr op) '(eip rip)))
-        (make-expression (if (eq? (cadr op) 'rip) 64 32)
+        (make-expression mode (if (eq? (cadr op) 'rip) 64 32)
                          #t (caddr op))
-        (make-expression #f #f (or (eval-expr op mode empty-hashtable)
-                                   op))))
+        (make-expression mode #f #f (or (eval-expr op mode empty-hashtable)
+                                        op))))
 
   (define (eval-expression expression labels)
     (eval-expr (expression-code expression)
@@ -576,17 +596,26 @@
              (<= min v max)))
           (else #f)))
 
-
 ;;   (let ((labels (make-eq-hashtable)))
 ;;     (hashtable-set! labels 'start 0)
 ;;     (hashtable-set! labels 'end 40)
 ;;     (eval-expression (build-expression '(- end start) 64) labels))
 
+;;; Far pointer
+
+  (define-record-type far-pointer
+    (fields seg offset))
+
+  (define (build-far-pointer seg offset mode)
+    (unless (and (integer? seg) (<= 0 seg (expt 2 16)))
+      (error 'build-far-pointer "Bad segment" seg))
+    (make-far-pointer seg (build-expression offset mode)))
+
 ;;;
 
   (define (translate-operands operands mode)
     (map (lambda (op)
-           (cond ((or (register? op) (memory? op) (expression? op))
+           (cond ((or (register? op) (memory? op) (expression? op) (far-pointer? op))
                   op)
 
                  ((integer? op)
@@ -605,9 +634,16 @@
                          (build-expression op mode))))
 
                  ((list? op)
-                  (if (memq (car op) '(+ -))
-                      (build-expression op mode)
-                      (translate-memory op mode)))
+
+                  (cond ((eq? (car op) 'far)
+                         ;; Far pointer
+                         (build-far-pointer (cadr op) (caddr op) mode))
+                        ((memq (car op) '(+ - bitwise-ior bitwise-and << >>))
+                         ;; Expression
+                         (build-expression op mode))
+                        (else
+                         ;; Memory reference
+                         (translate-memory op mode))))
 
                  (else
                   (error 'translate-operands
