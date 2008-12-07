@@ -42,6 +42,9 @@
 ;; FIXME: unify the names for address size, operand size, data size,
 ;; addressing mode....
 
+;; FIXME: eliminate redundant encodings, e.g. popfq with a REX.W is
+;; redundant because there's a popfq without REX.W
+
 (library (se weinholt assembler x86 (1 0 0))
     (export assemble)
     (import (rnrs)
@@ -256,6 +259,15 @@
                        'reg             ;register is encoded in ModR/M.reg etc
                        'Gb))
 
+      (hashtable-set! tmp 'Sw
+                      (vector
+                       #f
+                       (lambda (o opsize mode)
+                         (and (register? o)
+                              (eqv? (register-type o) 'sreg)))
+                       'reg
+                       'Sw))
+
       ;; These are very limited: must be ES:DI, ES:EDI or RDI.
       (hashtable-set! tmp 'Yv
                       (vector
@@ -313,7 +325,11 @@
                        #f
                        (lambda (o opsize mode)
                          (and (register? o)
-                              (eqv? (register-type o) mode)))
+                              (case mode
+                                ((32 64)
+                                 (eqv? (register-type o) mode))
+                                ((16)
+                                 (eqv? (register-type o) 32)))))
                        'r/m
                        'Rd/q))
 
@@ -868,7 +884,9 @@
     (let ((sizes (filter (lambda (x)
                            (memv x '(16 32 64)))
                          (map (lambda (o) (opsyntax-default-operand-size o mode)) opsyntaxen))))
-      (if (null? sizes) 32 (car sizes))))
+      (if (null? sizes)
+          (if (= mode 16) 16 32)
+          (car sizes))))
 
 
   (define (instruction-address-size default operands)
@@ -941,7 +959,8 @@
           (for-each (lambda (b) (put-u8 port b)) prefixes)
 
           ;; Emit address size and operand size overrides
-          (when (and (= das 64) (eqv? as 32))
+          (when (or (and (= das 64) (eqv? as 32))
+                    (and (= das 16) (eqv? as 32)))
             (put-u8 port (prefix-byte address)))
           (when (or (and (= dos 64) (eqv? os 16))
                     (and (= dos 32) (eqv? os 16))
@@ -1164,7 +1183,7 @@
                        (assembler-state-ip state))
        instr)
       ((%mode)
-       (unless (or (memv (cadr instr) '(32 64)))
+       (unless (or (memv (cadr instr) '(16 32 64)))
          (error 'assemble! "Bad %mode" instr))
        (assembler-state-mode-set! state (cadr instr))
        instr)
