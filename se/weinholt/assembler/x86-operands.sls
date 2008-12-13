@@ -262,6 +262,8 @@
     (fields addressing-mode datasize segment
             expr scale index base))
 
+  ;; FIXME: disp32 in 64-bit mode is sign-extended, so not all disps
+  ;; are encodable...
   (define (encode-memory addressing-mode disp scale index base)
     ;; Returns disp, SIB, ModR/M, REX
     (define (rBP/13? x) (and x (fx=? #b101 (fxand #b111 (register-index x)))))
@@ -457,6 +459,7 @@
 
                ((or (symbol? x) (list? x) (integer? x))
                 ;; Part of an expression!
+                (set! addressing-mode (max addressing-mode 32))
                 (set! expr (cons x expr)))
 
                (else

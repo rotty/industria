@@ -420,6 +420,15 @@
                               (= (register-index o) 0)))
                        #f               ;implicit
                        '*AL))
+      (hashtable-set! tmp '*AL/R8L
+                      (vector
+                       #f
+                       (lambda (o opsize mode)
+                         (and (register? o)
+                              (memv (register-type o) '(8 rex8))
+                              (= (fxand #b111 (register-index o)) 0)))
+                       'implicit-r/m
+                       '*AL/R8L))
       (hashtable-set! tmp '*CL
                       (vector
                        #f
@@ -463,7 +472,7 @@
                          (and (register? o)
                               (memv (register-type o) '(16 32 64))
                               (= (bitwise-and (register-index o) #b111) 0)))
-                       #f               ;implicit
+                       'implicit-r/m
                        '*rAX/r8))
       (hashtable-set! tmp '*rBX/r11
                       (vector
@@ -472,7 +481,7 @@
                          (and (register? o)
                               (memv (register-type o) '(16 32 64))
                               (= (bitwise-and (register-index o) #b111) 3)))
-                       #f               ;implicit
+                       'implicit-r/m
                        '*rBX/r11))
 
       (hashtable-set! tmp '*unity
@@ -622,7 +631,7 @@
 
   (define (encoding-mode-is-acceptable? mode encoding)
     (cond ((memq 'legacy-mode encoding)
-           (= mode 32))
+           (or (= mode 32) (= mode 16)))
           ((memq 'long-mode encoding)
            (= mode 64))
           (else #t)))
@@ -665,6 +674,18 @@
 
   (define instructions
     (let ((tmp (make-eq-hashtable)))
+      (define (rough< x y)
+        (define (rough-count a)
+          ;; TODO: redo all of this. get a perfect length count... see
+          ;; that other comment.
+          (fold-left (lambda (x y)
+                       (+ x (cond ((integer? y) 1)
+                                  ((pair? y) 1)
+                                  ((eq? y 'data64) 1)
+                                  (else 0))))
+                     0 a))
+        (< (rough-count (vector-ref x 1))
+           (rough-count (vector-ref y 1))))
       (walk-opcodes (lambda (instruction encoding)
                       (let ((mnemonic (car instruction)))
                         ;;(print instruction " -- " encoding)
@@ -676,6 +697,12 @@
                                  old))
                          '())))
                     opcodes '())
+      (vector-for-each (lambda (mnemonic)
+                         (hashtable-update! tmp mnemonic
+                                            (lambda (instrs)
+                                              (list-sort rough< instrs))
+                                            #f))
+                       (hashtable-keys tmp))
       (for-each (lambda (m)
                   (hashtable-set! tmp (car m) (hashtable-ref tmp (cdr m) #f)))
                 mnemonic-aliases)
@@ -748,7 +775,13 @@
                    (cond ((eq? (car mnemonics) 'lock)
                           (unless (memq (cadr mnemonics) lock-instructions)
                             (bailout "This instruction does not support the LOCK prefix"))
-                          (unless (and (not (null? operands)) (list? (car operands)))
+                          (unless (and (not (null? operands))
+                                       ;; FIXME: a little ugly...
+                                       ;; operands should probably be
+                                       ;; translated in one initial
+                                       ;; pass.
+                                       (or (list? (car operands))
+                                           (memory? (car operands))))
                             (bailout "The LOCK prefix requires a memory destination operand"))
                           (use-prefix (prefix-byte lock)))
                          ((eq? (car mnemonics) 'rep)
@@ -922,7 +955,11 @@
                   ;; bits and sign-extended.
                   (number->bytevector (or value 0) (if (= os 64) 32 os)))
                  ((destZ)
-                  (vector (or value 0) 32))
+                  (case (assembler-state-mode state)
+                    ((32 64)
+                     (vector (or value 0) 32))
+                    ((16)
+                     (vector (or value 0) 16))))
                  ((#f) #f)
                  (else
                   (error 'put-instruction "Unimplemented encoding position" operand opsyntax)))))
@@ -931,11 +968,19 @@
                                             (assembler-state-labels state))))
                (unless offset
                  (print "Far pointer doesn't get satisfaction either: " operand))
-               ;; FIXME: 16-bit mode? And what do they look like in 64-bit mode?
-               (let ((bv (make-bytevector (+ 4 2))))
-                 (bytevector-u32-set! bv 0 (or offset 0) (endianness little))
-                 (bytevector-u16-set! bv 4 (far-pointer-seg operand) (endianness little))
-                 bv)))))
+               (case (assembler-state-mode state)
+                 ((32 64)
+                  ;; FIXME: verify that they look like this in 64-bit mode
+                  (let ((bv (make-bytevector (+ 4 2))))
+                    (bytevector-u32-set! bv 0 (or offset 0) (endianness little))
+                    (bytevector-u16-set! bv 4 (far-pointer-seg operand) (endianness little))
+                    bv))
+                 ((16)
+                  (let ((bv (make-bytevector (+ 2 2))))
+                    (bytevector-u16-set! bv 0 (or offset 0) (endianness little))
+                    (bytevector-u16-set! bv 2 (far-pointer-seg operand) (endianness little))
+                    bv)))))
+            (else #f)))
     (map encode-operand! operands opsyntax))
 
 
@@ -1056,20 +1101,25 @@
 
                   ((register? (car operands))
                    (print "register operand: " (car operands) " :: " (car opsyntax))
-                   (let ((index (register-index (car operands))))
+                   (let* ((index (register-index (car operands)))
+                          (type (register-type (car operands)))
+                          (REX (if (eq? type 'rex8) (fxior REX REX.bare) REX)))
+                     ;; FIXME: implement norex8-checking
                      (case (opsyntax-encoding-position (car opsyntax))
                        ((r/m)
-                        (lp (cdr operands)
-                            (cdr opsyntax)
+                        (lp (cdr operands) (cdr opsyntax)
                             (if (> index 7) (fxior REX REX.B) REX)
                             (fxior (or ModR/M 0) (make-modr/m #b11 0 index))
                             SIB disp))
                        ((reg)
-                        (lp (cdr operands)
-                            (cdr opsyntax)
+                        (lp (cdr operands) (cdr opsyntax)
                             (if (> index 7) (fxior REX REX.R) REX)
                             (fxior (or ModR/M 0) (make-modr/m 0 index 0))
                             SIB disp))
+                       ((implicit-r/m)
+                        (lp (cdr operands) (cdr opsyntax)
+                            (if (> index 7) (fxior REX REX.B) REX)
+                            ModR/M SIB disp))
                        ((#f)
                         (lp (cdr operands) (cdr opsyntax) REX ModR/M SIB disp))
                        (else
