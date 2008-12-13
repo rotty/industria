@@ -593,11 +593,11 @@
                (expression-mode expression)
                labels))
 
-  (define (expression-in-range? expression min max)
+  (define (expression-in-range? expression min max default)
     (cond ((eval-expression expression empty-hashtable) =>
            (lambda (v)
              (<= min v max)))
-          (else #f)))
+          (else default)))
 
 ;;   (let ((labels (make-eq-hashtable)))
 ;;     (hashtable-set! labels 'start 0)

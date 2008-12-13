@@ -608,9 +608,6 @@ bits, which are neded in get-displacement."
         ((Ed/q)
          (translate-displacement prefixes mode disp
                                  (if (= operand-size 16) 32 operand-size)))
-        ((Eq/w)
-         (translate-displacement prefixes mode disp
-                                 (if (= operand-size 32) 64 operand-size)))
 
         ((Ib) (get-u8/collect port collect (tag immediate)))
         ((IbS)
@@ -634,14 +631,6 @@ bits, which are neded in get-displacement."
            ((16) (get-u16/collect port collect (tag immediate)))
            ((32) (get-u32/collect port collect (tag immediate)))
            ((64)
-            (let ((imm (get-u32/collect port collect (tag immediate))))
-              (if (bitwise-bit-set? imm 31)
-                  (bitwise-ior #xffffffff00000000 imm)
-                  imm)))))
-        ((Iz-f64)
-         (case operand-size
-           ((16) (get-u16/collect port collect (tag immediate)))
-           ((32 64)
             (let ((imm (get-u32/collect port collect (tag immediate))))
               (if (bitwise-bit-set? imm 31)
                   (bitwise-ior #xffffffff00000000 imm)
@@ -910,10 +899,11 @@ bits, which are neded in get-displacement."
            ((32) 'eax)
            ((64) 'rax))))))
 
-  (define (get-operands port mode collect prefixes instr modr/m opcode vex.v)
+  (define (get-operands port mode collect prefixes instr modr/m opcode vex.v d64)
     (let* ((operand-size (case mode
                            ((64) (cond ((enum-set-member? (prefix rex.w) prefixes) 64)
                                        ((enum-set-member? (prefix operand) prefixes) 16)
+                                       (d64 64)
                                        (else 32)))
                            ((32) (cond ((enum-set-member? (prefix operand) prefixes) 16)
                                        (else 32)))
@@ -982,7 +972,8 @@ the port will be passed to the collector."
                      (opcode opcode)
                      (prefixes prefixes)
                      (opcode-collected #f)
-                     (vex-traversed #f))
+                     (vex-traversed #f)
+                     (d64 #f))
               (cond
                ((and (= opcode #xC4) (or (= mode 64) (lookahead-is-valid-VEX? port))
                      (not (enum-set-member? (prefix vex) prefixes)))
@@ -1027,7 +1018,7 @@ the port will be passed to the collector."
                 (when (and (enum-set-member? (prefix vex) prefixes)
                            (not vex-traversed))
                   (raise-UD "VEX was used but a legacy instruction was found"))
-                (get-operands port mode collect prefixes instr modr/m opcode vex.v))
+                (get-operands port mode collect prefixes instr modr/m opcode vex.v d64))
 
                ;; Divide and conquer the instruction table
 
@@ -1044,10 +1035,10 @@ the port will be passed to the collector."
                          (when debug (print-modr/m modr/m prefixes))
                          (lp (vector-ref instr (ModR/M-r/m modr/m))
                              'ModR/M-invalid opcode prefixes
-                             #t vex-traversed))
+                             #t vex-traversed d64))
                         (else
                          (lp instr modr/m opcode prefixes
-                             #t vex-traversed)))))
+                             #t vex-traversed d64)))))
 
                ((eq? (vector-ref instr 0) 'Prefix)
                 ;; SSE instructions, e.g., where one of these prefixes
@@ -1060,7 +1051,7 @@ the port will be passed to the collector."
                                       (else 1)))
                     modr/m opcode
                     (enum-set-difference prefixes (prefix-set repz repnz operand))
-                    opcode-collected vex-traversed))
+                    opcode-collected vex-traversed d64))
 
                ((eq? (vector-ref instr 0) 'Datasize)
                 ;; Pick different instructions depending on
@@ -1079,7 +1070,7 @@ the port will be passed to the collector."
                                          (else 1)))))
                     modr/m opcode
                     prefixes
-                    opcode-collected vex-traversed))
+                    opcode-collected vex-traversed d64))
 
                ((eq? (vector-ref instr 0) 'Addrsize)
                 (lp (vector-ref instr
@@ -1089,7 +1080,7 @@ the port will be passed to the collector."
                                   ((16) (if (enum-set-member? (prefix address) prefixes) 2 1))))
                     modr/m opcode
                     prefixes
-                    opcode-collected vex-traversed))
+                    opcode-collected vex-traversed d64))
 
                ((eq? (vector-ref instr 0) 'Mode)
                 ;; Choose between compatibility/legacy mode and
@@ -1097,7 +1088,7 @@ the port will be passed to the collector."
                 (lp (vector-ref instr (if (= mode 64) 2 1))
                     modr/m opcode
                     prefixes
-                    opcode-collected vex-traversed))
+                    opcode-collected vex-traversed d64))
 
                ((eq? (vector-ref instr 0) 'VEX)
                 (lp (vector-ref instr
@@ -1107,7 +1098,7 @@ the port will be passed to the collector."
                                       (else 1)))
                     modr/m opcode
                     prefixes
-                    opcode-collected #t))
+                    opcode-collected #t d64))
 
                ((eq? (vector-ref instr 0) 'Mem/reg)
                 ;; Read ModR/M and see if it encodes memory or a
@@ -1123,7 +1114,25 @@ the port will be passed to the collector."
                                         (else 1)))
                       modr/m opcode
                       prefixes
-                      #t vex-traversed)))
+                      #t vex-traversed d64)))
+
+               ((eq? (vector-ref instr 0) 'f64)
+                ;; Operand size is forced to 64 bits in 64-bit mode.
+                (lp (vector-ref instr 1)
+                    modr/m opcode
+                    (if (= mode 64)
+                        (enum-set-difference prefixes (prefix-set operand rex.w))
+                        prefixes)
+                    opcode-collected vex-traversed #t))
+
+               ((eq? (vector-ref instr 0) 'd64)
+                ;; In 64-bit mode, the default operand size is 64
+                ;; bits. The only other possible operand size is then
+                ;; 16 bits.
+                (lp (vector-ref instr 1)
+                    modr/m opcode
+                    prefixes
+                    opcode-collected vex-traversed #t))
 
                (else
                 (if collect (collect (tag opcode) opcode))
@@ -1132,4 +1141,4 @@ the port will be passed to the collector."
                   (lp (vector-ref instr opcode)
                       modr/m opcode
                       prefixes
-                      #f vex-traversed))))))))))
+                      #f vex-traversed d64))))))))))

@@ -77,13 +77,20 @@
       (and i (list (substring s 0 i)
                    (substring s (+ 1 i) (string-length s))))))
 
-;;;
+;;; Constants etc
 
   (define min-s8 (- (expt 2 7)))
+  (define max-s8 (- (expt 2 7) 1))
   (define max-u8 (- (expt 2 8) 1))
 
   (define min-s16 (- (expt 2 15)))
   (define max-u16 (- (expt 2 16) 1))
+
+  (define min-s32 (- (expt 2 31)))
+  (define max-u32 (- (expt 2 32) 1))
+
+  (define min-s64 (- (expt 2 63)))
+  (define max-u64 (- (expt 2 64) 1))
 
   (define REX.bare #b01000000)
   (define REX.W    #b01001000)
@@ -109,12 +116,15 @@
   (define (memory-base-only mem)
     ;; Returns #f if the addressing mode has a disp or index,
     ;; otherwise returns the index of the base register.
-    (and (expression-in-range? (memory-expr mem) 0 0)
+    (and (expression-in-range? (memory-expr mem) 0 0 #f)
          (= (memory-scale mem) 1)
          (not (memory-index mem))
          (memory-base mem)
          (register-index (memory-base mem))))
 
+  ;; The first entry in the vector is 'operand-size if the operand is
+  ;; capable of sizing an instruction, so that the right operand size
+  ;; override can be emitted.
   (define opsyntaxen
     (let ((tmp (make-eq-hashtable)))
       (hashtable-set! tmp 'Mdq
@@ -211,15 +221,6 @@
                                (else #f)))
                        'r/m             ;register is encoded in r/m and REX.B
                        'Ev))
-      (hashtable-set! tmp 'Eq/w
-                      (vector
-                       'operand-size64
-                       (lambda (o opsize mode)
-                         (cond ((register? o) (memv (register-type o) '(16 64)))
-                               ((memory? o) (memv (memory-datasize o) '(#f 16 64)))
-                               (else #f)))
-                       'r/m
-                       'Eq/w))
       (hashtable-set! tmp 'Ew
                       (vector
                        #f
@@ -357,40 +358,30 @@
                       (vector
                        #f
                        (lambda (o opsize mode)
-                         (or (expression? o)
-                             ;; FIXME: it's never an integer...
-                             (and (integer? o)
-                                  (case opsize
-                                    ((64 #f)
-                                     ;; This immediate will be encoded
-                                     ;; using 32 bits and then the
-                                     ;; processor will sign-extend it to
-                                     ;; 64 bits. Here is the easy and dumb
-                                     ;; way to test if a constant will fit
-                                     ;; in this encoding.
-                                     (let* ((unsigned (if (negative? o) (+ #xffffffffffffffff o) o))
-                                            (trunc (bitwise-and #xffffffff unsigned))
-                                            (sign-extended (if (bitwise-bit-set? trunc 31)
-                                                               (bitwise-ior #xffffffff00000000 trunc)
-                                                               trunc)))
-                                       (= unsigned sign-extended)))
-                                    ((32) (<= (- (expt 2 31)) o (- (expt 2 32) 1)))
-                                    ((16) (<= (- (expt 2 15)) o (- (expt 2 16) 1)))
-                                    (else #f)))))
+                         (and (expression? o)
+                              (case opsize
+                                ((64 #f)
+                                 ;; This immediate will be encoded
+                                 ;; using 32 bits and then the
+                                 ;; processor will sign-extend it to
+                                 ;; 64 bits.
+                                 (or (expression-in-range? o #xFFFFFFFF80000000 #xFFFFFFFFFFFFFFFF #t)
+                                     (expression-in-range? o min-s32 max-u32 #t)))
+                                ((32) (expression-in-range? o min-s32 max-u32 #t))
+                                ((16) (expression-in-range? o min-s16 max-u16 #t))
+                                (else #f))))
                        'immZ
                        'Iz))
       (hashtable-set! tmp 'Iv
                       (vector
                        #f
                        (lambda (o opsize mode)
-                         (or (expression? o)
-                             ;; FIXME: it's never an integer...
-                             (and (integer? o)
-                                  (case opsize
-                                    ((64) (<= (- (expt 2 63)) o (- (expt 2 64) 1)))
-                                    ((32) (<= (- (expt 2 31)) o (- (expt 2 32) 1)))
-                                    ((16) (<= (- (expt 2 15)) o (- (expt 2 16) 1)))
-                                    (else #f)))))
+                         (and (expression? o)
+                              (case opsize
+                                ((64) (expression-in-range? o min-s64 max-u64 #t))
+                                ((32) (expression-in-range? o min-s32 max-u32 #t))
+                                ((16) (expression-in-range? o min-s16 max-u16 #t))
+                                (else #f))))
                        'imm
                        'Iv))
       (hashtable-set! tmp 'Ib
@@ -398,15 +389,25 @@
                        #f
                        (lambda (o opsize mode)
                          (and (expression? o)
-                              (expression-in-range? o min-s8 max-u8)))
+                              (expression-in-range? o min-s8 max-u8 #f)))
                        'imm8
                        'Ib))
+      (hashtable-set! tmp 'IbS
+                      (vector
+                       #f
+                       (lambda (o opsize mode)
+                         (and (expression? o)
+                              ;; FIXME: 16- and 32-bit operand sizes
+                              (or (expression-in-range? o #xFFFFFFFFFFFFFF80 #xFFFFFFFFFFFFFFFF #f)
+                                  (expression-in-range? o min-s8 max-s8 #f))))
+                       'imm8
+                       'IbS))
       (hashtable-set! tmp 'Iw
                       (vector
                        #f
                        (lambda (o opsize mode)
                          (and (expression? o)
-                              (expression-in-range? o min-s16 max-u16)))
+                              (expression-in-range? o min-s16 max-u16 #f)))
                        'imm16
                        'Iw))
 
@@ -496,7 +497,7 @@
 
       (hashtable-set! tmp 'Jz
                       (vector
-                       'operand-size64
+                       #f               ; 'operand-size
                        (lambda (o opsize mode)
                          (expression? o))
                        'destZ
@@ -539,11 +540,11 @@
     ;; FIXME: no need to change into boolean here?
     (if ((vector-ref opsyntax 1) operand opsize mode) #t #f))
 
-  (define (opsyntax-default-operand-size opsyntax mode)
-    (if (and (eq? (vector-ref opsyntax 0) 'operand-size64)
-             (= mode 64))
-        64
-        #f))
+;;   (define (opsyntax-default-operand-size opsyntax mode)
+;;     (if (and (eq? (vector-ref opsyntax 0) 'operand-size64)
+;;              (= mode 64))
+;;         64
+;;         #f))
 
 ;;; Opcode map transformation
 
@@ -608,6 +609,12 @@
       (walk-opcodes f (vector-ref instr 1) (append bytes (list 'mem)))
       (walk-opcodes f (vector-ref instr 2) (append bytes (list 'reg))))
 
+     ((eq? (vector-ref instr 0) 'd64)
+      (walk-opcodes f (vector-ref instr 1) (append bytes (list 'd64))))
+
+     ((eq? (vector-ref instr 0) 'f64)
+      (walk-opcodes f (vector-ref instr 1) (append bytes (list 'f64))))
+
      (else
       (do ((index 0 (+ index 1)))
           ((= index 256))
@@ -669,6 +676,14 @@
     (cond ((memq 'addr32 encoding) 32)
           ((memq 'addr64 encoding) 64)
           (else #f)))
+
+  (define (encoding-default-operand-size encoding mode)
+    (if (= mode 64)
+        (if (or (memq 'd64 encoding)
+                (memq 'f64 encoding))
+            64
+            32)
+        mode))
 
 ;;; Instruction lookup
 
@@ -853,9 +868,8 @@
                                (print "- " (template-opsyntax template) " - " (template-encoding template))
                                (if (and (encoding-mode-is-acceptable? mode (template-encoding template))
                                         (instruction-encodable? operands template mode os))
-                                   (let ((dos (instruction-default-operand-size (template-opsyntax template) mode))
-                                         (das mode))
-                                     (values dos das os as prefixes operands
+                                   (let ((dos (encoding-default-operand-size (template-encoding template) mode)))
+                                     (values dos os (or os dos) as prefixes operands
                                              (template-opsyntax template) (template-encoding template)))
                                    (lp (cdr templates)))))))))))
             (else (try-pseudo #t)))))
@@ -912,15 +926,6 @@
                (error 'instruction-operand-size
                       "Incompatible operand sizes used" operands opsyntaxen))
              (car sizes)))))
-
-  (define (instruction-default-operand-size opsyntaxen mode)
-    (let ((sizes (filter (lambda (x)
-                           (memv x '(16 32 64)))
-                         (map (lambda (o) (opsyntax-default-operand-size o mode)) opsyntaxen))))
-      (if (null? sizes)
-          (if (= mode 16) 16 32)
-          (car sizes))))
-
 
   (define (instruction-address-size default operands)
     (let ((sizes (filter number? (cons default (map address-size operands)))))
@@ -994,18 +999,22 @@
           (mode (assembler-state-mode state))
           (pos (port-position (assembler-state-port state))))
       (call-with-values (lambda () (find-instruction-encoding instr mode '()))
-        (lambda (dos das os as prefixes operands* opsyntax* encoding)
+        (lambda (dos os eos as prefixes operands* opsyntax* encoding)
+          ;; dos: Default Operand Size (what the CPU uses without a prefix)
+          ;; os: Operand Size (according to the given operands)
+          ;; eos: Effective Operand Size (what the CPU will use)
           (print "\n%%%%%%%%%% can encode now, mnemonic=" (car instr)
-                 " operand-size=" (list dos os)
-                 " address-size=" (list das as)
+                 " operands=" (cdr instr)
+                 " operand-size=" (list dos eos os)
+                 " address-size=" (list mode as)
                  " prefixes=" prefixes
                  " encoding=" encoding)
 
           (for-each (lambda (b) (put-u8 port b)) prefixes)
 
           ;; Emit address size and operand size overrides
-          (when (or (and (= das 64) (eqv? as 32))
-                    (and (= das 16) (eqv? as 32)))
+          (when (or (and (= mode 64) (eqv? as 32))
+                    (and (= mode 16) (eqv? as 32)))
             (put-u8 port (prefix-byte address)))
           (when (or (and (= dos 64) (eqv? os 16))
                     (and (= dos 32) (eqv? os 16))
@@ -1040,7 +1049,7 @@
                    ;; we first need to find out the size of these
                    ;; values before we output them.
 
-                   (let* ((imms (cons disp (encode-operands! operands* opsyntax* os as state)))
+                   (let* ((imms (cons disp (encode-operands! operands* opsyntax* eos as state)))
                           (size (fold-left (lambda (x y)
                                              (+ x (cond ((vector? y)
                                                          (fxarithmetic-shift-right (vector-ref y 1) 3))

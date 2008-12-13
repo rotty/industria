@@ -46,6 +46,8 @@
 ;;    | <sse>
 ;;    | <vex>
 ;;    | <mem/reg>
+;;    | <f64>
+;;    | <d64>
 ;;    | #f
 
 ;; <instr> --> (<mnemonic> <operand>*)
@@ -70,6 +72,8 @@
 ;;    | <mode>
 ;;    | <sse>
 ;;    | <vex>
+;;    | <f64>
+;;    | <d64>
 ;;    | #f
 
 ;; <datasize> --> #(Datasize <entry for 16-bit data>
@@ -95,6 +99,10 @@
 ;; <mem/reg> --> #(Mem/reg <entry for memory operand in ModR/M>
 ;;                         <entry for register operand>)
 
+;; These can be ignored in legacy mode:
+;; <f64> --> #(f64 <instr>)  ; force 64-bit operand size
+;; <d64> --> #(d64 <instr>)  ; default 64-bit operand size
+
 ;; <name> is a string. <mnemonic> and <operand> are symbols.
 
 ;;; Operand syntax
@@ -106,10 +114,6 @@
 ;; Normally the operand syntax will have initial upper case letters
 ;; for designating an addressing method, but where this is not the
 ;; case a single * has been prepended.
-
-;; Where the appendix has used e.g. "Ev" and noted that the operand
-;; size is forced to 64 bits in long mode, "Eq/w" has been substituted
-;; for the long mode instruction.
 
 ;; "1" has been changed to "*unity", so that all operands are written
 ;; as symbols.
@@ -1366,23 +1370,23 @@
                   #(VEX (movdqa Wdq Vdq) (vmovdqa Wdq Vdq))
                   #f)
          ;; 0F 80
-         (jo Jz)
-         (jno Jz)
-         (jb Jz)
-         (jnb Jz)
-         (jz Jz)
-         (jnz Jz)
-         (jbe Jz)
-         (jnbe Jz)
+         #(f64 (jo Jz))
+         #(f64 (jno Jz))
+         #(f64 (jb Jz))
+         #(f64 (jnb Jz))
+         #(f64 (jz Jz))
+         #(f64 (jnz Jz))
+         #(f64 (jbe Jz))
+         #(f64 (jnbe Jz))
          ;; 0F 88
-         (js Jz)
-         (jns Jz)
-         (jp Jz)
-         (jnp Jz)
-         (jl Jz)
-         (jnl Jz)
-         (jle Jz)
-         (jnle Jz)
+         #(f64 (js Jz))
+         #(f64 (jns Jz))
+         #(f64 (jp Jz))
+         #(f64 (jnp Jz))
+         #(f64 (jl Jz))
+         #(f64 (jnl Jz))
+         #(f64 (jle Jz))
+         #(f64 (jnle Jz))
          ;; 0F 90
          (seto Eb)
          (setno Eb)
@@ -1402,8 +1406,8 @@
          (setle Eb)
          (setnle Eb)
          ;; 0F A0
-         (push *FS)
-         (pop *FS)
+         #(d64 (push *FS))
+         #(d64 (pop *FS))
          (cpuid)
          (bt Ev Gv)
          (shld Ev Gv Ib)
@@ -1419,8 +1423,8 @@
                    (xcryptcfb) (xcryptofb)
                    #f #f))
          ;; 0F A8
-         (push *GS)
-         (pop *GS)
+         #(d64 (push *GS))
+         #(d64 (pop *GS))
          (rsm)
          (bts Ev Gv)
          (shrd Ev Gv Ib)
@@ -1635,23 +1639,23 @@
        #(Mode (dec *eSI) (*prefix* rex rex.w rex.r rex.x))
        #(Mode (dec *eDI) (*prefix* rex rex.w rex.r rex.x rex.b))
        ;; 50
-       (push *rAX/r8)
-       (push *rCX/r9)
-       (push *rDX/r10)
-       (push *rBX/r11)
-       (push *rSP/r12)
-       (push *rBP/r13)
-       (push *rSI/r14)
-       (push *rDI/r15)
+       #(d64 (push *rAX/r8))
+       #(d64 (push *rCX/r9))
+       #(d64 (push *rDX/r10))
+       #(d64 (push *rBX/r11))
+       #(d64 (push *rSP/r12))
+       #(d64 (push *rBP/r13))
+       #(d64 (push *rSI/r14))
+       #(d64 (push *rDI/r15))
        ;; 58
-       (pop *rAX/r8)
-       (pop *rCX/r9)
-       (pop *rDX/r10)
-       (pop *rBX/r11)
-       (pop *rSP/r12)
-       (pop *rBP/r13)
-       (pop *rSI/r14)
-       (pop *rDI/r15)
+       #(d64 (pop *rAX/r8))
+       #(d64 (pop *rCX/r9))
+       #(d64 (pop *rDX/r10))
+       #(d64 (pop *rBX/r11))
+       #(d64 (pop *rSP/r12))
+       #(d64 (pop *rBP/r13))
+       #(d64 (pop *rSI/r14))
+       #(d64 (pop *rDI/r15))
        ;; 60
        #(Mode #(Datasize (pushaw)
                          (pushad)
@@ -1670,33 +1674,32 @@
        (*prefix* operand)
        (*prefix* address)
        ;; 68
-       #(Mode (push Iz)
-              (push Iz-f64))
+       #(d64 (push Iz))
        (imul Gv Ev Iz)
-       (push Ib)
+       #(d64 (push IbS))
        (imul Gv Ev Ib)
        (ins Yb *DX)
        (ins Yz *DX)
        (outs *DX Xb)
        (outs *DX Xz)
        ;; 70
-       (jo Jb)
-       (jno Jb)
-       (jb Jb)
-       (jnb Jb)
-       (jz Jb)
-       (jnz Jb)
-       (jbe Jb)
-       (jnbe Jb)
+       #(f64 (jo Jb))
+       #(f64 (jno Jb))
+       #(f64 (jb Jb))
+       #(f64 (jnb Jb))
+       #(f64 (jz Jb))
+       #(f64 (jnz Jb))
+       #(f64 (jbe Jb))
+       #(f64 (jnbe Jb))
        ;; 78
-       (js Jb)
-       (jns Jb)
-       (jp Jb)
-       (jnp Jb)
-       (jl Jb)
-       (jnl Jb)
-       (jle Jb)
-       (jnle Jb)
+       #(f64 (js Jb))
+       #(f64 (jns Jb))
+       #(f64 (jp Jb))
+       #(f64 (jnp Jb))
+       #(f64 (jl Jb))
+       #(f64 (jnl Jb))
+       #(f64 (jle Jb))
+       #(f64 (jnle Jb))
        ;; 80
        #(Group "Group 1"
                #((add Eb Ib) (or Eb Ib) (adc Eb Ib) (sbb Eb Ib)
@@ -1724,7 +1727,7 @@
        (lea Gv M)
        (mov Sw Ew)
        #(Group "Group 1A"
-               #(#(Mode (pop Ev) (pop Eq/w))
+               #(#(d64 (pop Ev))
                  #f #f #f #f #f #f #f))
        ;; 90
        (*nop*)
@@ -1797,8 +1800,8 @@
        #(Group "Shift Group 2"
                #((rol Ev Ib) (ror Ev Ib) (rcl Ev Ib)
                  (rcr Ev Ib) (shl Ev Ib) (shr Ev Ib) #f (sar Ev Ib)))
-       (ret Iw)
-       (ret)
+       #(f64 (ret Iw))
+       #(f64 (ret))
        #(Mode (les Gz Mp) #f)           ;Three byte VEX prefix
        #(Mode (lds Gz Mp) #f)           ;Two byte VEX prefix
        #(Group "Group 11"
@@ -1807,7 +1810,7 @@
                #((mov Ev Iz) #f #f #f #f #f #f #f))
        ;; C8
        (enter Iw Ib)
-       (leave)
+       #(d64 (leave))
        (retf Iw)
        (retf)
        (int3)
@@ -1971,24 +1974,24 @@
                  (fcomip *st0 *st)
                  #f))
        ;; E0
-       (loopnz Jb)
-       (loopz Jb)
-       (loop Jb)
+       #(f64 (loopnz Jb))
+       #(f64 (loopz Jb))
+       #(f64 (loop Jb))
        #(Mode #(Addrsize (jcxz Jb)
                          (jecxz Jb)
                          #f)
               #(Addrsize #f
-                         (jecxz Jb)
-                         (jrcxz Jb)))
+                         #(f64 (jecxz Jb))
+                         #(f64 (jrcxz Jb))))
        (in *AL Ib)
        (in *eAX Ib)
        (out Ib *AL)
        (out Ib *eAX)
        ;; E8
-       (call Jz)
-       (jmp Jz)
+       #(f64 (call Jz))
+       #(f64 (jmp Jz))
        #(Mode (jmpf Ap) #f)
-       (jmp Jb)
+       #(f64 (jmp Jb))
        (in *AL *DX)
        (in *eAX *DX)
        (out *DX *AL)
@@ -2016,12 +2019,9 @@
        #(Group "Group 5"
                #((inc Ev)
                  (dec Ev)
-                 #(Mode (call Ev)
-                        (call Eq/w))
+                 #(f64 (call Ev))
                  (callf Mp)
-                 #(Mode (jmp Ev)
-                        (jmp Eq/w))
+                 #(f64 (jmp Ev))
                  (jmpf Mp)
-                 #(Mode (push Ev)
-                        (push Eq/w))
+                 #(d64 (push Ev))
                  #f)))))
