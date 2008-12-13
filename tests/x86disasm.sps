@@ -816,8 +816,8 @@ of indented test case, given a file and a mode."
         '(jmp (+ ip #x17))
         '(jmp (mem16+ bx di))
         '(jmp (mem32+ bx di))
-        '(jmpf (: #x42 #x1234))
-        '(jmpf (: #x42 #x12345678))
+        '(jmpf (far #x42 #x1234))
+        '(jmpf (far #x42 #x12345678))
         '(jmpf (mem16:16+ bx di))
         '(jmpf (mem16:32+ bx di)))
 
@@ -835,8 +835,8 @@ of indented test case, given a file and a mode."
         '(jmp (+ eip #x1B))
         '(jmp (mem16+ bx di))
         '(jmp (mem32+ bx di))
-        '(jmpf (: #x42 #x1234))
-        '(jmpf (: #x42 #x12345678))
+        '(jmpf (far #x42 #x1234))
+        '(jmpf (far #x42 #x12345678))
         '(jmpf (mem16:32+ bx di))
         '(jmpf (mem16:32+ bx di)))
 
