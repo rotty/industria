@@ -958,7 +958,8 @@
                   ;; If the operand size is 64 bit, then the
                   ;; immediate value here is encoded in 32
                   ;; bits and sign-extended.
-                  (number->bytevector (or value 0) (if (= os 64) 32 os)))
+                  (number->bytevector (bitwise-and (or value 0) #xffffffff)
+                                      (if (= os 64) 32 os)))
                  ((destZ)
                   (case (assembler-state-mode state)
                     ((32 64)
@@ -1048,7 +1049,6 @@
                    ;; remain. These can be rIP-relative, which means
                    ;; we first need to find out the size of these
                    ;; values before we output them.
-
                    (let* ((imms (cons disp (encode-operands! operands* opsyntax* eos as state)))
                           (size (fold-left (lambda (x y)
                                              (+ x (cond ((vector? y)
@@ -1279,9 +1279,10 @@
        ;; (%align <alignment>)
        ;; (%align <alignment> <byte>)
        ;; (%align <alignment> <non-rex-default-operand-size-register>)
-       (let ((pad (- (cadr instr)
-                     (mod (assembler-state-ip state)
-                          (cadr instr)))))
+       (let* ((alignment (cadr instr))
+              (pad (- (bitwise-and (+ (assembler-state-ip state) (- alignment 1))
+                                   (bitwise-not (- alignment 1)))
+                      (assembler-state-ip state))))
          (cond ((= (length instr) 2)
                 (for-each (lambda (bv) (put-bytevector (assembler-state-port state) bv))
                           (choose-nops amd64-10h-nops pad 0
@@ -1305,9 +1306,9 @@
                   (size (cadr comm))
                   (alignment (caddr comm)))
               ;; Alignment
-              (let ((pad (- alignment
-                            (mod (assembler-state-ip state)
-                                 alignment))))
+              (let ((pad (- (bitwise-and (+ (assembler-state-ip state) (- alignment 1))
+                                         (bitwise-not (- alignment 1)))
+                            (assembler-state-ip state))))
                 ;; Label
                 (hashtable-set! (assembler-state-labels state)
                                 label
@@ -1343,9 +1344,11 @@
               (print "% labels: ")
               (call-with-values (lambda () (hashtable-entries (assembler-state-labels state)))
                 (lambda (keys vals)
-                  (vector-for-each (lambda (k v)
-                                     (print "- " k " => " v))
-                                   keys vals)))
+                  (vector-for-each
+                   (lambda (x) (print "- " (car x) " => #x" (number->string (cdr x) 16)))
+                   (vector-sort
+                    (lambda (x y) (< (cdr x) (cdr y)))
+                    (vector-map cons keys vals)))))
               ;; Loop until all labels are known and FIXME: until
               ;; labels aren't changing. Optimize displacements
               ;; somehow...
