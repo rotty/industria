@@ -79,6 +79,14 @@
 
 ;;; Constants etc
 
+  (define-record-type assembler-state
+    (fields (mutable mode)
+            (mutable port)
+            (mutable ip)
+            (mutable labels)
+            (mutable relocs)
+            (mutable comm)))
+
   (define min-s8 (- (expt 2 7)))
   (define max-s8 (- (expt 2 7) 1))
   (define max-u8 (- (expt 2 8) 1))
@@ -122,396 +130,243 @@
          (memory-base mem)
          (register-index (memory-base mem))))
 
-  ;; The first entry in the vector is 'operand-size if the operand is
-  ;; capable of sizing an instruction, so that the right operand size
-  ;; override can be emitted.
+  ;; Operand syntax predicates.
   (define opsyntaxen
     (let ((tmp (make-eq-hashtable)))
-      (hashtable-set! tmp 'Mdq
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (memory? o)
-                              (eqv? (memory-datasize o) 128)))
-                       'mem
-                       'Mdq))
-      (hashtable-set! tmp 'Mq
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (memory? o)
-                              (eqv? (memory-datasize o) 64)))
-                       'mem
-                       'Mq))
-      (hashtable-set! tmp 'Md
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (memory? o)
-                              (eqv? (memory-datasize o) 32)))
-                       'mem
-                       'Md))
-      (hashtable-set! tmp 'Mw
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (memory? o)
-                              (eqv? (memory-datasize o) 16)))
-                       'mem
-                       'Mw))
-      (hashtable-set! tmp 'Ms
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         ;; Segment descriptor
-                         (and (memory? o)
-                              (not (memory-datasize o))))
-                       'mem
-                       'Ms))
+      (let-syntax
+          ((defop (lambda (x)
+                    (syntax-case x ()
+                      ((defop (name operand operand-size mode (encoding opsize-prefix?))
+                         test ...)
+                       (unless (memq (syntax->datum #'encoding) '(#f reg r/m implicit-r/m
+                                                                     destZ seg:off mem
+                                                                     imm imm8 imm16 immZ))
+                         (syntax-violation 'defop "Bad encoding" x #'encoding))
+                       ;; The first entry in the vector is
+                       ;; 'operand-size if the operand is capable of
+                       ;; sizing an instruction, so that the right
+                       ;; operand size override can be emitted.
+                       #'(define unused
+                           (hashtable-set! tmp 'name
+                                           (vector 'opsize-prefix?
+                                                   (lambda (operand operand-size mode)
+                                                     test ...)
+                                                   'encoding
+                                                   'name))))
+                      ((defop (name operand)
+                         test ...)
+                       #'(defop (name operand operand-size mode (#f #f))
+                           test ...))))))
+        ;; Segment registers
+        (defop (Sw o opsize mode (reg #f))
+          (and (register? o) (eq? (register-type o) 'sreg)))
+        (define (*xS o index)
+          (and (register? o) (eq? (register-type o) 'sreg)
+               (eqv? (register-index o) index)))
+        (defop (*ES o) (*xS o 0))
+        (defop (*CS o) (*xS o 1))
+        (defop (*SS o) (*xS o 2))
+        (defop (*DS o) (*xS o 3))
+        (defop (*FS o) (*xS o 4))
+        (defop (*GS o) (*xS o 5))
 
-      ;; xmm
-      (hashtable-set! tmp 'Vpd
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (register? o)
-                              (eq? (register-type o) 'xmm)))
-                       'reg
-                       'Vpd))
-      (hashtable-set! tmp 'Wpd
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (cond ((register? o)
-                                (eq? (register-type o) 'xmm))
-                               ((memory? o)
-                                (memv (memory-datasize o) '(#f 128)))
-                               (else #f)))
-                       'r/m
-                       'Wpd))
+        ;; General purpose registers (16 or 32 bits)
+        (define (*exX o index)
+          (and (register? o) (memq (register-type o) '(16 32))
+               (= (register-index o) index)))
+        (defop (*eAX o opsize mode (#f operand-size)) (*exX o 0))
+        (defop (*eCX o opsize mode (#f operand-size)) (*exX o 1))
+        (defop (*eDX o opsize mode (#f operand-size)) (*exX o 2))
+        (defop (*eBX o opsize mode (#f operand-size)) (*exX o 3))
+        (defop (*eSP o opsize mode (#f operand-size)) (*exX o 4))
+        (defop (*eBP o opsize mode (#f operand-size)) (*exX o 5))
+        (defop (*eSI o opsize mode (#f operand-size)) (*exX o 6))
+        (defop (*eDI o opsize mode (#f operand-size)) (*exX o 7))
 
+        ;; General purpose registers, rax-r15 (16, 32 or 64 bits)
+        (define (*rxX/rn o index)
+          (and (register? o) (memq (register-type o) '(16 32 64))
+               (= (bitwise-and (register-index o) #b111) index)))
+        (defop (*rAX/r8 o opsize mode (implicit-r/m operand-size)) (*rxX/rn o 0))
+        (defop (*rCX/r9 o opsize mode (implicit-r/m operand-size)) (*rxX/rn o 1))
+        (defop (*rDX/r10 o opsize mode (implicit-r/m operand-size)) (*rxX/rn o 2))
+        (defop (*rBX/r11 o opsize mode (implicit-r/m operand-size)) (*rxX/rn o 3))
+        (defop (*rSP/r12 o opsize mode (implicit-r/m operand-size)) (*rxX/rn o 4))
+        (defop (*rBP/r13 o opsize mode (implicit-r/m operand-size)) (*rxX/rn o 5))
+        (defop (*rSI/r14 o opsize mode (implicit-r/m operand-size)) (*rxX/rn o 6))
+        (defop (*rDI/r15 o opsize mode (implicit-r/m operand-size)) (*rxX/rn o 7))
 
-      (hashtable-set! tmp '*st
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (register? o)
-                              (eq? (register-type o) 'x87)))
-                       'r/m
-                       '*st))
-      (hashtable-set! tmp '*st0
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (register? o)
-                              (eq? (register-type o) 'x87)
-                              (zero? (register-index o))))
-                       #f
-                       '*st0))
+        ;; General purpose registers al-r15l (8-bit)
+        (define (*xL/RnL o index)
+          (and (register? o)
+               (memq (register-type o) '(rex8 8))
+               (= (fxand #b111 (register-index o)) index)))
+        (defop (*AL/R8L o opsize mode (implicit-r/m #f)) (*xL/RnL o 0))
+        (defop (*CL/R9L o opsize mode (implicit-r/m #f)) (*xL/RnL o 1))
+        (defop (*DL/R10L o opsize mode (implicit-r/m #f)) (*xL/RnL o 2))
+        (defop (*BL/R11L o opsize mode (implicit-r/m #f)) (*xL/RnL o 3))
+        (define (*xH/RnL o i1 i2)
+          (and (register? o)
+               (memv (register-type o) '(rex8 norex8))
+               (or (= (register-index o) i1)
+                   (= (register-index o) i2))))
+        (defop (*AH/R12L o opsize mode (implicit-r/m #f)) (*xH/RnL o #b0100 #b1100))
+        (defop (*CH/R13L o opsize mode (implicit-r/m #f)) (*xH/RnL o #b0101 #b1101))
+        (defop (*DH/R14L o opsize mode (implicit-r/m #f)) (*xH/RnL o #b0110 #b1110))
+        (defop (*BH/R15L o opsize mode (implicit-r/m #f)) (*xH/RnL o #b0111 #b1111))
 
-      (hashtable-set! tmp 'Ev
-                      (vector
-                       'operand-size
-                       (lambda (o opsize mode)
-                         (cond ((register? o)
-                                (memv (register-type o) '(16 32 64)))
-                               ((memory? o)
-                                ;; FIXME: Or unsized data?
-                                (memv (memory-datasize o) '(#f 16 32 64)))
-                               (else #f)))
-                       'r/m             ;register is encoded in r/m and REX.B
-                       'Ev))
-      (hashtable-set! tmp 'Ew
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (cond ((register? o) (eqv? (register-type o) 16))
-                               ((memory? o) (memv (memory-datasize o) '(#f 16)))
-                               (else #f)))
-                       'r/m
-                       'Ew))
-      (hashtable-set! tmp 'Eb
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (cond ((register? o)
-                                (memq (register-type o) '(8 rex8 norex8)))
-                               ((memory? o)
-                                ;; FIXME: Or unsized data?
-                                (memq (memory-datasize o) '(#f 8 rex8 norex8)))
-                               (else #f)))
-                       'r/m
-                       'Eb))
+        ;; x87 registers
+        (defop (*st o opsize mode (r/m #f))
+          (and (register? o)
+               (eq? (register-type o) 'x87)))
+        (defop (*st0 o)
+          (and (register? o)
+               (eq? (register-type o) 'x87)
+               (zero? (register-index o))))
 
-      (hashtable-set! tmp 'Gv
-                      (vector
-                       'operand-size
-                       (lambda (o opsize mode)
-                         (and (register? o)
-                              (memv (register-type o) '(16 32 64))))
-                       'reg             ;register is encoded in ModR/M.reg etc
-                       'Gv))
-      (hashtable-set! tmp 'Gb
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (register? o)
-                              (eqv? (register-type o) 8)))
-                       'reg             ;register is encoded in ModR/M.reg etc
-                       'Gb))
+        ;; General purpose registers
+        (defop (Gv o opsize mode (reg operand-size))
+          (and (register? o) (memv (register-type o) '(16 32 64))))
+        (defop (Gb o opsize mode (reg #f))
+          (and (register? o) (memq (register-type o) '(8 norex8 rex8))))
+        (defop (Rd/q o opsize mode (r/m #f))
+          (and (register? o)
+               (case mode
+                 ((32 64) (eq? (register-type o) mode))
+                 ((16) (eq? (register-type o) 32)))))
 
-      (hashtable-set! tmp 'Sw
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (register? o)
-                              (eqv? (register-type o) 'sreg)))
-                       'reg
-                       'Sw))
+        ;; General purpose register or memory
+        (defop (Ev o opsize mode (r/m operand-size))
+          (cond ((register? o) (memq (register-type o) '(16 32 64)))
+                ((memory? o) (memq (memory-datasize o) '(#f 16 32 64)))
+                (else #f)))
+        (defop (Ew o opsize mode (r/m #f))
+          (cond ((register? o) (memq (register-type o) '(16)))
+                ((memory? o) (memq (memory-datasize o) '(#f 16)))
+                (else #f)))
+        (defop (Eb o opsize mode (r/m #f))
+          (cond ((register? o) (memq (register-type o) '(8 rex8 norex8)))
+                ((memory? o) (memq (memory-datasize o) '(#f 8 rex8 norex8)))
+                (else #f)))
 
-      ;; These are very limited: must be ES:DI, ES:EDI or RDI.
-      (hashtable-set! tmp 'Yv
-                      (vector
-                       'operand-size
-                       (lambda (o opsize mode)
-                         (and (memory? o)
-                              (memv (memory-datasize o) '(#f 16 32 64))
-                              (eqv? (memory-base-only o) 7) ;rDI
-                              ;; Check ES
-                              (case mode
-                                ((64) (not (memory-segment o)))
-                                (else (and (register? (memory-segment o))
-                                           (zero? (register-index (memory-segment o))))))))
-                       #f
-                       'Yv))
-      (hashtable-set! tmp 'Yb
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (memory? o)
-                              (memv (memory-datasize o) '(#f 8))
-                              (eqv? (memory-base-only o) 7) ;rDI
-                              ;; Check ES
-                              (case mode
-                                ((64) (not (memory-segment o)))
-                                (else (and (register? (memory-segment o))
-                                           (zero? (register-index (memory-segment o))))))))
-                       #f
-                       'Yb))
+        ;; Memory
+        (defop (Mdq o opsize mode (mem #f))
+          (and (memory? o) (eq? (memory-datasize o) 128)))
+        (defop (Mq o opsize mode (mem #f))
+          (and (memory? o) (eq? (memory-datasize o) 64)))
+        (defop (Md o opsize mode (mem #f))
+          (and (memory? o) (eq? (memory-datasize o) 32)))
+        (defop (Mw o opsize mode (mem #f))
+          (and (memory? o) (eq? (memory-datasize o) 16)))
+        (defop (Ms o opsize mode (mem #f))
+          ;; Segment descriptor
+          (and (memory? o) (not (memory-datasize o))))
 
-      (hashtable-set! tmp 'Xv
-                      (vector
-                       'operand-size
-                       (lambda (o opsize mode)
-                         (and (memory? o)
-                              (memv (memory-datasize o) '(#f 16 32 64))
-                              (eqv? (memory-base-only o) 6))) ;rSI
-                       #f               ;implicit
-                       'Xv))
+        ;; Destination operand for the string instructions
+        (defop (Yv o opsize mode (#f operand-size))
+          ;; ES:DI, ES:EDI or RDI.
+          (and (memory? o)
+               (memv (memory-datasize o) '(#f 16 32 64))
+               (eqv? (memory-base-only o) 7) ;rDI
+               ;; Check ES
+               (case mode
+                 ((64) (not (memory-segment o)))
+                 (else (and (register? (memory-segment o))
+                            (zero? (register-index (memory-segment o))))))))
+        (defop (Yb o opsize mode (#f #f))
+          ;; ES:DI, ES:EDI or RDI.
+          (and (memory? o)
+               (memv (memory-datasize o) '(#f 8))
+               (eqv? (memory-base-only o) 7) ;rDI
+               ;; Check ES
+               (case mode
+                 ((64) (not (memory-segment o)))
+                 (else (and (register? (memory-segment o))
+                            (zero? (register-index (memory-segment o))))))))
 
-      (hashtable-set! tmp 'Xb
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (memory? o)
-                              (memv (memory-datasize o) '(#f 8))
-                              (eqv? (memory-base-only o) 6))) ;rSI
-                       #f               ;implicit
-                       'Xb))
+        ;; Source operand for string instructions
+        (defop (Xv o opsize mode (#f operand-size))
+          (and (memory? o)
+               (memv (memory-datasize o) '(#f 16 32 64))
+               (eqv? (memory-base-only o) 6))) ;rSI
+        (defop (Xb o opsize mode (#f #f))
+          (and (memory? o)
+               (memv (memory-datasize o) '(#f 8))
+               (eqv? (memory-base-only o) 6))) ;rSI
 
+        ;; Jump offsets
+        (defop (Jz o opsize mode (destZ #f))
+          ;; While the jump instructions can indeed take an operand
+          ;; size override, doing so is not wise since it truncates
+          ;; the instruction pointer. It also messes up the assembler
+          ;; logic. So there's no support for it here.
+          (expression? o))
+        (defop (Ap o opsize mode (seg:off #f))
+          (far-pointer? o))
 
-      ;;
-      (hashtable-set! tmp 'Rd/q
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (register? o)
-                              (case mode
-                                ((32 64)
-                                 (eqv? (register-type o) mode))
-                                ((16)
-                                 (eqv? (register-type o) 32)))))
-                       'r/m
-                       'Rd/q))
+        ;; XMM registers
+        (defop (Vpd o opsize mode (reg #f))
+          (and (register? o) (eq? (register-type o) 'xmm)))
+        (defop (Wpd o opsize mode (r/m #f))
+          (cond ((register? o) (eq? (register-type o) 'xmm))
+                ((memory? o) (memv (memory-datasize o) '(#f 128)))
+                (else #f)))
 
-      (hashtable-set! tmp 'Cd/q
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (register? o)
-                              (eqv? (register-type o) 'creg)))
-                       'reg
-                       'Cd/q))
+        ;; Immediates
+        (defop (Iz o opsize mode (immZ #f))
+          (and (expression? o)
+               (case opsize
+                 ((64 #f)
+                  ;; This immediate will be encoded using 32 bits and
+                  ;; then the processor will sign-extend it to 64
+                  ;; bits.
+                  (or (expression-in-range? o #xFFFFFFFF80000000 #xFFFFFFFFFFFFFFFF #t)
+                      (expression-in-range? o min-s32 max-u32 #t)))
+                 ((32) (expression-in-range? o min-s32 max-u32 #t))
+                 ((16) (expression-in-range? o min-s16 max-u16 #t))
+                 (else #f))))
+        (defop (Iv o opsize mode (imm #f))
+          (and (expression? o)
+               (case opsize
+                 ((64) (expression-in-range? o min-s64 max-u64 #t))
+                 ((32) (expression-in-range? o min-s32 max-u32 #t))
+                 ((16) (expression-in-range? o min-s16 max-u16 #t))
+                 (else #f))))
+        (defop (Iw o opsize mode (imm16 #f))
+          (and (expression? o)
+               (expression-in-range? o min-s16 max-u16 #f)))
+        (defop (Ib o opsize mode (imm8 #f))
+          (and (expression? o)
+               (expression-in-range? o min-s8 max-u8 #f)))
+        (defop (IbS o opsize mode (imm8 #f))
+          (and (expression? o)
+               ;; FIXME: 16- and 32-bit operand sizes
+               (or (expression-in-range? o #xFFFFFFFFFFFFFF80 #xFFFFFFFFFFFFFFFF #f)
+                   (expression-in-range? o min-s8 max-s8 #f))))
 
-      (hashtable-set! tmp 'Dd/q
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (register? o)
-                              (eqv? (register-type o) 'dreg)))
-                       'reg
-                       'Dd/q))
+        ;; Misc
+        (defop (*unity o)
+          (and (expression? o)
+               (expression-in-range? o 1 1 #f)))
+        (defop (*rAX o opsize mode (#f operand-size))
+          (and (register? o) (memv (register-type o) '(16 32 64))
+               (= (register-index o) 0)))
+        (defop (*AX o opsize mode (#f operand-size))
+          (and (register? o) (eq? (register-type o) 16)
+               (= (register-index o) 0)))
+        (defop (*AL o) (and (register? o) (eq? (register-type o) 8) (= (register-index o) 0)))
+        (defop (*CL o) (and (register? o) (eq? (register-type o) 8) (= (register-index o) 1)))
+        (defop (*DX o)
+          (and (register? o)
+               (eq? (register-type o) 16)
+               (= (register-index o) 2)))
 
+        (defop (Cd/q o opsize mode (reg #f))
+          (and (register? o) (eqv? (register-type o) 'creg)))
+        (defop (Dd/q o opsize mode (reg #f))
+          (and (register? o) (eqv? (register-type o) 'dreg)))
 
-      ;; Immediates
-      (hashtable-set! tmp 'Iz
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (expression? o)
-                              (case opsize
-                                ((64 #f)
-                                 ;; This immediate will be encoded
-                                 ;; using 32 bits and then the
-                                 ;; processor will sign-extend it to
-                                 ;; 64 bits.
-                                 (or (expression-in-range? o #xFFFFFFFF80000000 #xFFFFFFFFFFFFFFFF #t)
-                                     (expression-in-range? o min-s32 max-u32 #t)))
-                                ((32) (expression-in-range? o min-s32 max-u32 #t))
-                                ((16) (expression-in-range? o min-s16 max-u16 #t))
-                                (else #f))))
-                       'immZ
-                       'Iz))
-      (hashtable-set! tmp 'Iv
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (expression? o)
-                              (case opsize
-                                ((64) (expression-in-range? o min-s64 max-u64 #t))
-                                ((32) (expression-in-range? o min-s32 max-u32 #t))
-                                ((16) (expression-in-range? o min-s16 max-u16 #t))
-                                (else #f))))
-                       'imm
-                       'Iv))
-      (hashtable-set! tmp 'Ib
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (expression? o)
-                              (expression-in-range? o min-s8 max-u8 #f)))
-                       'imm8
-                       'Ib))
-      (hashtable-set! tmp 'IbS
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (expression? o)
-                              ;; FIXME: 16- and 32-bit operand sizes
-                              (or (expression-in-range? o #xFFFFFFFFFFFFFF80 #xFFFFFFFFFFFFFFFF #f)
-                                  (expression-in-range? o min-s8 max-s8 #f))))
-                       'imm8
-                       'IbS))
-      (hashtable-set! tmp 'Iw
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (expression? o)
-                              (expression-in-range? o min-s16 max-u16 #f)))
-                       'imm16
-                       'Iw))
-
-      ;; Implicitly encoded registers
-      (hashtable-set! tmp '*AL
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (register? o)
-                              (eqv? (register-type o) 8)
-                              (= (register-index o) 0)))
-                       #f               ;implicit
-                       '*AL))
-      (hashtable-set! tmp '*AL/R8L
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (register? o)
-                              (memv (register-type o) '(8 rex8))
-                              (= (fxand #b111 (register-index o)) 0)))
-                       'implicit-r/m
-                       '*AL/R8L))
-      (hashtable-set! tmp '*CL
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (register? o)
-                              (eqv? (register-type o) 8)
-                              (= (register-index o) 2)))
-                       #f               ;implicit
-                       '*CL))
-      (hashtable-set! tmp '*eAX
-                      (vector
-                       'operand-size
-                       (lambda (o opsize mode)
-                         (and (register? o)
-                              (memv (register-type o) '(16 32))
-                              (= (register-index o) 0)))
-                       #f               ;implicit
-                       '*eAX))
-      (hashtable-set! tmp '*DX
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (and (register? o)
-                              (eqv? (register-type o) 16)
-                              (= (register-index o) 2)))
-                       #f               ;implicit
-                       '*DX))
-      (hashtable-set! tmp '*rAX
-                      (vector
-                       'operand-size
-                       (lambda (o opsize mode)
-                         (and (register? o)
-                              (memv (register-type o) '(16 32 64))
-                              (= (register-index o) 0)))
-                       #f               ;implicit
-                       '*rAX))
-      (hashtable-set! tmp '*rAX/r8
-                      (vector
-                       'operand-size
-                       (lambda (o opsize mode)
-                         (and (register? o)
-                              (memv (register-type o) '(16 32 64))
-                              (= (bitwise-and (register-index o) #b111) 0)))
-                       'implicit-r/m
-                       '*rAX/r8))
-      (hashtable-set! tmp '*rBX/r11
-                      (vector
-                       'operand-size
-                       (lambda (o opsize mode)
-                         (and (register? o)
-                              (memv (register-type o) '(16 32 64))
-                              (= (bitwise-and (register-index o) #b111) 3)))
-                       'implicit-r/m
-                       '*rBX/r11))
-
-      (hashtable-set! tmp '*unity
-                      (vector
-                       'operand-size
-                       (lambda (o opsize mode)
-                         (eqv? o 1))
-                       #f
-                       '*unity))
-
-      ;; Jump offset
-
-      (hashtable-set! tmp 'Jz
-                      (vector
-                       #f               ; 'operand-size
-                       (lambda (o opsize mode)
-                         (expression? o))
-                       'destZ
-                       'Jz))
-
-      (hashtable-set! tmp 'Ap
-                      (vector
-                       #f
-                       (lambda (o opsize mode)
-                         (far-pointer? o))
-                       'seg:off
-                       'Ap))
-
-      tmp))
+        tmp)))
 
   (define (translate-opsyntax opsyntax)
     (let ((o (hashtable-ref opsyntaxen opsyntax #f)))
@@ -701,6 +556,12 @@
                      0 a))
         (< (rough-count (vector-ref x 1))
            (rough-count (vector-ref y 1))))
+      ;; The #x90 opcode didn't fit in the instruction table very
+      ;; easily.
+      (hashtable-set! tmp 'pause '(#(() ((prefix #xF3) #x90))))
+      (hashtable-set! tmp 'nop '(#(() (#x90))))
+      (hashtable-set! tmp 'xchg '(#(,(map translate-opsyntax '(*rAX/r8 *rAX))
+                                    (#x90))))
       (walk-opcodes (lambda (instruction encoding)
                       (let ((mnemonic (car instruction)))
                         ;;(print instruction " -- " encoding)
@@ -1145,13 +1006,6 @@
                           (car operands)
                           (car opsyntax)))))))))
 
-  (define-record-type assembler-state
-    (fields (mutable mode)
-            (mutable port)
-            (mutable ip)
-            (mutable labels)
-            (mutable relocs)
-            (mutable comm)))
 
   (define (put-immediate imm type state)
     (let ((size (case type
@@ -1315,7 +1169,9 @@
                                 (assembler-state-ip state))
                 ;; Size
                 (assembler-state-ip-set! state (+ (assembler-state-ip state) pad size)))))
-          (assembler-state-comm state)))
+          (list-sort                    ;Sort by size
+           (lambda (x y) (< (cadr x) (cadr y)))
+           (assembler-state-comm state))))
        instr)
 
       (else
@@ -1342,7 +1198,8 @@
               (print "% new code: ")
               (for-each (lambda (i) (print "- " i)) newcode)
               (print "% labels: ")
-              (call-with-values (lambda () (hashtable-entries (assembler-state-labels state)))
+              (call-with-values (lambda ()
+                                  (hashtable-entries (assembler-state-labels state)))
                 (lambda (keys vals)
                   (vector-for-each
                    (lambda (x) (print "- " (car x) " => #x" (number->string (cdr x) 16)))

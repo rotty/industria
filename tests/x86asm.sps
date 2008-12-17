@@ -163,7 +163,7 @@
 (test '(mov rax (mem64+ rax #x0a00)) 64)
 (test '(mov (mem64+ rax #x0a00) rax) 64)
 
-(test '(mov rax (mem64+ rip #x100)) 64)
+;;(test '(mov rax (mem64+ rip #x100)) 64)
 (test '(mov rax (mem64+ 0)) 64)
 (test '(mov rax (mem64+ rbp)) 64
       '(mov rax (mem64+ rbp 0)))
@@ -229,3 +229,18 @@
 ;; ;; Swizzling r/m and /is4
 ;; (test '(vpermil2ps xmm0 xmm1 xmm2 (mem128+ rbx -1) 13) 64)
 ;; (test '(vpermil2ps xmm0 xmm1 (mem128+ rbx -1) xmm3 13) 64)
+
+;;; NOP
+
+(for-each (lambda (mode)
+            (test '(nop) mode)
+            (test '(pause) mode))
+          '(16 32 64))
+
+(test '(xchg eax eax) 16)
+(test '(xchg rax rax) 64)
+(test '(xchg r8w ax) 64)
+(test '(xchg r8d eax) 64)
+(test '(xchg r8 rax) 64)
+(test '(xchg ax ax) 32)
+
