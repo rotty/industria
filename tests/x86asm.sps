@@ -163,7 +163,8 @@
 (test '(mov rax (mem64+ rax #x0a00)) 64)
 (test '(mov (mem64+ rax #x0a00) rax) 64)
 
-;;(test '(mov rax (mem64+ rip #x100)) 64)
+(test '(mov rax (mem64+ rip 0)) 64)
+(test '(mov rax (mem64+ rip #x100)) 64)
 (test '(mov rax (mem64+ 0)) 64)
 (test '(mov rax (mem64+ rbp)) 64
       '(mov rax (mem64+ rbp 0)))

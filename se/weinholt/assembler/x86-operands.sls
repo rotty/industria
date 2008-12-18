@@ -288,7 +288,7 @@
        (cond ((rIP? base)
               ;; [rIP+disp32] in 64-bit mode
               (ret #b00 rbp
-                   (vector disp 32)     ;cf. disp in put-instruction
+                   (disp32 disp)     ;cf. disp in put-instruction
                    #f 0 0))
 
              ((and (not index) (not base)
@@ -540,8 +540,6 @@
 ;;                    (memory-base op)))
 
 ;;; Expressions
-
-  ;; These should possibly be called relocations.
 
   ;; One assumption that makes things a lot easier, is that if an
   ;; expression contains labels then it will not fit in an 8 or 16 bit

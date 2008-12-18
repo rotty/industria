@@ -24,7 +24,9 @@
 ;; not accept instructions that could lead to machine code the
 ;; compiler did not precisely specify.
 
-;; 16-bit mode is left out.
+;; Quite a few details of 16-bit mode have been left out.
+
+;; And by the way, it's not really ready to be used.
 
 ;;; Documentation
 
@@ -44,6 +46,9 @@
 
 ;; FIXME: eliminate redundant encodings, e.g. popfq with a REX.W is
 ;; redundant because there's a popfq without REX.W
+
+;; There is a lot that can be done to improve this. The best idea is
+;; probably to use the opcode map to generate an assembler.
 
 (library (se weinholt assembler x86 (1 0 0))
     (export assemble)
@@ -394,12 +399,6 @@
   (define (operand-compatible-with-opsyntax? operand opsyntax opsize mode)
     ;; FIXME: no need to change into boolean here?
     (if ((vector-ref opsyntax 1) operand opsize mode) #t #f))
-
-;;   (define (opsyntax-default-operand-size opsyntax mode)
-;;     (if (and (eq? (vector-ref opsyntax 0) 'operand-size64)
-;;              (= mode 64))
-;;         64
-;;         #f))
 
 ;;; Opcode map transformation
 
