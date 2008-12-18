@@ -4,7 +4,8 @@ This documents the (se weinholt assembler x86) library for R6RS
 Scheme.
 
 It’s not yet ready to use! Features are missing and it has not been
-debugged. Lots of instructions can't be generated.
+debugged. Lots of instructions can’t be generated. And this manual
+needs some QA.
 
 * LICENSING
 Copyright © 2008 Göran Weinholt <goran@weinholt.se>
@@ -37,12 +38,15 @@ This could be useful to make it easier to use gdb.
 * Basic operation of the assembler
 (assemble '((cli))) => #vu8(250)
 
+See the file documentation/x86-demo.sps for a program that assembles a
+Multiboot kernel, which can be loaded by e.g. GNU GRUB.
+
 * Output format
 The output format is currently a raw binary without headers or
 anything.
 
 * Syntax
-The instruction mnemonic and operand order is like in Intel's
+The instruction mnemonic and operand order is like in Intel’s
 syntax: in general there is no size suffix and the first operand is
 the destination.
 
@@ -104,9 +108,10 @@ Branch instructions can also be given special RIP relative
 expressions, which directly specify the branch offset operand.
 
 *** Expression examples
-hello (%utf8z "Not Hello world...\n")
+(%label hello) 
+(%utf8z "Not Hello world...\n")
 
-main
+(%label main)
 (push (+ hello 4))  ; The label “hello” + 4 bytes
 (call printf)       ; Prints “Hello world...”
 (sub esp 4)         ; 4 is also an expression
@@ -154,7 +159,7 @@ esp/rsp can not be used as an index register.
 Not implemented.
 
 ** Mnemonics
-Mnemonics are generally the same as in Intel's or AMD's manuals.
+Mnemonics are generally the same as in Intel’s or AMD’s manuals.
 
 Prefixes work by prepending the prefix to the instruction mnenonic,
 separated by a dot. These are available: lock. rep. repz. repnz. repe.
@@ -176,10 +181,7 @@ or 64. Default is 16.
 
 *** (%label name)
 This creates the label “name” at the current value of the instruction
-pointer. As a short-hand you can omit the (%label _) part and just
-write the name.
-
-FIXME: i might decide that that's stupid..
+pointer.
 
 *** (%comm name size alignment)
 Allocates “size” bytes in the .bss section and assigns this location
