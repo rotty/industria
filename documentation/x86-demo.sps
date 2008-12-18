@@ -195,7 +195,7 @@
      (%vu8 ,color-table)
      (%label message)
      (%utf8z
-      "This is a copper bar effect. It requires good VGA hardware. Press ESC to reboot")
+      "This is a copper bar effect. It requires good VGA hardware. Press ESC to reboot.")
 
 ;;; Uninitialized data gets allocated here
      (%label bss)

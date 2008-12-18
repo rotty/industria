@@ -112,9 +112,8 @@
                                              (newline)
                                              (exit))))))
                         ;; Phony seek
-                        (get-bytevector-n (elf-input-file-port image)
-                                          (- (elf-section-header-offset text)
-                                             (port-position (elf-input-file-port image))))
+                        (set-port-position! (elf-input-file-port image)
+                                            (elf-section-header-offset text))
                         (disassemble (elf-input-file-port image)
                                      mode color
                                      (+ (elf-section-header-offset text)
