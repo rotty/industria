@@ -266,6 +266,8 @@
         (defop (Ms o opsize mode (mem #f))
           ;; Segment descriptor
           (and (memory? o) (not (memory-datasize o))))
+        (defop (M o opsize mode (mem #f))
+          (memory? o))
 
         ;; Destination operand for the string instructions
         (defop (Yv o opsize mode (#f operand-size))
