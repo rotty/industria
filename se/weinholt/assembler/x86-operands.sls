@@ -559,13 +559,15 @@
             (else
              (let ((operands (map eval-expr (cdr expr))))
                (and (for-all number? operands)
+                    ;; Maybe EVAL could be used here
                     (case (car expr)
                       ((+) (apply + operands))
                       ((-) (apply - operands))
                       ((bitwise-and) (apply bitwise-and operands))
                       ((bitwise-ior) (apply bitwise-ior operands))
-                      ((<<) (apply bitwise-arithmetic-shift-left operands))
-                      ((>>) (apply bitwise-arithmetic-shift-right operands)))))))))
+                      ((<< bitwise-arithmetic-shift-left) (apply bitwise-arithmetic-shift-left operands))
+                      ((>> bitwise-arithmetic-shift-right) (apply bitwise-arithmetic-shift-right operands))
+                      ((bitwise-bit-field) (apply bitwise-bit-field operands)))))))))
 
   (define (build-expression op mode)
     (define (check-syntax op)
@@ -639,7 +641,11 @@
                   (cond ((eq? (car op) 'far)
                          ;; Far pointer
                          (build-far-pointer (cadr op) (caddr op) mode))
-                        ((memq (car op) '(+ - bitwise-ior bitwise-and << >>))
+                        ((memq (car op) '(+ - << >>
+                                            bitwise-ior bitwise-and
+                                            bitwise-bit-field
+                                            bitwise-arithmetic-shift-left
+                                            bitwise-arithmetic-shift-right))
                          ;; Expression
                          (build-expression op mode))
                         (else

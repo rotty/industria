@@ -43,6 +43,9 @@
       ((64) (let ((bv (make-bytevector 8)))
               (bytevector-s64-set! bv 0 imm (endianness little))
               bv))
+      ((128) (let ((bv (make-bytevector 16)))
+              (bytevector-sint-set! bv 0 imm (endianness little) 16)
+              bv))
       (else
        (error 'number->bytevector
               "Unknown size" size))))

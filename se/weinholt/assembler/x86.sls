@@ -268,6 +268,10 @@
           (and (memory? o) (not (memory-datasize o))))
         (defop (M o opsize mode (mem #f))
           (memory? o))
+        (defop (Mp o opsize mode (mem #f))
+          ;; FIXME: far pointer, check the size and all. The operand
+          ;; size override is also valid here actually.
+          (memory? o))
 
         ;; Destination operand for the string instructions
         (defop (Yv o opsize mode (#f operand-size))
@@ -1013,7 +1017,8 @@
                   ((%u8) 8)
                   ((%u16) 16)
                   ((%u32) 32)
-                  ((%u64) 64))))
+                  ((%u64) 64)
+                  ((%u128) 128))))
       (cond ((bytevector? imm)
              (put-bytevector (assembler-state-port state) imm)
              imm)
@@ -1109,7 +1114,7 @@
        (assembler-state-comm-set! state (cons (cdr instr)
                                               (assembler-state-comm state)))
        instr)
-      ((%u8 %u16 %u32 %u64)
+      ((%u8 %u16 %u32 %u64 %u128)
        (let ((pos (port-position (assembler-state-port state)))
              (operands (translate-operands (cdr instr) (assembler-state-mode state))))
          (let ((i (map (lambda (b) (put-immediate b (car instr) state))
