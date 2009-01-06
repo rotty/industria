@@ -49,9 +49,9 @@
                       ((invalid-opcode? con)
                        (list 'bad:
                              (condition-message con))))
-                     (get-instruction p mode
-                                      (lambda x
-                                        (set! tagged-bytes (cons x tagged-bytes))))))
+                (get-instruction p mode
+                                 (lambda x
+                                   (set! tagged-bytes (cons x tagged-bytes))))))
            (new-pos (port-position p)))
       (unless (or (eof-object? i)
                   (and end-position (> new-pos end-position)))
