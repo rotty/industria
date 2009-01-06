@@ -141,25 +141,23 @@
           (guard (con
                   ((i/o-decoding-error? con)
                    (bytevector->string x (make-transcoder *fallback-codec*))))
-                 (bytevector->string x (make-transcoder *incoming-codec*
-                                                        (eol-style none)
-                                                        (error-handling-mode raise)))))
+            (bytevector->string x (make-transcoder *incoming-codec*
+                                                   (eol-style none)
+                                                   (error-handling-mode raise)))))
         parameters)))
 
 ;; main loop
-(call-with-values
-    (lambda () (tcp-connect *server-hostname* *server-port*))
-  (lambda (out in)
-    (set! *server-out* out)
-    (fmt 'NICK *nickname*)
-    (fmt 'USER *username* 0 "*" *realname*)
-    (let lp ()
-      (let ((line (binary-get-line in)))
-        (cond ((eof-object? line)
-               (display "The server hung up on me!\n"))
-              (else
-               (call-with-values
-                   (lambda ()
-                     (parse-message-bytevector line))
-                 transcode-message)
-               (lp)))))))
+(let-values (((out in) (tcp-connect *server-hostname* *server-port*)))
+  (set! *server-out* out)
+  (fmt 'NICK *nickname*)
+  (fmt 'USER *username* 0 "*" *realname*)
+  (let lp ()
+    (let ((line (binary-get-line in)))
+      (cond ((eof-object? line)
+             (display "The server hung up on me!\n"))
+            (else
+             (call-with-values
+               (lambda ()
+                 (parse-message-bytevector line))
+               transcode-message)
+             (lp))))))
