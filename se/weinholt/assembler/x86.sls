@@ -1,6 +1,6 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
 ;; Assembler for the Intel x86-16/32/64 instruction set.
-;; Copyright © 2008 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -634,7 +634,6 @@
                   (fucomip . (fucomip st0 st1))
                   (fucomp . (fucomp st1))
                   (fxch . (fxch st0 st1))))
-
       tmp))
 
   (define (find-instruction-encoding instr mode prefixes)
@@ -955,19 +954,17 @@
                               (unless disp
                                 (print "No satisfaction: " disp)
                                 (assembler-state-relocs-set! state #t))
-                              (call-with-values
-                                  (lambda ()
-                                    (encode-memory (memory-addressing-mode o)
-                                                   (or disp #x100) ;bigger than disp8
-                                                   (memory-scale o)
-                                                   (memory-index o)
-                                                   (memory-base o)))
-                                (lambda (disp SIB ModR/M* REX*)
-                                  (lp (cdr operands)
-                                      (cdr opsyntax)
-                                      (fxior REX REX*)
-                                      (fxior (or ModR/M 0) ModR/M*)
-                                      SIB disp)))))
+                              (let-values (((disp SIB ModR/M* REX*)
+                                            (encode-memory (memory-addressing-mode o)
+                                                           (or disp #x100) ;bigger than disp8
+                                                           (memory-scale o)
+                                                           (memory-index o)
+                                                           (memory-base o))))
+                                (lp (cdr operands)
+                                    (cdr opsyntax)
+                                    (fxior REX REX*)
+                                    (fxior (or ModR/M 0) ModR/M*)
+                                    SIB disp))))
                            (else
                             ;; Implicit
                             (lp (cdr operands)
@@ -1039,45 +1036,45 @@
   ;; Software Optimization Guide for AMD64 Processors (rev: 3.06)
   (define amd64-nops
     '#(#vu8()
-           #vu8(#x90)
-           #vu8(#x66 #x90)
-           #vu8(#x66 #x66 #x90)
-           #vu8(#x66 #x66 #x66 #x90)
-           #vu8(#x66 #x66 #x90 #x66 #x90)
-           #vu8(#x66 #x66 #x90 #x66 #x66 #x90)
-           #vu8(#x66 #x66 #x66 #x90 #x66 #x66 #x90)
-           #vu8(#x66 #x66 #x66 #x90 #x66 #x66 #x66 #x90)
-           #vu8(#x66 #x66 #x90 #x66 #x66 #x90 #x66 #x66 #x90)))
+       #vu8(#x90)
+       #vu8(#x66 #x90)
+       #vu8(#x66 #x66 #x90)
+       #vu8(#x66 #x66 #x66 #x90)
+       #vu8(#x66 #x66 #x90 #x66 #x90)
+       #vu8(#x66 #x66 #x90 #x66 #x66 #x90)
+       #vu8(#x66 #x66 #x66 #x90 #x66 #x66 #x90)
+       #vu8(#x66 #x66 #x66 #x90 #x66 #x66 #x66 #x90)
+       #vu8(#x66 #x66 #x90 #x66 #x66 #x90 #x66 #x66 #x90)))
 
   ;; Software Optimization Guide for AMD Family 10h Processors (rev:
   ;; 3.06)
   (define amd64-10h-nops
     '#(#vu8()
-           #vu8(#x90)
-           #vu8(#x66 #x90)
-           #vu8(#x0f #x1f #x00)
-           #vu8(#x0f #x1f #x40 #x00)
-           #vu8(#x0f #x1f #x44 #x00 #x00)
-           #vu8(#x66 #x0f #x1f #x44 #x00 #x00)
-           #vu8(#x0f #x1f #x80 #x00 #x00 #x00 #x00)
-           #vu8(#x0f #x1f #x84 #x00 #x00 #x00 #x00 #x00)
-           #vu8(#x66 #x0f #x1f #x84 #x00 #x00 #x00 #x00 #x00)
-           #vu8(#x66 #x66 #x0f #x1f #x84 #x00 #x00 #x00 #x00 #x00)
-           #vu8(#x66 #x66 #x66 #x0f #x1f #x84 #x00 #x00 #x00 #x00 #x00)))
+       #vu8(#x90)
+       #vu8(#x66 #x90)
+       #vu8(#x0f #x1f #x00)
+       #vu8(#x0f #x1f #x40 #x00)
+       #vu8(#x0f #x1f #x44 #x00 #x00)
+       #vu8(#x66 #x0f #x1f #x44 #x00 #x00)
+       #vu8(#x0f #x1f #x80 #x00 #x00 #x00 #x00)
+       #vu8(#x0f #x1f #x84 #x00 #x00 #x00 #x00 #x00)
+       #vu8(#x66 #x0f #x1f #x84 #x00 #x00 #x00 #x00 #x00)
+       #vu8(#x66 #x66 #x0f #x1f #x84 #x00 #x00 #x00 #x00 #x00)
+       #vu8(#x66 #x66 #x66 #x0f #x1f #x84 #x00 #x00 #x00 #x00 #x00)))
 
   ;; Intel® 64 and IA-32 Architectures Optimization Reference Manual
   ;; (November 2007)
   (define intel32-nops
     '#(#vu8()
-           #vu8(#x90)
-           #vu8(#x89 #xC0)            ;REG
-           #vu8(#x8D #x40 #x00)       ;REG
-           #vu8(#x0F #x1F #x40 #x00)
-           #vu8(#x0F #x1F #x44 #x00 #x00)
-           #vu8(#x8D #x80 #x00 #x00 #x00 #x00) ;REG
-           #vu8(#x0F #x1F #x80 #x00 #x00 #x00 #x00)
-           #vu8(#x0F #x1F #x84 #x00 #x00 #x00 #x00 #x00)
-           #vu8(#x66 #x0F #x1F #x84 #x00 #x00 #x00 #x00 #x00)))
+       #vu8(#x90)
+       #vu8(#x89 #xC0)                  ;REG
+       #vu8(#x8D #x40 #x00)             ;REG
+       #vu8(#x0F #x1F #x40 #x00)
+       #vu8(#x0F #x1F #x44 #x00 #x00)
+       #vu8(#x8D #x80 #x00 #x00 #x00 #x00) ;REG
+       #vu8(#x0F #x1F #x80 #x00 #x00 #x00 #x00)
+       #vu8(#x0F #x1F #x84 #x00 #x00 #x00 #x00 #x00)
+       #vu8(#x66 #x0F #x1F #x84 #x00 #x00 #x00 #x00 #x00)))
 
   (define (choose-nops table n reg mode)
     ;; Generate a list of bytevectors containing NOP instructions of
