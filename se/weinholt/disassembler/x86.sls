@@ -455,6 +455,9 @@ translate-displacement."
         (case mod
           ((#b00) (cond ((and (or (fx=? address-size 32) sib?)
                               (fx=? (bitwise-and register #b111) #b101))
+                         ;; FIXME: sign-extend these instead of giving
+                         ;; them as negative numbers? At least if they
+                         ;; are large enough...
                          (list (get-s32/collect port collect (tag disp))))
                         ((fx=? (bitwise-and register #b111) #b101)
                          (list 'rip (get-s32/collect port collect (tag disp))))
