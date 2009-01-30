@@ -37,46 +37,47 @@
 
 
 ;; Memory-memory move
-(test '#vu8(#x18 #x00 #x90 #x11 #x22)      '(movw #x1122        (mem+ sp -16)))
-(test '#vu8(#x18 #x01 #x90 #x11 #x22)      '(movw (mem+ #x1122) (mem+ sp -16)))
-(test '#vu8(#x18 #x02 #x90 #x9f)           '(movw (mem+ sp -16) (mem+ sp -1)))
-(test '#vu8(#x18 #x03 #x11 #x22 #x33 #x44) '(movw #x1122        (mem+ #x3344)))
-(test '#vu8(#x18 #x04 #x11 #x22 #x33 #x44) '(movw (mem+ #x1122) (mem+ #x3344)))
-(test '#vu8(#x18 #x05 #x90 #x11 #x22)      '(movw (mem+ sp -16) (mem+ #x1122)))
+(test '#vu8(#x18 #x00 #x90 #x11 #x22)      '(movw #x1122   (-16 sp)))
+(test '#vu8(#x18 #x01 #x90 #x11 #x22)      '(movw (#x1122) (-16 sp)))
+(test '#vu8(#x18 #x02 #x90 #x9f)           '(movw (-16 sp) (-1 sp)))
+(test '#vu8(#x18 #x03 #x11 #x22 #x33 #x44) '(movw #x1122   (#x3344)))
+(test '#vu8(#x18 #x04 #x11 #x22 #x33 #x44) '(movw (#x1122) (#x3344)))
+(test '#vu8(#x18 #x05 #x90 #x11 #x22)      '(movw (-16 sp) (#x1122)))
 
-(test '#vu8(#x18 #x08 #x90 #x42)           '(movb #x42          (mem+ sp -16)))
-(test '#vu8(#x18 #x09 #x90 #x11 #x22)      '(movb (mem+ #x1122) (mem+ sp -16)))
-(test '#vu8(#x18 #x0a #x90 #x9f)           '(movb (mem+ sp -16) (mem+ sp -1)))
-(test '#vu8(#x18 #x0b #x42 #x11 #x22)      '(movb #x42          (mem+ #x1122)))
-(test '#vu8(#x18 #x0c #x11 #x22 #x33 #x44) '(movb (mem+ #x1122) (mem+ #x3344)))
-(test '#vu8(#x18 #x0d #x90 #x11 #x22)      '(movb (mem+ sp -16) (mem+ #x1122)))
+(test '#vu8(#x18 #x08 #x90 #x42)           '(movb #x42     (-16 sp)))
+(test '#vu8(#x18 #x09 #x90 #x11 #x22)      '(movb (#x1122) (-16 sp)))
+(test '#vu8(#x18 #x0a #x90 #x9f)           '(movb (-16 sp) (-1 sp)))
+(test '#vu8(#x18 #x0b #x42 #x11 #x22)      '(movb #x42     (#x1122)))
+(test '#vu8(#x18 #x0c #x11 #x22 #x33 #x44) '(movb (#x1122) (#x3344)))
+(test '#vu8(#x18 #x0d #x90 #x11 #x22)      '(movb (-16 sp) (#x1122)))
 
 ;; Various
 (test '#vu8(#x81 #x07) '(cmpa 7))
 
 
-(test '#vu8(#x22 #xfe) '(bhi (+ pc -2)))
-(test '#vu8(#x15 #x00) '(jsr (mem+ x 0)))
+(test '#vu8(#x22 #xfe) '(bhi (-2 pc)))
+(test '#vu8(#x15 #x00) '(jsr (x)))
 
 (test '#vu8(#x4A #x10 #x24 #x24) '(call #x1024 #x24))
 
 
 ;; A few adressing modes
-(test '#vu8(#xA6 #x8f) '(ldaa (mem+ sp 15)))
-(test '#vu8(#xA6 #x77) '(ldaa (mem+ (post+ y 8))))
-(test '#vu8(#xA6 #x78) '(ldaa (mem+ (post- y 8))))
+(test '#vu8(#xA6 #x8f) '(ldaa (15 sp)))
+(test '#vu8(#xA6 #x77) '(ldaa (post+ 8 y)))
+(test '#vu8(#xA6 #x78) '(ldaa (post- 8 y)))
 
-;; Indirect... some of these should probably be something different.
-(test '#vu8(#xA6 #xE3 #x2F #xFF) '(ldaa (mem+ #x2FFF x)))
-(test '#vu8(#xA6 #xEB #x2F #xFF) '(ldaa (mem+ #x2FFF y)))
-(test '#vu8(#xA6 #xF3 #x2F #xFF) '(ldaa (mem+ #x2FFF sp)))
-(test '#vu8(#xA6 #xFB #x2F #xFF) '(ldaa (mem+ #x2FFF pc)))
-(test '#vu8(#xA6 #xE7) '(ldaa (mem+ d x)))
-(test '#vu8(#xA6 #xEF) '(ldaa (mem+ d y)))
-(test '#vu8(#xA6 #xF7) '(ldaa (mem+ d sp)))
-(test '#vu8(#xA6 #xFF) '(ldaa (mem+ d pc)))
-(test '#vu8(#xA6 #xE4) '(ldaa (mem+ a x)))
-(test '#vu8(#xA6 #xEC) '(ldaa (mem+ a y)))
-(test '#vu8(#xA6 #xF4) '(ldaa (mem+ a sp)))
-(test '#vu8(#xA6 #xFD) '(ldaa (mem+ b pc)))
-(test '#vu8(#xA6 #xFE) '(ldaa (mem+ d pc)))
+;; Indirect addressing. For example: a 16-bit pointer is read from the
+;; location #x2FFF+x.
+(test '#vu8(#xA6 #xE3 #x2F #xFF) '(ldaa ((#x2FFF x))))
+(test '#vu8(#xA6 #xEB #x2F #xFF) '(ldaa ((#x2FFF y))))
+(test '#vu8(#xA6 #xF3 #x2F #xFF) '(ldaa ((#x2FFF sp))))
+(test '#vu8(#xA6 #xFB #x2F #xFF) '(ldaa ((#x2FFF pc))))
+(test '#vu8(#xA6 #xE7) '(ldaa ((d x))))
+(test '#vu8(#xA6 #xEF) '(ldaa ((d y))))
+(test '#vu8(#xA6 #xF7) '(ldaa ((d sp))))
+(test '#vu8(#xA6 #xFF) '(ldaa ((d pc))))
+(test '#vu8(#xA6 #xE4) '(ldaa (a x)))
+(test '#vu8(#xA6 #xEC) '(ldaa (a y)))
+(test '#vu8(#xA6 #xF4) '(ldaa (a sp)))
+(test '#vu8(#xA6 #xFD) '(ldaa (b pc)))
+(test '#vu8(#xA6 #xFE) '(ldaa (d pc)))

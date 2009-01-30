@@ -200,25 +200,24 @@
     (define (lookup-xysp reg)
       (case reg ((#b00) 'x) ((#b01) 'y) ((#b10) 'sp) ((#b11) 'pc)))
     (cond ((xb-indexed-indirect? xb)
-           ;; 16-bit offset indexed-indirect (mem+ (mem+ ...)) perhaps
-           (list (get-u16/collect port collect 'disp)
-                 (lookup-xysp (fxbit-field xb 3 5))))
+           ;; 16-bit offset indexed-indirect (points to a pointer).
+           (list (list (get-u16/collect port collect 'disp)
+                       (lookup-xysp (fxbit-field xb 3 5)))))
 
           ((xb-d-indexed-indirect? xb)
-           ;; Accumulator D offset indexed-indirect. Might be (mem+ (mem+ ...))
-           (list 'd
-                 (lookup-xysp (fxbit-field xb 3 5))))
+           ;; Accumulator D offset indexed-indirect (points to a pointer).
+           (list (list 'd (lookup-xysp (fxbit-field xb 3 5)))))
 
           ((xb-constant-offset? xb)
            ;; Constant offset
-           (list (lookup-xysp (fxbit-field xb 3 5))
-                 (if (fxbit-set? xb 1)
+           (list (if (fxbit-set? xb 1)
                      (get-s16/collect port collect 'disp)
                      (let ((disp (get-u8/collect port collect 'disp)))
                        ;; 9-bit offset
                        (if (fxbit-set? xb 0)
-                           (- disp #x100) ;FIXME: verify
-                           disp)))))
+                           (- disp #x100) ;TODO: verify
+                           disp)))
+                 (lookup-xysp (fxbit-field xb 3 5))))
 
           ((xb-accumulator-offset? xb)
            ;; Accumulator offset
@@ -231,27 +230,30 @@
 
           ((xb-5bit-constant-offset? xb)
            ;; 5-bit constant offset
-           (list (lookup-xysp (fxbit-field xb 6 8))
-                 (if (fxbit-set? xb 4)
-                     (- (fxbit-field xb 0 4) #x10)
-                     (fxbit-field xb 0 4))))
+           (let ((disp (if (fxbit-set? xb 4)
+                           (- (fxbit-field xb 0 4) #x10)
+                           (fxbit-field xb 0 4)))
+                 (reg (lookup-xysp (fxbit-field xb 6 8))))
+             (if (zero? disp)
+                 (list reg)
+                 (list disp reg))))
 
           ((xb-pre/post-inc/dec? xb)
            ;; Auto precrement, preincrement, postdecrement,
            ;; or postincrement. Crummy syntax here.
-           (list (let ((disp (fx+ 1 (fxbit-field xb 0 3)))
-                       (reg (lookup-xysp (fxbit-field xb 6 8))))
-                   (if (fxbit-set? xb 3)
-                       (list (if (fxbit-set? xb 4) 'post- 'pre-) reg (- 9 disp))
-                       (list (if (fxbit-set? xb 4) 'post+ 'pre+) reg disp)))))))
+           (let ((disp (fx+ 1 (fxbit-field xb 0 3)))
+                 (reg (lookup-xysp (fxbit-field xb 6 8))))
+             (if (fxbit-set? xb 3)
+                 (list (if (fxbit-set? xb 4) 'post- 'pre-) (- 9 disp) reg)
+                 (list (if (fxbit-set? xb 4) 'post+ 'pre+) disp reg))))))
 
   (define (get-instruction port collect)
     (define (get-operand am)
       (case am
         ((rel8)
-         (list '+ 'pc (get-s8/collect port collect 'offset)))
+         (list (get-s8/collect port collect 'offset) 'pc))
         ((rel16)
-         (list '+ 'pc (get-s16/collect port collect 'offset)))
+         (list (get-s16/collect port collect 'offset) 'pc))
 
         ((opr8i page)
          (get-u8/collect port collect 'immediate))
@@ -259,15 +261,15 @@
          (get-u16/collect port collect 'immediate))
 
         ((opr8a)
-         (list 'mem+ (get-u8/collect port collect 'disp)))
+         (list (get-u8/collect port collect 'disp)))
         ((opr16a)
-         (list 'mem+ (get-u16/collect port collect 'disp)))
+         (list (get-u16/collect port collect 'disp)))
 
         ((oprx0_xysp)
          (let ((xb (get-u8/collect port collect 'disp)))
            (unless (xb-oprx0_xysp? xb)
              (raise-UD "Unallowed addressing mode"))
-           (cons 'mem+ (get-memory xb port collect))))
+           (get-memory xb port collect)))
 
         ((idx12)
          ;; oprx0_xysp; oprx9,xysp; oprx16,xysp
@@ -275,10 +277,10 @@
            (when (or (xb-indexed-indirect? xb)
                      (xb-d-indexed-indirect? xb))
              (raise-UD "Unallowed addressing mode"))
-           (cons 'mem+ (get-memory (get-u8/collect port collect 'disp) port collect))))
+           (get-memory (get-u8/collect port collect 'disp) port collect)))
 
         ((mem)
-         (cons 'mem+ (get-memory (get-u8/collect port collect 'disp) port collect)))
+         (get-memory (get-u8/collect port collect 'disp) port collect))
 
         (else (list 'fixme am))))
     (define (get-operands opcode-table opcode)
@@ -313,7 +315,10 @@
                             (else (raise-UD "Unknown operation in loop primitive postbyte" lb)))))
                  (list op reg (list '+ 'pc (if (zero? sign) off (- off #x100))))))
               ((memq (car instr) '(movb* movw*))
-               ;; Fix for instructions with reversed operand order
+               ;; Fix for instructions with reversed operand order.
+               ;; Also, on the MC68HC2 an offset needs to be added to
+               ;; PC-relative offsets for these instructions, but that
+               ;; is not done... see their reference manual.
                (cons (if (eq? (car instr) 'movb*) 'movb 'movw)
                      (reverse (map-in-order get-operand (cdr instr)))))
               (else
