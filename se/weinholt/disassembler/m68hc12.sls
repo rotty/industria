@@ -18,11 +18,9 @@
 ;; Disassembler for the Motorola 68HC12, 68HCS12, etc. Sometimes
 ;; called CPU12.
 
-;; XXX: There are some unimplemented parts of the ISA, e.g. the TFR
-;; postbyte and the addressing modes are probably completely wrong.
-
 ;; TODO: Fix raise-UD to raise the same condition as the x86
-;; disassembler.
+;; disassembler and the collect-stuff is not well thought-out. Some
+;; addressing modes might be wrong.
 
 (library (se weinholt disassembler m68hc12)
   (export get-instruction)
@@ -124,7 +122,7 @@
        (cpd mem) (cpy mem) (cpx mem) (cps mem)
        ;; B0
        (suba opr16a) (cmpa opr16a) (sbca opr16a) (subd opr16a)
-       (anda opr16a) (bita opr16a) (ldaa opr16a) tfr
+       (anda opr16a) (bita opr16a) (ldaa opr16a) tfr/exg/sex
        (eora opr16a) (adca opr16a) (oraa opr16a) (adda opr16a)
        (cpd opr16a) (cpy opr16a) (cpx opr16a) (cps opr16a)
        ;; C0
@@ -288,10 +286,20 @@
                         (vector-ref opcode-table opcode))))
         (cond ((not instr)
                (list 'trap opcode))
-              ((eq? instr 'tfr)
-               ;; FIXME: This byte specifies two registers
-               (get-u8)
-               (list 'tfr 'fixme1 'fixme2))
+              ((eq? instr 'tfr/exg/sex)
+               (let ((pb (get-u8/collect port collect 'tfr/exg/sex)))
+                 (when (fxbit-set? pb 3)
+                   (raise-UD "Bad transfer/exchange postbyte"))
+                 (let ((r1 (vector-ref '#(a b ccr tmp3 d x y sp)
+                                       (fxbit-field pb 4 7)))
+                       (r2 (vector-ref '#(a b ccr tmp2 d x y sp)
+                                       (fxbit-field pb 0 4))))
+                   (list (cond ((fxbit-set? pb 7) 'exg)
+                               ((and (memq r1 '(a b ccr))
+                                     (not (memq r2 '(a b ccr))))
+                                'sex)
+                               (else 'tfr))
+                         r1 r2))))
               ((eq? instr 'loop)
                (let* ((lb (fxand #b11110111 (get-u8/collect port collect 'opcode)))
                       (off (get-u8/collect port collect 'offset))
@@ -300,7 +308,9 @@
                              ((#b000) 'a)
                              ((#b001) 'b)
                              ((#b010
-                               #b011) (raise-UD "Bad register in loop primitive postbyte" lb))
+                               #b011)
+                              (raise-UD "Bad register in loop primitive postbyte"
+                                        lb))
                              ((#b100) 'd)
                              ((#b101) 'x)
                              ((#b110) 'y)
@@ -312,7 +322,9 @@
                             ((3) 'tbne)
                             ((4) 'ibeq)
                             ((5) 'ibne)
-                            (else (raise-UD "Unknown operation in loop primitive postbyte" lb)))))
+                            (else
+                             (raise-UD "Unknown operation in loop primitive postbyte"
+                                       lb)))))
                  (list op reg (list '+ 'pc (if (zero? sign) off (- off #x100))))))
               ((memq (car instr) '(movb* movw*))
                ;; Fix for instructions with reversed operand order.

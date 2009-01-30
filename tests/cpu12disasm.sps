@@ -81,3 +81,18 @@
 (test '#vu8(#xA6 #xF4) '(ldaa (a sp)))
 (test '#vu8(#xA6 #xFD) '(ldaa (b pc)))
 (test '#vu8(#xA6 #xFE) '(ldaa (d pc)))
+
+;; Transfer/exchange
+
+(test '#vu8(#xB7 #x00) '(tfr a a))
+(test '#vu8(#xB7 #x01) '(tfr a b))
+(test '#vu8(#xB7 #x02) '(tfr a ccr))
+(test '#vu8(#xB7 #x03) '(sex a tmp2))
+(test '#vu8(#xB7 #x05) '(sex a x))
+(test '#vu8(#xB7 #x30) '(tfr tmp3 a))
+(test '#vu8(#xB7 #x27) '(sex ccr sp))
+(test '#vu8(#xB7 #xF7) '(exg sp sp))
+(test '#vu8(#xB7 #x77) '(tfr sp sp))
+(test '#vu8(#xB7 #xC1) '(exg d b))
+(test '#vu8(#xB7 #xA2) '(exg ccr ccr))
+(test '#vu8(#xB7 #xB3) '(exg tmp3 tmp2))
