@@ -955,7 +955,7 @@
                             (let ((disp (eval-expression (memory-expr o)
                                                          (assembler-state-labels state))))
                               (unless disp
-                                (print "No satisfaction: " disp)
+                                (print "No satisfaction: " (memory-expr o))
                                 (assembler-state-relocs-set! state #t))
                               (let-values (((disp SIB ModR/M* REX*)
                                             (encode-memory (memory-addressing-mode o)
@@ -1188,13 +1188,16 @@
            i)))))
 
   (define (assemble code)
+    ;; FIXME: The phases here should be more separate, with an initial
+    ;; parse phase.
     (let ((state (make-assembler-state 16
                                        #f
                                        0
                                        (make-eq-hashtable)
                                        #f
                                        '())))
-      (let lp ((code code))
+      (let lp ((code code)
+               (labels #f))
         (call-with-values open-bytevector-output-port
           (lambda (tmpport extract)
             (assembler-state-port-set! state tmpport)
@@ -1204,29 +1207,32 @@
               (print "% new code: ")
               (for-each (lambda (i) (print "- " i)) newcode)
               (print "% labels: ")
-              (call-with-values (lambda ()
-                                  (hashtable-entries (assembler-state-labels state)))
-                (lambda (keys vals)
-                  (vector-for-each
-                   (lambda (x) (print "- " (car x) " => #x" (number->string (cdr x) 16)))
-                   (vector-sort
-                    (lambda (x y) (< (cdr x) (cdr y)))
-                    (vector-map cons keys vals)))))
-              ;; Loop until all labels are known and FIXME: until
-              ;; labels aren't changing. Optimize displacements
-              ;; somehow...
-              (cond ((assembler-state-relocs state)
-                     (print "Some labels are unknown! Assembling again...")
-                     (set! state (make-assembler-state 16
-                                                       #f
-                                                       0
-                                                       (assembler-state-labels state)
-                                                       #f
-                                                       '()))
-                     (lp newcode))
-                    (else
-                     (print "Assembly complete.")
-                     (extract)))))))))
+              (let*-values (((keys vals) (hashtable-entries (assembler-state-labels state)))
+                            ((newlabels) (cons keys vals)))
+                (vector-for-each
+                 (lambda (x) (print "- " (car x) " => #x" (number->string (cdr x) 16)))
+                 (vector-sort
+                  (lambda (x y) (< (cdr x) (cdr y)))
+                  (vector-map cons keys vals)))
+                
+                ;; Loop until all labels are known and they aren't
+                ;; changing anymore. Optimize displacements somehow...
+                ;; FIXME: the trouble now is that unknown labels, that
+                ;; are not forward references, cause this loop to
+                ;; never terminate.
+                (cond ((or (assembler-state-relocs state)
+                           (not (equal? labels newlabels)))
+                       (print "Some labels are unknown or changed! Assembling again...")
+                       (set! state (make-assembler-state 16
+                                                         #f
+                                                         0
+                                                         (assembler-state-labels state)
+                                                         #f
+                                                         '()))
+                       (lp newcode newlabels))
+                      (else
+                       (print "Assembly complete.")
+                       (extract))))))))))
 
 
 ;;   (begin
