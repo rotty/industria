@@ -34,7 +34,10 @@
 
 ;;; TODO
 
-;; Optimize: Jz, Jb and RIP-relative displacements.
+;; Optimize: Jz, Jb and RIP-relative displacements. Also pick the
+;; shorter instruction automatically here:
+;; 81E7F8FFFFFF  (and edi #xFFFFFFF8)  ; #xFFFFFFF8
+;; 83E7F8        (and edi #xFFFFFFF8)  ; -8
 
 ;; FIXME: when evaluating expressions and a label is unknown in the
 ;; second pass, give an error.
@@ -1082,7 +1085,7 @@
     ;; register with the oldest value.
     (let lp ((n n)
              (bvs '()))
-      (if (zero? n) bvs
+      (if (zero? n) (reverse bvs)
           (let ((pad (min (- (vector-length table) 1) n)))
             (print "pad: " pad)
             (lp (- n pad)
