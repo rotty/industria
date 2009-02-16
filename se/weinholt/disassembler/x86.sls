@@ -1,6 +1,6 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
 ;; Disassembler for the Intel x86-16/32/64 instruction set.
-;; Copyright © 2008 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -40,6 +40,12 @@
 ;; for a specific instruction stream (and it's not obvious how a
 ;; future processor would not), then this library should raise an
 ;; exception with the &invalid-opcode condition.
+
+;; Instructions with different semanics should always look different,
+;; e.g. sysret, where a REX.W prefix modifies the semantics. So for
+;; 64-bit operand sizes "sysretq" is returned. If the instruction has
+;; an operand that can be used to decide the operand size, no such
+;; suffix is necessary.
 
 ;;; Usage
 

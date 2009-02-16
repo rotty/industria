@@ -1,6 +1,6 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
 ;; Opcode table for the Intel 80x86 processor
-;; Copyright © 2008 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -474,7 +474,7 @@
          #f
          #(Mode #f (syscall))
          (clts)
-         #(Mode #f (sysret))
+         #(Mode #f #(Datasize (sysret) (sysret) (sysretq)))
          ;; 0F 08
          (invd)
          (wbinvd)
