@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2008 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -28,7 +28,7 @@
             build-expression eval-expression expression-in-range?
             far-pointer?
             far-pointer-seg far-pointer-offset
-            translate-operands)
+            translate-operands operand-labels)
     (import (rnrs)
             (se weinholt assembler x86-misc (1 0 (>= 0))))
 
@@ -274,7 +274,7 @@
                   (<= (- (expt 2 31)) x #x7FFFFFFF)
                   (<= #xFFFFFFFF80000000 x #xFFFFFFFFFFFFFFFF))
         (error 'encode-memory "Displacement can't be encoded" disp))
-      (number->bytevector x 32))
+      (number->bytevector (bitwise-and #xFFFFFFFF x) 32))
     (define (disp8 x) (number->bytevector x 8))
     (define rsp #b100)
     (define rbp #b101)
@@ -574,6 +574,15 @@
                       ((>> bitwise-arithmetic-shift-right) (apply bitwise-arithmetic-shift-right operands))
                       ((bitwise-bit-field) (apply bitwise-bit-field operands)))))))))
 
+  (define (expression-labels expr)
+    ;; Returns a list of all labels an expression refers to
+    (let lp ((code (expression-code expr)))
+      (cond ((integer? code) '())
+            ((eq? code 'wordsize) '())
+            ((symbol? code) (list code))
+            (else
+             (apply append (map lp (cdr code)))))))
+
   (define (build-expression op mode)
     (define (check-syntax op)
       ;; FIXME: use better syntax checking... or use EVAL?
@@ -642,7 +651,6 @@
                          (build-expression op mode))))
 
                  ((list? op)
-
                   (cond ((eq? (car op) 'far)
                          ;; Far pointer
                          (build-far-pointer (cadr op) (caddr op) mode))
@@ -663,5 +671,14 @@
                          op operands))))
          operands))
 
+  (define (operand-labels op)
+    (cond ((expression? op)
+           (expression-labels op))
+          ((far-pointer? op)
+           (expression-labels (far-pointer-offset op)))
+          ((memory? op)
+           (expression-labels (memory-expr op)))
+          (else
+           '())))
 
   )

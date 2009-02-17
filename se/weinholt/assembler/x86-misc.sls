@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2008 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -21,39 +21,37 @@
     (import (rnrs))
 
   (define (number->bytevector imm size)
-    "Takes a number that fits in the signed OR unsigned range of
-`size' bits."
+    ;; Takes a number that fits in the signed or unsigned range of
+    ;; `size' bits and encodes it in a bytevector of that many bits.
+    (unless (<= (- (expt 2 (- size 1))) imm (- (expt 2 size) 1))
+      (error 'number->bytevector "The given number does not fit in the given number of bits"
+             imm size))
     (case size
       ((8) (let ((bv (make-bytevector 1)))
-             ((if (<= 0 imm (- (expt 2 8) 1))
-                  bytevector-u8-set!
-                  bytevector-s8-set!)
-              bv 0 imm)
+             (bytevector-u8-set! bv 0 (bitwise-and imm #xff))
              bv))
       ((16) (let ((bv (make-bytevector 2)))
-              ((if (<= 0 imm (- (expt 2 16) 1))
-                   bytevector-u16-set!
-                   bytevector-s16-set!)
-               bv 0 imm (endianness little))
+              (bytevector-u16-set! bv 0 (bitwise-and imm #xffff) (endianness little))
               bv))
       ((32) (let ((bv (make-bytevector 4)))
-              ;; FIXME: does this work for the unsigned range??
-              (bytevector-s32-set! bv 0 imm (endianness little))
+              (bytevector-u32-set! bv 0 (bitwise-and imm #xffffffff) (endianness little))
               bv))
       ((64) (let ((bv (make-bytevector 8)))
-              (bytevector-s64-set! bv 0 imm (endianness little))
-              bv))
-      ((128) (let ((bv (make-bytevector 16)))
-              (bytevector-sint-set! bv 0 imm (endianness little) 16)
+              (bytevector-u64-set! bv 0 (bitwise-and imm #xffffffffffffffff) (endianness little))
               bv))
       (else
-       (error 'number->bytevector
-              "Unknown size" size))))
-
+       (let ((bv (make-bytevector (bitwise-arithmetic-shift-right size 3))))
+         (bytevector-uint-set! bv
+                               0
+                               (bitwise-and imm (- (bitwise-arithmetic-shift-left 1 size) 1))
+                               (endianness little)
+                               (bitwise-arithmetic-shift-right size 3))
+         bv))))
+  
   (define (make-modr/m mod reg r/m)
-      (fxior (fxarithmetic-shift-left (fxand mod #b11) 6)
-             (fxarithmetic-shift-left (fxand reg #b111) 3)
-             (fxand r/m #b111)))
+    (fxior (fxarithmetic-shift-left (fxand mod #b11) 6)
+           (fxarithmetic-shift-left (fxand reg #b111) 3)
+           (fxand r/m #b111)))
 
   (define (make-sib scale index base)
     (fxior (fxarithmetic-shift-left (case scale

@@ -146,9 +146,11 @@
                     (syntax-case x ()
                       ((defop (name operand operand-size mode (encoding opsize-prefix?))
                          test ...)
-                       (unless (memq (syntax->datum #'encoding) '(#f reg r/m implicit-r/m
-                                                                     destZ seg:off mem
-                                                                     imm imm8 imm16 immZ))
+                       (unless (memq (syntax->datum #'encoding)
+                                     '(#f reg r/m implicit-r/m
+                                          destZ destB
+                                          seg:off mem
+                                          imm imm8 imm16 immZ))
                          (syntax-violation 'defop "Bad encoding" x #'encoding))
                        ;; The first entry in the vector is
                        ;; 'operand-size if the operand is capable of
@@ -271,6 +273,8 @@
           (and (memory? o) (not (memory-datasize o))))
         (defop (M o opsize mode (mem #f))
           (memory? o))
+        (defop (Mb o opsize mode (mem #f))
+          (and (memory? o) (memq (memory-datasize o) '(#f 8))))
         (defop (Mp o opsize mode (mem #f))
           ;; FIXME: far pointer, check the size and all. The operand
           ;; size override is also valid here actually.
@@ -314,7 +318,11 @@
           ;; size override, doing so is not wise since it truncates
           ;; the instruction pointer. It also messes up the assembler
           ;; logic. So there's no support for it here.
-          (expression? o))
+          (and (expression? o)
+               (not (expression-in-range? o min-s8 max-s8 #f))))
+        (defop (Jb o opsize mode (destB #f))
+          (and (expression? o)
+               (expression-in-range? o min-s8 max-s8 #f)))
         (defop (Ap o opsize mode (seg:off #f))
           (far-pointer? o))
 
@@ -553,7 +561,7 @@
   (define instructions
     (let ((tmp (make-eq-hashtable)))
       (define (rough< x y)
-        (define (rough-count a)
+        (define (rough-count-encoding a)
           ;; TODO: redo all of this. get a perfect length count... see
           ;; that other comment.
           (fold-left (lambda (x y)
@@ -562,13 +570,37 @@
                                   ((eq? y 'data64) 1)
                                   (else 0))))
                      0 a))
-        (< (rough-count (vector-ref x 1))
-           (rough-count (vector-ref y 1))))
+        (define (rough-count-operands a)
+          ;; TODO: redo all of this. get a perfect length count... see
+          ;; that other comment.
+          (fold-left (lambda (x y)
+                       (+ x (cond ((symbol? y) 15) ;unknown operand encoding
+                                  (else
+                                   (case (vector-ref y 2)
+                                     ((implicit-r/m) 0)
+                                     ((reg r/m) 1/2)
+                                     ((destZ immZ imm) 4)
+                                     ((destB imm8) 1)
+                                     ((seg:off) 6)
+                                     ((mem) 4)
+                                     ((imm16) 2)
+                                     ((#f) 0)
+                                     (else
+                                      (print "ELSE: " y)
+                                      0))))))
+                     0 a))
+        ;; (print "-- " (vector-ref x 0) " -> " (rough-count-operands (vector-ref x 0))
+        ;;        )
+        ;; (print "== " (vector-ref y 1) " -> " (rough-count-encoding (vector-ref x 1)))
+        (< (+ (rough-count-operands (vector-ref x 0))
+              (rough-count-encoding (vector-ref x 1)))
+           (+ (rough-count-operands (vector-ref y 0))
+              (rough-count-encoding (vector-ref y 1)))))
       ;; The #x90 opcode didn't fit in the instruction table very
       ;; easily.
       (hashtable-set! tmp 'pause '(#(() ((prefix #xF3) #x90))))
       (hashtable-set! tmp 'nop '(#(() (#x90))))
-      (hashtable-set! tmp 'xchg '(#(,(map translate-opsyntax '(*rAX/r8 *rAX))
+      (hashtable-set! tmp 'xchg `(#(,(map translate-opsyntax '(*rAX/r8 *rAX))
                                     (#x90))))
       (walk-opcodes (lambda (instruction encoding)
                       (let ((mnemonic (car instruction)))
@@ -584,6 +616,7 @@
       (vector-for-each (lambda (mnemonic)
                          (hashtable-update! tmp mnemonic
                                             (lambda (instrs)
+                                              ;; (for-each print instrs)
                                               (list-sort rough< instrs))
                                             #f))
                        (hashtable-keys tmp))
@@ -703,7 +736,8 @@
                                         templates)))
                  (if (null? templates)
                      (try-pseudo #f)
-                     (let ((operands (translate-operands operands mode)))
+                     (let ((operands ;; (translate-operands operands mode)
+                            operands))
                        ;; TODO: a better idea might be to enumerate
                        ;; every possible way to encode each
                        ;; instruction, i.e. all operand sizes with
@@ -712,8 +746,8 @@
                        ;; mnemonic and how the operands could be
                        ;; encoded. Pre-determine which encoding is the
                        ;; most optimal for all combinations of
-                       ;; operands. Encoding an instruction then is
-                       ;; then like dispatching a method in a rather
+                       ;; operands. Encoding an instruction is then
+                       ;; like dispatching a method in a rather
                        ;; strange language with dispatching on
                        ;; function types. Just translate the types of
                        ;; the operands in the instruction and look it
@@ -834,6 +868,9 @@
                      (vector (or value 0) 32))
                     ((16)
                      (vector (or value 0) 16))))
+                 ((destB)
+                  (print "DESTB!!")
+                  (vector (or value 0) 8))
                  ((#f) #f)
                  (else
                   (error 'put-instruction "Unimplemented encoding position" operand opsyntax)))))
@@ -867,149 +904,147 @@
     (let ((port (assembler-state-port state))
           (mode (assembler-state-mode state))
           (pos (port-position (assembler-state-port state))))
-      (call-with-values (lambda () (find-instruction-encoding instr mode '()))
-        (lambda (dos os eos as prefixes operands* opsyntax* encoding)
-          ;; dos: Default Operand Size (what the CPU uses without a prefix)
-          ;; os: Operand Size (according to the given operands)
-          ;; eos: Effective Operand Size (what the CPU will use)
-          (print "\n%%%%%%%%%% can encode now, mnemonic=" (car instr)
-                 " operands=" (cdr instr)
-                 " operand-size=" (list dos eos os)
-                 " address-size=" (list mode as)
-                 " prefixes=" prefixes
-                 " encoding=" encoding)
+      (let-values (((dos os eos as prefixes operands* opsyntax* encoding)
+                    (find-instruction-encoding instr mode '())))
+        ;; dos: Default Operand Size (what the CPU uses without a prefix)
+        ;; os: Operand Size (according to the given operands)
+        ;; eos: Effective Operand Size (what the CPU will use)
+        (print "\n%%%%%%%%%% can encode now, mnemonic=" (car instr)
+               " operands=" (cdr instr)
+               " operand-size=" (list dos eos os)
+               " address-size=" (list mode as)
+               " prefixes=" prefixes
+               " encoding=" encoding)
 
-          (for-each (lambda (b) (put-u8 port b)) prefixes)
+        (for-each (lambda (b) (put-u8 port b)) prefixes)
 
-          ;; Emit address size and operand size overrides
-          (when (or (and (= mode 64) (eqv? as 32))
-                    (and (= mode 16) (eqv? as 32)))
-            (put-u8 port (prefix-byte address)))
-          (when (or (and (= dos 64) (eqv? os 16))
-                    (and (= dos 32) (eqv? os 16))
-                    (and (= dos 16) (eqv? os 32)))
-            (put-u8 port (prefix-byte operand)))
-          (when (and (eqv? os 32) (= dos 64))
-            (error 'put-instruction
-                   "32-bit operand sizes are not encodable for this instruction in 64-bit mode" instr))
-          (when (and (eqv? os 64) (< mode 64))
-            (error 'put-instruction
-                   "64-bit operand sizes are only available in 64-bit mode" instr))
+        ;; Emit address size and operand size overrides
+        (when (or (and (= mode 64) (eqv? as 32))
+                  (and (= mode 16) (eqv? as 32)))
+          (put-u8 port (prefix-byte address)))
+        (when (or (and (= dos 64) (eqv? os 16))
+                  (and (= dos 32) (eqv? os 16))
+                  (and (= dos 16) (eqv? os 32)))
+          (put-u8 port (prefix-byte operand)))
+        (when (and (eqv? os 32) (= dos 64))
+          (error 'put-instruction
+                 "32-bit operand sizes are not encodable for this instruction in 64-bit mode" instr))
+        (when (and (eqv? os 64) (< mode 64))
+          (error 'put-instruction
+                 "64-bit operand sizes are only available in 64-bit mode" instr))
 
-          (let lp ((operands operands*)
-                   (opsyntax opsyntax*)
-                   (REX (if (and (eqv? os 64) (not (= dos 64))) REX.W 0))
-                   (ModR/M (encoding-ModR/M encoding))
-                   (SIB #f)
-                   (disp #f))
+        (let lp ((operands operands*)
+                 (opsyntax opsyntax*)
+                 (REX (if (and (eqv? os 64) (not (= dos 64))) REX.W 0))
+                 (ModR/M (encoding-ModR/M encoding))
+                 (SIB #f)
+                 (disp #f))
 
-            (cond ((null? operands)
-                   ;; Emit the instruction
-                   (cond ((encoding-sse-prefix encoding) =>
-                          (lambda (b) (put-u8 port b))))
-                   (unless (zero? REX) (put-u8 port REX))
-                   (for-each (lambda (b) (put-u8 port b))
-                             (encoding-opcode-bytes encoding))
-                   (when ModR/M
-                     (put-u8 port ModR/M)
-                     (when SIB (put-u8 port SIB)))
-                   ;; At this point only displacement and immediates
-                   ;; remain. These can be rIP-relative, which means
-                   ;; we first need to find out the size of these
-                   ;; values before we output them.
-                   (let* ((imms (cons disp (encode-operands! operands* opsyntax* eos as state)))
-                          (size (fold-left (lambda (x y)
-                                             (+ x (cond ((vector? y)
-                                                         (fxarithmetic-shift-right (vector-ref y 1) 3))
-                                                        ((bytevector? y)
-                                                         (bytevector-length y))
-                                                        (else 0))))
-                                           (- (port-position (assembler-state-port state)) pos)
-                                           imms)))
-                     (print "size of immediates etc: " size " and they are: " imms)
+          (cond ((null? operands)
+                 ;; Emit the instruction
+                 (cond ((encoding-sse-prefix encoding) =>
+                        (lambda (b) (put-u8 port b))))
+                 (unless (zero? REX) (put-u8 port REX))
+                 (for-each (lambda (b) (put-u8 port b))
+                           (encoding-opcode-bytes encoding))
+                 (when ModR/M
+                   (put-u8 port ModR/M)
+                   (when SIB (put-u8 port SIB)))
+                 ;; At this point only displacement and immediates
+                 ;; remain. These can be rIP-relative, which means
+                 ;; we first need to find out the size of these
+                 ;; values before we output them.
+                 (let* ((imms (cons disp (encode-operands! operands* opsyntax* eos as state)))
+                        (size (fold-left (lambda (x y)
+                                           (+ x (cond ((vector? y)
+                                                       (fxarithmetic-shift-right (vector-ref y 1) 3))
+                                                      ((bytevector? y)
+                                                       (bytevector-length y))
+                                                      (else 0))))
+                                         (- (port-position (assembler-state-port state)) pos)
+                                         imms)))
+                   (print "size of immediates etc: " size " and they are: " imms)
 
-                     (for-each
-                      (lambda (y)
-                        (cond ((vector? y)
-                               (put-bytevector port
-                                               (number->bytevector
-                                                (- (vector-ref y 0) (assembler-state-ip state) size)
+                   (for-each
+                    (lambda (y)
+                      (cond ((vector? y)
+                             (put-bytevector port
+                                             (number->bytevector
+                                              (- (vector-ref y 0) (assembler-state-ip state) size)
 
-                                                (vector-ref y 1))))
+                                              (vector-ref y 1))))
 
-                              ((bytevector? y)
-                               (put-bytevector port y))))
-                      imms))
+                            ((bytevector? y)
+                             (put-bytevector port y))))
+                    imms)))
 
-                   (cons (car instr) operands*))
+                ((memory? (car operands))
+                 (let ((o (car operands)))
+                   (print "memory operand: " (car operands) " :: " (car opsyntax))
+                   ;; Emit segment override
+                   (when (memory-segment o)
+                     (let ((seg (register-index (memory-segment o))))
+                       (unless (opsyntax-default-segment=? (car opsyntax) seg)
+                         (put-u8 port (vector-ref segment-overrides seg)))))
+                   (cond ((opsyntax-encoding-position (car opsyntax))
+                          (let ((disp (eval-expression (memory-expr o)
+                                                       (assembler-state-labels state))))
+                            (unless disp
+                              (print "No satisfaction: " (memory-expr o))
+                              (assembler-state-relocs-set! state #t))
+                            (let-values (((disp SIB ModR/M* REX*)
+                                          (encode-memory (memory-addressing-mode o)
+                                                         (or disp #x100) ;bigger than disp8
+                                                         (memory-scale o)
+                                                         (memory-index o)
+                                                         (memory-base o))))
+                              (lp (cdr operands)
+                                  (cdr opsyntax)
+                                  (fxior REX REX*)
+                                  (fxior (or ModR/M 0) ModR/M*)
+                                  SIB disp))))
+                         (else
+                          ;; Implicit
+                          (lp (cdr operands)
+                              (cdr opsyntax)
+                              REX ModR/M SIB disp)))))
 
-                  ((memory? (car operands))
-                   (let ((o (car operands)))
-                     (print "memory operand: " (car operands) " :: " (car opsyntax))
-                     ;; Emit segment override
-                     (when (memory-segment o)
-                       (let ((seg (register-index (memory-segment o))))
-                         (unless (opsyntax-default-segment=? (car opsyntax) seg)
-                           (put-u8 port (vector-ref segment-overrides seg)))))
-                     (cond ((opsyntax-encoding-position (car opsyntax))
-                            (let ((disp (eval-expression (memory-expr o)
-                                                         (assembler-state-labels state))))
-                              (unless disp
-                                (print "No satisfaction: " (memory-expr o))
-                                (assembler-state-relocs-set! state #t))
-                              (let-values (((disp SIB ModR/M* REX*)
-                                            (encode-memory (memory-addressing-mode o)
-                                                           (or disp #x100) ;bigger than disp8
-                                                           (memory-scale o)
-                                                           (memory-index o)
-                                                           (memory-base o))))
-                                (lp (cdr operands)
-                                    (cdr opsyntax)
-                                    (fxior REX REX*)
-                                    (fxior (or ModR/M 0) ModR/M*)
-                                    SIB disp))))
-                           (else
-                            ;; Implicit
-                            (lp (cdr operands)
-                                (cdr opsyntax)
-                                REX ModR/M SIB disp)))))
+                ((register? (car operands))
+                 (print "register operand: " (car operands) " :: " (car opsyntax))
+                 (let* ((index (register-index (car operands)))
+                        (type (register-type (car operands)))
+                        (REX (if (eq? type 'rex8) (fxior REX REX.bare) REX)))
+                   ;; FIXME: implement norex8-checking
+                   (case (opsyntax-encoding-position (car opsyntax))
+                     ((r/m)
+                      (lp (cdr operands) (cdr opsyntax)
+                          (if (> index 7) (fxior REX REX.B) REX)
+                          (fxior (or ModR/M 0) (make-modr/m #b11 0 index))
+                          SIB disp))
+                     ((reg)
+                      (lp (cdr operands) (cdr opsyntax)
+                          (if (> index 7) (fxior REX REX.R) REX)
+                          (fxior (or ModR/M 0) (make-modr/m 0 index 0))
+                          SIB disp))
+                     ((implicit-r/m)
+                      (lp (cdr operands) (cdr opsyntax)
+                          (if (> index 7) (fxior REX REX.B) REX)
+                          ModR/M SIB disp))
+                     ((#f)
+                      (lp (cdr operands) (cdr opsyntax) REX ModR/M SIB disp))
+                     (else
+                      (error 'put-instruction "Unimplemented register operand type"
+                             (car operands)
+                             (car opsyntax))))))
 
-                  ((register? (car operands))
-                   (print "register operand: " (car operands) " :: " (car opsyntax))
-                   (let* ((index (register-index (car operands)))
-                          (type (register-type (car operands)))
-                          (REX (if (eq? type 'rex8) (fxior REX REX.bare) REX)))
-                     ;; FIXME: implement norex8-checking
-                     (case (opsyntax-encoding-position (car opsyntax))
-                       ((r/m)
-                        (lp (cdr operands) (cdr opsyntax)
-                            (if (> index 7) (fxior REX REX.B) REX)
-                            (fxior (or ModR/M 0) (make-modr/m #b11 0 index))
-                            SIB disp))
-                       ((reg)
-                        (lp (cdr operands) (cdr opsyntax)
-                            (if (> index 7) (fxior REX REX.R) REX)
-                            (fxior (or ModR/M 0) (make-modr/m 0 index 0))
-                            SIB disp))
-                       ((implicit-r/m)
-                        (lp (cdr operands) (cdr opsyntax)
-                            (if (> index 7) (fxior REX REX.B) REX)
-                            ModR/M SIB disp))
-                       ((#f)
-                        (lp (cdr operands) (cdr opsyntax) REX ModR/M SIB disp))
-                       (else
-                        (error 'put-instruction "Unimplemented register operand type"
-                               (car operands)
-                               (car opsyntax))))))
+                ((or (integer? (car operands)) (expression? (car operands))
+                     (far-pointer? (car operands)))
+                 (lp (cdr operands) (cdr opsyntax) REX ModR/M SIB disp))
 
-                  ((or (integer? (car operands)) (expression? (car operands))
-                       (far-pointer? (car operands)))
-                   (lp (cdr operands) (cdr opsyntax) REX ModR/M SIB disp))
-
-                  (else
-                   (error 'put-instruction "Unimplemented operand type"
-                          (car operands)
-                          (car opsyntax)))))))))
+                (else
+                 (error 'put-instruction "Unimplemented operand type"
+                        (car operands)
+                        (car opsyntax))))))))
 
 
   (define (put-immediate imm type state)
@@ -1020,8 +1055,7 @@
                   ((%u64) 64)
                   ((%u128) 128))))
       (cond ((bytevector? imm)
-             (put-bytevector (assembler-state-port state) imm)
-             imm)
+             (put-bytevector (assembler-state-port state) imm))
             ((expression? imm)
              (let ((value (eval-expression imm (assembler-state-labels state))))
                (unless value
@@ -1079,17 +1113,21 @@
        #vu8(#x0F #x1F #x84 #x00 #x00 #x00 #x00 #x00)
        #vu8(#x66 #x0F #x1F #x84 #x00 #x00 #x00 #x00 #x00)))
 
+  ;; FIXME: handle NOPs for different modes and so on...
   (define (choose-nops table n reg mode)
     ;; Generate a list of bytevectors containing NOP instructions of
     ;; total size n. reg is between 0 and 7 and specifies the
     ;; register with the oldest value.
-    (let lp ((n n)
-             (bvs '()))
-      (if (zero? n) (reverse bvs)
-          (let ((pad (min (- (vector-length table) 1) n)))
-            (print "pad: " pad)
-            (lp (- n pad)
-                (cons (vector-ref table pad) bvs))))))
+    (cond ((= mode 16)
+           (make-bytevector n #x90))
+          (else
+           (let lp ((n n)
+                    (bvs '()))
+             (if (zero? n) (reverse bvs)
+                 (let ((pad (min (- (vector-length table) 1) n)))
+                   (print "pad: " pad)
+                   (lp (- n pad)
+                       (cons (vector-ref table pad) bvs))))))))
 
 
 
@@ -1099,41 +1137,32 @@
       ((%label)
        (hashtable-set! (assembler-state-labels state)
                        (cadr instr)
-                       (assembler-state-ip state))
-       instr)
+                       (assembler-state-ip state)))
       ((%mode)
-       (unless (or (memv (cadr instr) '(16 32 64)))
-         (error 'assemble! "Bad %mode" instr))
-       (assembler-state-mode-set! state (cadr instr))
-       instr)
+       (assembler-state-mode-set! state (cadr instr)))
       ((%origin)
-       (assembler-state-ip-set! state (cadr instr))
-       instr)
+       (assembler-state-ip-set! state (cadr instr)))
       ((%comm)
        ;; (%comm label size alignment)
        (assembler-state-comm-set! state (cons (cdr instr)
-                                              (assembler-state-comm state)))
-       instr)
+                                              (assembler-state-comm state))))
       ((%u8 %u16 %u32 %u64 %u128)
        (let ((pos (port-position (assembler-state-port state)))
-             (operands (translate-operands (cdr instr) (assembler-state-mode state))))
-         (let ((i (map (lambda (b) (put-immediate b (car instr) state))
-                       operands)))
-           (assembler-state-ip-set! state (+ (assembler-state-ip state)
-                                             (- (port-position (assembler-state-port state)) pos)))
-           (cons (car instr) operands))))
+             (operands (cdr instr)))
+         (for-each (lambda (b) (put-immediate b (car instr) state))
+                   operands)
+         (assembler-state-ip-set! state (+ (assembler-state-ip state)
+                                           (- (port-position (assembler-state-port state)) pos)))))
       ((%vu8)
        (put-bytevector (assembler-state-port state)
                        (cadr instr))
        (assembler-state-ip-set! state (+ (assembler-state-ip state)
-                                         (bytevector-length (cadr instr))))
-       instr)
+                                         (bytevector-length (cadr instr)))))
       ((%utf8z)
        (let ((bv (string->utf8 (string-append (cadr instr) "\x0;"))))
          (put-bytevector (assembler-state-port state) bv)
          (assembler-state-ip-set! state (+ (assembler-state-ip state)
-                                           (bytevector-length bv)))
-         instr))
+                                           (bytevector-length bv)))))
       ((%align)
        ;; FIXME: handle different modes properly here
        ;; (%align <alignment>)
@@ -1154,8 +1183,7 @@
                 ;; FIXME: let a register be specified here
                 (error 'assemble! "Bad alignment operation"
                        instr)))
-         (assembler-state-ip-set! state (+ (assembler-state-ip state) pad)))
-       instr)
+         (assembler-state-ip-set! state (+ (assembler-state-ip state) pad))))
 
       ((%section)
        (when (eq? (cadr instr) 'bss)
@@ -1177,62 +1205,101 @@
                 (assembler-state-ip-set! state (+ (assembler-state-ip state) pad size)))))
           (list-sort                    ;Sort by size
            (lambda (x y) (< (cadr x) (cadr y)))
-           (assembler-state-comm state))))
-       instr)
+           (reverse (assembler-state-comm state))))))
 
       (else
        (let ((pos (port-position (assembler-state-port state))))
-         (let ((i (put-instruction instr state)))
-           (assembler-state-ip-set! state (+ (assembler-state-ip state)
-                                             (- (port-position (assembler-state-port state)) pos)))
-           i)))))
+         ;; FIXME: evaluate expressions here, so that a guess can be
+         ;; made as to what instruction encodings will work.
+         (put-instruction instr state)
+         (assembler-state-ip-set! state (+ (assembler-state-ip state)
+                                           (- (port-position (assembler-state-port state)) pos)))))))
 
+  
   (define (assemble code)
-    ;; FIXME: The phases here should be more separate, with an initial
-    ;; parse phase.
-    (let ((state (make-assembler-state 16
-                                       #f
-                                       0
-                                       (make-eq-hashtable)
-                                       #f
-                                       '())))
+    (define (translate-operands-code code)
+      ;; Parsing more or less
+      (define known-labels (make-eq-hashtable))
+      (define used-labels (make-eq-hashtable))
       (let lp ((code code)
-               (labels #f))
-        (call-with-values open-bytevector-output-port
-          (lambda (tmpport extract)
-            (assembler-state-port-set! state tmpport)
-
-            (let ((newcode (map (lambda (i) (assemble! i state)) code)))
-
-              (print "% new code: ")
-              (for-each (lambda (i) (print "- " i)) newcode)
-              (print "% labels: ")
-              (let*-values (((keys vals) (hashtable-entries (assembler-state-labels state)))
-                            ((newlabels) (cons keys vals)))
-                (vector-for-each
-                 (lambda (x) (print "- " (car x) " => #x" (number->string (cdr x) 16)))
-                 (vector-sort
-                  (lambda (x y) (< (cdr x) (cdr y)))
-                  (vector-map cons keys vals)))
-                
-                ;; Loop until all labels are known and they aren't
-                ;; changing anymore. Optimize displacements somehow...
-                ;; FIXME: the trouble now is that unknown labels, that
-                ;; are not forward references, cause this loop to
-                ;; never terminate.
-                (cond ((or (assembler-state-relocs state)
-                           (not (equal? labels newlabels)))
-                       (print "Some labels are unknown or changed! Assembling again...")
-                       (set! state (make-assembler-state 16
-                                                         #f
-                                                         0
-                                                         (assembler-state-labels state)
-                                                         #f
-                                                         '()))
-                       (lp newcode newlabels))
-                      (else
-                       (print "Assembly complete.")
-                       (extract))))))))))
+               (mode 16)
+               (ret '()))
+        (cond ((null? code)
+               (vector-for-each (lambda (label)
+                                  (unless (hashtable-ref known-labels label #f)
+                                    (error 'assembler "Unknown label" label)))
+                                (hashtable-keys used-labels))
+               (vector-for-each (lambda (label)
+                                  (unless (hashtable-ref used-labels label #f)
+                                    (print "Unused label: " label)))
+                                (hashtable-keys known-labels))
+               (reverse ret))
+              (else
+               (case (caar code)
+                 ((%label %comm)
+                  ;; Check for duplicate labels
+                  (hashtable-update! known-labels
+                                     (cadar code)
+                                     (lambda (old-label)
+                                       (when old-label
+                                         (error 'assemble "Duplicate label" (cadar code)))
+                                       #t)
+                                     #f)
+                  ;; Keep the operands as they are
+                  (lp (cdr code) mode (cons (car code) ret)))
+                 ((%section %align %utf8z %vu8 %origin)
+                  (lp (cdr code) mode (cons (car code) ret)))
+                 ((%mode)
+                  ;; New mode
+                  (let ((mode (cadar code)))
+                    (unless (memv mode '(16 32 64))
+                      (error 'assemble! "Bad %mode" (car code)))
+                    (lp (cdr code) (cadar code) (cons (car code) ret))))
+                 (else
+                  ;; Translate the operands, keeping the mnemonic as a symbol.
+                  (let ((operands (translate-operands (cdar code) mode)))
+                    (for-each (lambda (op)
+                                (for-each (lambda (x) (hashtable-set! used-labels x #t))
+                                          (operand-labels op)))
+                              operands)
+                    (lp (cdr code)
+                        mode
+                        (cons (cons (caar code) operands)
+                              ret)))))))))
+    (let ((code (translate-operands-code code)))
+      (let lp ((labels '#())
+               (state (make-assembler-state 16
+                                            #f
+                                            0
+                                            (make-eq-hashtable)
+                                            #f
+                                            '())))
+        (let-values (((tmpport extract) (open-bytevector-output-port)))
+          (assembler-state-port-set! state tmpport)
+          (for-each (lambda (i) (assemble! i state)) code)
+          (let*-values (((keys vals) (hashtable-entries (assembler-state-labels state)))
+                        ((newlabels) (vector-sort
+                                      (lambda (x y) (< (cdr x) (cdr y)))
+                                      (vector-map cons keys vals))))
+            ;; Loop until all labels are known and they aren't
+            ;; changing anymore.
+            (cond ((or (assembler-state-relocs state)
+                       (not (equal? labels newlabels)))
+                   (print "Some labels are unknown or changed! Assembling again...")
+                   (lp newlabels
+                       (make-assembler-state 16
+                                             #f
+                                             0
+                                             (assembler-state-labels state)
+                                             #f
+                                             '())))
+                  (else
+                   (print "Symbol table:")
+                   (vector-for-each
+                    (lambda (x) (print "- " (car x) " => #x" (number->string (cdr x) 16)))
+                    newlabels)
+                   (print "Assembly complete.")
+                   (extract))))))))
 
 
 ;;   (begin
