@@ -46,14 +46,6 @@ up to SSE5, all Intel AVX instructions and of course the AMD64
 instructions. The table layout is designed for use with a
 disassembler, but it can also be transformed for use in an assembler.
 
-** (define-values)
-This is a define-values macro which, unlike previous R5RS instances of
-the same, permits the defined variables to be exported from libraries.
-It can be used anywhere the normal define works.
-
-(define-values (foo bar)
-  (values 1 2))
-
 ** (se weinholt net irc)
 A parser and formatter for the Internet Relay Chat protocol. Should be
 usable both for clients and servers. It can split IRC messages into
