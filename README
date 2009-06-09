@@ -25,13 +25,13 @@ If you wish to use any of this code under different license terms, I
 accept payments in gold and silver coin. Contact me with an offer.
 
 * AVAILABLE LIBRARIES
-** (se weinholt assembler x86)
+** (weinholt assembler x86)
 An assembler for the Intel x86 architecture. It is not yet feature
 complete and might generate bad code. It does not yet do any jump size
 optimization or produce relocatable object files. But it can be used
 to generate Multiboot images and programs/x86-demo shows this.
 
-** (se weinholt disassembler x86)
+** (weinholt disassembler x86)
 Disassembler for the Intel x86 architecture. Supports most modern
 instructions encodings as of 2008, including the VEX prefix used by
 Intel AVX and the DREX encoding used by AMD SSE5. Supports 16-bit,
@@ -40,18 +40,18 @@ reads the next instruction on a port using the given bit-mode and
 returns the instruction as a list. See the source code for
 documentation.
 
-** (se weinholt disassembler x86-opcodes)
+** (weinholt disassembler x86-opcodes)
 An opcode table for the Intel x86 that includes all SSE instructions
 up to SSE5, all Intel AVX instructions and of course the AMD64
 instructions. The table layout is designed for use with a
 disassembler, but it can also be transformed for use in an assembler.
 
-** (se weinholt net irc)
+** (weinholt net irc)
 A parser and formatter for the Internet Relay Chat protocol. Should be
 usable both for clients and servers. It can split IRC messages into
 prefix, command and argument parts and it also does the inverse.
 
-** (se weinholt struct pack)
+** (weinholt struct pack)
 C compatible structure packer and unpacker. The pack function produces
 a bytevector from a format string and some values and the unpack
 syntax does the opposite. They are similar to Python's struct module
@@ -83,11 +83,11 @@ the different parts of an instruction uses.
 ** meircbot
 The Minimum-Effort IRC bot. The script contains the configuration. It
 doesn't do anything other than joining channels and being rude in
-private messages. Shows how the (se weinholt net irc) library can be
+private messages. Shows how the (weinholt net irc) library can be
 used. It requires tcp-connect and uses printf from (ikarus).
 
 ** x86-demo
-A demonstration of the (se weinholt assembler x86) library. The
-program assembles a Multiboot image, which can be loaded by GNU GRUB.
-The demo uses the VGA text mode and a few VGA registers to generate a
-classic copper bar effect.
+A demonstration of the (weinholt assembler x86) library. The program
+assembles a Multiboot image, which can be loaded by GNU GRUB. The demo
+uses the VGA text mode and a few VGA registers to generate a classic
+copper bar effect.

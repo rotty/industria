@@ -22,7 +22,7 @@
 ;; disassembler and the collect-stuff is not well thought-out. Some
 ;; addressing modes might be wrong.
 
-(library (se weinholt disassembler m68hc12)
+(library (weinholt disassembler m68hc12)
   (export get-instruction)
   (import (except (rnrs) get-u8))
 

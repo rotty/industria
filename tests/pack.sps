@@ -19,8 +19,8 @@
 
 (import (rnrs)
         (rnrs eval)
-        (se weinholt struct pack)
-        (se weinholt struct pack-aux)
+        (weinholt struct pack)
+        (weinholt struct pack-aux)
         (only (ikarus) random))
 
 ;; Needs (random n) which gives a random integer x, 0 <= x < n.
@@ -36,7 +36,7 @@
              fmt values))
     (let ((result2
            (eval `(call-with-values (lambda () (unpack ,fmt ',result)) list)
-                 (environment '(rnrs) '(se weinholt struct pack)))))
+                 (environment '(rnrs) '(weinholt struct pack)))))
       (unless (equal? values result2)
         (error 'check-pack "Bad result from unpack syntax"
                result2 values fmt)))

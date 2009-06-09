@@ -21,7 +21,7 @@
 
 ;; http://www.caldera.com/developers/gabi/
 
-(library (se weinholt binfmt elf (1 0 0))
+(library (weinholt binfmt elf (1 0 0))
     (export is-elf-image?
             open-elf-image-file
             elf-input-file-port
@@ -61,7 +61,7 @@
             elf-input-file-section-by-name)
 
     (import (rnrs)
-            (se weinholt struct pack (1 (>= 0) (>= 0))))
+            (weinholt struct pack (1 (>= 0) (>= 0))))
 
 ;;; Utilities
 

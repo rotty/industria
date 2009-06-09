@@ -52,10 +52,10 @@
 
 ;; `major' is incremented when backwards compatibility is broken.
 
-(library (se weinholt struct pack (1 1 0))
+(library (weinholt struct pack (1 1 0))
     (export format-size pack pack! unpack)
     (import (rnrs)
-            (se weinholt struct pack-aux (1 0 0)))
+            (weinholt struct pack-aux (1 0 0)))
 
   (define-syntax unpack*
     (lambda (x)

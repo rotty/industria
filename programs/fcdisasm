@@ -22,8 +22,8 @@
 ;; hex dump!
 
 (import (rnrs)
-        (se weinholt disassembler x86 (1 (>= 0) (>= 0)))
-        (se weinholt binfmt elf (1 (>= 0) (>= 0))))
+        (weinholt disassembler x86 (1 (>= 0) (>= 0)))
+        (weinholt binfmt elf (1 (>= 0) (>= 0))))
 
 (define (print-instr/sexpr i)
   "Print an instruction with hexadecimal numbers."

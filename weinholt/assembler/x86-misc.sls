@@ -15,7 +15,7 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!r6rs
 
-(library (se weinholt assembler x86-misc (1 0 0))
+(library (weinholt assembler x86-misc (1 0 0))
     (export make-modr/m make-sib bitwidth<=
             number->bytevector)
     (import (rnrs))

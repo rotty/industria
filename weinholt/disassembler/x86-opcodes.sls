@@ -124,7 +124,7 @@
 ;; For AMD SSE5, the Z, VW and WV opcode syntaxes are not official
 ;; either.
 
-(library (se weinholt disassembler x86-opcodes (1 0 0))
+(library (weinholt disassembler x86-opcodes (1 0 0))
     (export opcodes pseudo-mnemonics mnemonic-aliases
             lock-instructions
             branch-hint-instructions

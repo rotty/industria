@@ -15,9 +15,9 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!r6rs
 
-;; Auxiliary library for (se weinholt struct)
+;; Auxiliary library for (weinholt struct)
 
-(library (se weinholt struct pack-aux (1 0 0))
+(library (weinholt struct pack-aux (1 0 0))
     (export format-size roundb)
     (import (rnrs))
 

@@ -1,6 +1,6 @@
 -*- coding: utf-8; mode: outline -*-
 
-This documents the (se weinholt assembler x86) library for R6RS
+This documents the (weinholt assembler x86) library for R6RS
 Scheme.
 
 It’s not yet ready to use! Features are missing and it has not been

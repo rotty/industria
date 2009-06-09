@@ -53,12 +53,12 @@
 ;; There is a lot that can be done to improve this. The best idea is
 ;; probably to use the opcode map to generate an assembler.
 
-(library (se weinholt assembler x86 (1 0 0))
+(library (weinholt assembler x86 (1 0 0))
     (export assemble)
     (import (rnrs)
-            (se weinholt assembler x86-operands (1 0 (>= 0)))
-            (se weinholt assembler x86-misc (1 0 (>= 0)))
-            (se weinholt disassembler x86-opcodes (1 0 (>= 0))))
+            (weinholt assembler x86-operands (1 0 (>= 0)))
+            (weinholt assembler x86-misc (1 0 (>= 0)))
+            (weinholt disassembler x86-opcodes (1 0 (>= 0))))
 
   (define debug #t)
 

@@ -17,8 +17,8 @@
 #!r6rs
 
 (import (rnrs)
-        (se weinholt assembler x86)
-        (se weinholt disassembler x86))
+        (weinholt assembler x86)
+        (weinholt disassembler x86))
 
 (define (print . x) (for-each display x) (newline))
 

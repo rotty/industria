@@ -71,7 +71,7 @@
 ;; the output port.
 
 
-(library (se weinholt net x)
+(library (weinholt net x)
   (export (open-display))
   (import (rnrs))
   

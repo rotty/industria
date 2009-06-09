@@ -17,7 +17,7 @@
 #!r6rs
 
 (import (rnrs)
-        (se weinholt disassembler x86))
+        (weinholt disassembler x86))
 
 (define (print-test filename mode)
   "Improvised pretty-printer (not so pretty really) that prints a kind

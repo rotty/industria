@@ -16,7 +16,7 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!r6rs
 
-(import (rnrs) (se weinholt disassembler m68hc12))
+(import (rnrs) (weinholt disassembler m68hc12))
 
 
 (define (test bv . expect)

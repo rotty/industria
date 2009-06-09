@@ -15,7 +15,7 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!r6rs
 
-(library (se weinholt assembler x86-operands (1 0 0))
+(library (weinholt assembler x86-operands (1 0 0))
     (export registers lookup-register
             register?
             register-name register-type register-index
@@ -30,7 +30,7 @@
             far-pointer-seg far-pointer-offset
             translate-operands operand-labels)
     (import (rnrs)
-            (se weinholt assembler x86-misc (1 0 (>= 0))))
+            (weinholt assembler x86-misc (1 0 (>= 0))))
 
 ;;; Register operands
 

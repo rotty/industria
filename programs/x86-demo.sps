@@ -1,6 +1,6 @@
 #!/usr/bin/env scheme-script
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Demo for (se weinholt x86 assembler)
+;; Demo for (weinholt x86 assembler)
 ;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
@@ -21,7 +21,7 @@
 ;; by GNU GRUB or SYSLINUX's mboot module.
 
 (import (rnrs)
-        (se weinholt assembler x86 (1 (>= 0) (>= 0))))
+        (weinholt assembler x86 (1 (>= 0) (>= 0))))
 
 (define << fxarithmetic-shift-left)
 

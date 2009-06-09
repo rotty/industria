@@ -45,7 +45,7 @@
 ;; behavior as the x86 disassembler. The collect routine could
 ;; possibly indicate the instruction format.
 
-(library (se weinholt disassembler mips)
+(library (weinholt disassembler mips)
   (export get-instruction)
   (import (rnrs))
 
