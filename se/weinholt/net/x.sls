@@ -1,6 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; The Industria Libraries
-;; Copyright © 2008 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -71,17 +70,21 @@
 ;; determined until the request has been fully encoded and written to
 ;; the output port.
 
+
+(library (se weinholt net x)
+  (export (open-display))
+  (import (rnrs))
+  
+  
+;; Needed here: records with delay    
+
 (define-record-type atom
-  (fields name conn id))
+  (fields name conn (mutable id atom-id atom-id-set!)))
 
 (define-record-type promise
   (fields sequence-number k r))
 
 
-(library (se weinholt net x)
-    (export (open-display))
-    (import (rnrs))
-  ...)
 
 
 ;;; Utilities
@@ -95,10 +98,7 @@
 
 (define (round4 x)
   ;; Round to next multiple of four
-  (+ x (bitwise-and (- 4 (bitwise-and x #b11)) #b11)))
-
-(define (s8->u8 x)
-  (if (negative? x) (+ 256 x) x))
+  (bitwise-and (+ x 3) -4))
 
 (define (bool->u8 x)
   (if x 1 0))
@@ -390,7 +390,7 @@
                                          data)
                          entries))))))))
 
-;;;
+;;; Connect to an X server
 
 (define (open-display host port)
   (define-x-struct init-reply
@@ -433,180 +433,179 @@
     (u8 scanline-pad)
     (u8)
     (u32))
-  (call-with-values (lambda () (tcp-connect host port))
-    (lambda (o i)
-      (let ((b (make-buffer i)))
-        ;; (get-authority "SYS$LOGIN:DECW$XAUTHORITY.DECW$XAUTH")
-        (let ((auth (car (get-authority "/home/weinholt/.Xauthority"))))
-          (put-u8 o (case (native-endianness)
-                      ((little) #x6C)
-                      ((big) #x42)
-                      (else (error 'open-display "Unsupported native endianness"
-                                   (native-endianness)))))
-          (put-u8 o #x00)               ;unused
-          (put-u16 o 11)                ;major version
-          (put-u16 o 0)                 ;minor version
-          (put-u16 o (string-length (authority-name auth)))
-          (put-u16 o (bytevector-length (authority-data auth)))
-          (put-u16 o 0)                 ;unused
-          (put-string8 o (authority-name auth))
-          (put-string8 o (authority-data auth))
+  (let-values (((i o) (tcp-connect host port)))
+    (let ((b (make-buffer i)))
+      ;; (get-authority "SYS$LOGIN:DECW$XAUTHORITY.DECW$XAUTH")
+      (let ((auth (car (get-authority "/home/weinholt/.Xauthority"))))
+        (put-u8 o (case (native-endianness)
+                    ((little) #x6C)
+                    ((big) #x42)
+                    (else (error 'open-display "Unsupported native endianness"
+                                 (native-endianness)))))
+        (put-u8 o #x00)                 ;unused
+        (put-u16 o 11)                  ;major version
+        (put-u16 o 0)                   ;minor version
+        (put-u16 o (string-length (authority-name auth)))
+        (put-u16 o (bytevector-length (authority-data auth)))
+        (put-u16 o 0)                   ;unused
+        (put-string8 o (authority-name auth))
+        (put-string8 o (authority-data auth))
 
-          (flush-output-port o))
+        (flush-output-port o))
 
-        (buffer-read! b 8)
-        (buffer-read! b (* 4 (init-reply-additional-data b)))
+      (buffer-read! b 8)
+      (buffer-read! b (* 4 (init-reply-additional-data b)))
 
-        (case (init-reply-status b)
-          ((0)
-           (error 'open-display "Connection to X server denied"
-                  (init-reply-reason b)))
+      (case (init-reply-status b)
+        ((0)
+         (error 'open-display "Connection to X server denied"
+                (init-reply-reason b)))
 
-          ((2)
-           (error 'open-display "The X server demands further authorization"))
+        ((2)
+         (error 'open-display "The X server demands further authorization"))
 
-          ((1)
-           (letrec ((get-screens
-                     (lambda (num offset acc)
-                       (define-x-struct screen
-                         (u32 root)
-                         (u32 default-colormap)
-                         (u32 white-pixel)
-                         (u32 black-pixel)
-                         (u32 current-input-masks)
-                         (u16 width-in-pixels)
-                         (u16 height-in-pixels)
-                         (u16 width-in-millimeters)
-                         (u16 height-in-millimeters)
-                         (u16 min-installed-maps)
-                         (u16 max-installed-maps)
-                         (u32 root-visual)
-                         (u8 backing-stores)
-                         (u8 save-unders)
-                         (u8 root-depth)
-                         (u8 number-of-depths))
-                       (define (screen-backing-stores->symbol bs)
-                         (define x '#(Never WhenMapped Always))
-                         (if (< bs (vector-length x))
-                             (vector-ref x bs)
-                             bs))
-                       ;; followed by a list of DEPTHs
-                       (if (zero? num)
-                           (list->vector (reverse acc))
-                           (call-with-values
-                               (lambda ()
-                                 (get-depths (screen-number-of-depths b offset)
-                                             (+ offset (screen-sizeof* b))
-                                             '()))
-                             (lambda (offset* depths)
-                               (get-screens (- num 1)
-                                            offset*
-                                            (cons (make-screen
-                                                   (screen-root b offset)
-                                                   (screen-default-colormap b offset)
-                                                   (screen-white-pixel b offset)
-                                                   (screen-black-pixel b offset)
-                                                   (screen-current-input-masks b offset)
-                                                   (screen-width-in-pixels b offset)
-                                                   (screen-height-in-pixels b offset)
-                                                   (screen-width-in-millimeters b offset)
-                                                   (screen-height-in-millimeters b offset)
-                                                   (screen-min-installed-maps b offset)
-                                                   (screen-max-installed-maps b offset)
-                                                   (screen-root-visual b offset)
-                                                   (screen-backing-stores->symbol
-                                                    (screen-backing-stores b offset))
-                                                   (screen-save-unders b offset)
-                                                   (screen-root-depth b offset)
-                                                   depths)
-                                                  acc)))))))
-                    (get-depths
-                     (lambda (num offset acc)
-                       (define-x-struct depth
-                         (u8 depth)
-                         (u8)
-                         (u16 number-of-visualtypes)
-                         (u32))
-                       ;; followed by a list of VISUALTYPEs
-                       (if (zero? num)
-                           (values offset (reverse acc))
-                           (call-with-values
-                               (lambda ()
-                                 (get-visualtypes (depth-number-of-visualtypes b offset)
-                                                  (+ offset (depth-sizeof* b))
-                                                  '()))
-                             (lambda (offset* visualtypes)
-                               (get-depths (- num 1)
-                                           offset*
-                                           (cons (make-depth (depth-depth b offset)
-                                                             visualtypes)
-                                                 acc)))))))
-                    (get-visualtypes
-                     (lambda (num offset acc)
-                       (define-x-struct visualtype
-                         (u32 visual-id)
-                         (u8 class)
-                         (u8 bits-per-rgb-value)
-                         (u16 colormap-entries)
-                         (u32 red-mask)
-                         (u32 green-mask)
-                         (u32 blue-mask)
-                         (u32))
-                       (define (visualtype-class->symbol class)
-                         (define x '#(StaticGray GrayScale StaticColor PseudoColor TrueColor DirectColor))
-                         (if (< class (vector-length x))
-                             (vector-ref x class)
-                             class))
-                       (if (zero? num)
-                           (values offset (reverse acc))
-                           (get-visualtypes
-                            (- num 1)
-                            (+ offset (visualtype-sizeof* b))
-                            (cons (make-visualtype
-                                   (visualtype-visual-id b offset)
-                                   (visualtype-class->symbol
-                                    (visualtype-class b offset))
-                                   (visualtype-bits-per-rgb-value b offset)
-                                   (visualtype-colormap-entries b offset)
-                                   (visualtype-red-mask b offset)
-                                   (visualtype-green-mask b offset)
-                                   (visualtype-blue-mask b offset))
-                                  acc))))))
+        ((1)
+         (letrec ((get-screens
+                   (lambda (num offset acc)
+                     (define-x-struct screen
+                                      (u32 root)
+                                      (u32 default-colormap)
+                                      (u32 white-pixel)
+                                      (u32 black-pixel)
+                                      (u32 current-input-masks)
+                                      (u16 width-in-pixels)
+                                      (u16 height-in-pixels)
+                                      (u16 width-in-millimeters)
+                                      (u16 height-in-millimeters)
+                                      (u16 min-installed-maps)
+                                      (u16 max-installed-maps)
+                                      (u32 root-visual)
+                                      (u8 backing-stores)
+                                      (u8 save-unders)
+                                      (u8 root-depth)
+                                      (u8 number-of-depths))
+                     (define (screen-backing-stores->symbol bs)
+                       (define x '#(Never WhenMapped Always))
+                       (if (< bs (vector-length x))
+                           (vector-ref x bs)
+                           bs))
+                     ;; followed by a list of DEPTHs
+                     (if (zero? num)
+                         (list->vector (reverse acc))
+                         (call-with-values
+                           (lambda ()
+                             (get-depths (screen-number-of-depths b offset)
+                                         (+ offset (screen-sizeof* b))
+                                         '()))
+                           (lambda (offset* depths)
+                             (get-screens (- num 1)
+                                          offset*
+                                          (cons (make-screen
+                                                 (screen-root b offset)
+                                                 (screen-default-colormap b offset)
+                                                 (screen-white-pixel b offset)
+                                                 (screen-black-pixel b offset)
+                                                 (screen-current-input-masks b offset)
+                                                 (screen-width-in-pixels b offset)
+                                                 (screen-height-in-pixels b offset)
+                                                 (screen-width-in-millimeters b offset)
+                                                 (screen-height-in-millimeters b offset)
+                                                 (screen-min-installed-maps b offset)
+                                                 (screen-max-installed-maps b offset)
+                                                 (screen-root-visual b offset)
+                                                 (screen-backing-stores->symbol
+                                                  (screen-backing-stores b offset))
+                                                 (screen-save-unders b offset)
+                                                 (screen-root-depth b offset)
+                                                 depths)
+                                                acc)))))))
+                  (get-depths
+                   (lambda (num offset acc)
+                     (define-x-struct depth
+                                      (u8 depth)
+                                      (u8)
+                                      (u16 number-of-visualtypes)
+                                      (u32))
+                     ;; followed by a list of VISUALTYPEs
+                     (if (zero? num)
+                         (values offset (reverse acc))
+                         (call-with-values
+                           (lambda ()
+                             (get-visualtypes (depth-number-of-visualtypes b offset)
+                                              (+ offset (depth-sizeof* b))
+                                              '()))
+                           (lambda (offset* visualtypes)
+                             (get-depths (- num 1)
+                                         offset*
+                                         (cons (make-depth (depth-depth b offset)
+                                                           visualtypes)
+                                               acc)))))))
+                  (get-visualtypes
+                   (lambda (num offset acc)
+                     (define-x-struct visualtype
+                                      (u32 visual-id)
+                                      (u8 class)
+                                      (u8 bits-per-rgb-value)
+                                      (u16 colormap-entries)
+                                      (u32 red-mask)
+                                      (u32 green-mask)
+                                      (u32 blue-mask)
+                                      (u32))
+                     (define (visualtype-class->symbol class)
+                       (define x '#(StaticGray GrayScale StaticColor PseudoColor TrueColor DirectColor))
+                       (if (< class (vector-length x))
+                           (vector-ref x class)
+                           class))
+                     (if (zero? num)
+                         (values offset (reverse acc))
+                         (get-visualtypes
+                          (- num 1)
+                          (+ offset (visualtype-sizeof* b))
+                          (cons (make-visualtype
+                                 (visualtype-visual-id b offset)
+                                 (visualtype-class->symbol
+                                  (visualtype-class b offset))
+                                 (visualtype-bits-per-rgb-value b offset)
+                                 (visualtype-colormap-entries b offset)
+                                 (visualtype-red-mask b offset)
+                                 (visualtype-green-mask b offset)
+                                 (visualtype-blue-mask b offset))
+                                acc))))))
 
-             (let ((roots (get-screens (init-reply-number-of-screens b)
-                                       (+ (init-reply-sizeof* b)
-                                          (* (format-sizeof* b)
-                                             (init-reply-number-of-formats b)))
-                                       '())))
-               (make-connection
-                i o b
-                (init-reply-protocol-major-version b)
-                (init-reply-protocol-minor-version b)
-                (init-reply-release-number b)
-                (init-reply-resource-id-base b)
-                (init-reply-resource-id-mask b)
-                (init-reply-motion-buffer-size b)
-                (init-reply-maximum-request-length b)
-                (init-reply-image-byte-order->symbol
-                 (init-reply-image-byte-order b))
-                (init-reply-bitmap-format-bit-order->symbol
-                 (init-reply-bitmap-format-bit-order b))
-                (init-reply-bitmap-format-scanline-unit b)
-                (init-reply-bitmap-format-scanline-pad b)
-                (init-reply-min-keycode b)
-                (init-reply-max-keycode b)
-                (init-reply-vendor b)
-                (map (lambda (x)
-                       (make-format (format-depth b x)
-                                    (format-bits-per-pixel b x)
-                                    (format-scanline-pad b x)))
-                     (map (lambda (o)
-                            (+ (init-reply-sizeof* b) (* (format-sizeof* b) o)))
-                          (seq 0 (init-reply-number-of-formats b))))
-                roots
-                1 ;FIXME: get the actual default from the connection string!
-                (init-reply-resource-id-base b)
-                1)))))))))
+           (let ((roots (get-screens (init-reply-number-of-screens b)
+                                     (+ (init-reply-sizeof* b)
+                                        (* (format-sizeof* b)
+                                           (init-reply-number-of-formats b)))
+                                     '())))
+             (make-connection
+              i o b
+              (init-reply-protocol-major-version b)
+              (init-reply-protocol-minor-version b)
+              (init-reply-release-number b)
+              (init-reply-resource-id-base b)
+              (init-reply-resource-id-mask b)
+              (init-reply-motion-buffer-size b)
+              (init-reply-maximum-request-length b)
+              (init-reply-image-byte-order->symbol
+               (init-reply-image-byte-order b))
+              (init-reply-bitmap-format-bit-order->symbol
+               (init-reply-bitmap-format-bit-order b))
+              (init-reply-bitmap-format-scanline-unit b)
+              (init-reply-bitmap-format-scanline-pad b)
+              (init-reply-min-keycode b)
+              (init-reply-max-keycode b)
+              (init-reply-vendor b)
+              (map (lambda (x)
+                     (make-format (format-depth b x)
+                                  (format-bits-per-pixel b x)
+                                  (format-scanline-pad b x)))
+                   (map (lambda (o)
+                          (+ (init-reply-sizeof* b) (* (format-sizeof* b) o)))
+                        (seq 0 (init-reply-number-of-formats b))))
+              roots
+              1 ;FIXME: get the actual default from the connection string!
+              (init-reply-resource-id-base b)
+              1))))))))
 
 ;;; Error handling
 
@@ -1168,7 +1167,7 @@ manual."
             (make-message-condition "Invalid percentage (must be between -100 and 100 inclusive)")
             (make-x-value-error #f 104 0)
             (make-irritants-condition percent))))
-  (send-request display 104 (s8->u8 percent) '#vu8()))
+  (send-request display 104 (fxand #xff percent) '#vu8()))
 
 
 
@@ -1198,6 +1197,7 @@ manual."
        ;; Event
        (read-event display b)))))
 
+;; xtrace -k -d :0 -D localhost:0
 
 (define dpy (open-display "localhost" "x11"))
 
@@ -1307,16 +1307,16 @@ manual."
 
 
 (x-change-window-attributes dpy w
-                            (list (cons 'event-mask (fxior KeyPress KeyRelease))
+                            (list (cons 'event-mask (bitwise-ior KeyPress KeyRelease))
                                   ))
 
 (x-change-window-attributes dpy w
-                            (list (cons 'event-mask (fxxor #xffffffff #xFE000000))
+                            (list (cons 'event-mask (bitwise-xor #xFFFFFFFF #xFE000000))
                                   ))
 
 
 (x-change-window-attributes dpy w
-                            (list (cons 'event-mask #xffffffff)
+                            (list (cons 'event-mask #xFFFFFFFF)
                                   ))
 
 
@@ -1377,3 +1377,6 @@ manual."
 ;; for set of pointer event: #xFFFF8003 unused but must be zero
 
 ;; for set of device event: #xFFFFC0B0 unused but must be zero
+
+
+)
