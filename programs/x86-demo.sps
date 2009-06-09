@@ -1,7 +1,7 @@
 #!/usr/bin/env scheme-script
 ;; -*- mode: scheme; coding: utf-8 -*-
 ;; Demo for (se weinholt x86 assembler)
-;; Copyright © 2008 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -207,6 +207,7 @@
 (if (file-exists? fn)
     (delete-file fn))
 
-(let ((p (open-file-output-port fn)))
-  (put-bytevector p (assemble-demo))
+(let-values (((p) (open-file-output-port fn))
+             ((machine-code symbol-table) (assemble-demo)))
+  (put-bytevector p machine-code)
   (close-port p))
