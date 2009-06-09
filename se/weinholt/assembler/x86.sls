@@ -1299,7 +1299,7 @@
                     (lambda (x) (print "- " (car x) " => #x" (number->string (cdr x) 16)))
                     newlabels)
                    (print "Assembly complete.")
-                   (extract))))))))
+                   (values (extract) (assembler-state-labels state)))))))))
 
 
 ;;   (begin
