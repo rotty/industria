@@ -36,6 +36,14 @@ The Data Encryption Standard, FIPS 42. This library implements DES and
 3DES (TDEA) in ECB mode, and the DES based crypt() password hashing
 function from UN*X. See the security note below.
 
+** (weinholt crypto md5)
+The obsolete MD5 message-digest algorithm:
+
+> (md5->string (md5 (string->utf8 "A Scheme in my pocket")))
+"65A2B2D8EE076250EA0A105A8D5EF1BB"
+
+See the security note below.
+
 ** (weinholt crypto sha-1)
 The famous SHA-1 from the Secure Hash Standard, FIPS 180. Here's an
 example of the simple interface:
