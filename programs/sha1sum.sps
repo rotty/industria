@@ -21,15 +21,15 @@
         (rnrs))
 
 (define (checksum-port port)
-  (let ((state (make-sha-1)))
+  (let ((state (make-sha-1))
+        (data (make-bytevector 8192 0)))
     (let lp ()
-      (let ((data (get-bytevector-n port 8192)))
-        (unless (eof-object? data)
-          (update-sha-1! state data)
+      (let ((bytes-read (get-bytevector-n! port data 0 8192)))
+        (unless (eof-object? bytes-read)
+          (update-sha-1! state data 0 bytes-read)
           (lp))))
     (finish-sha-1! state)
     (sha-1->string state)))
-
 
 (when (null? (cdr (command-line)))
   (display "Usage: sha1sum.sps filename\n" (current-error-port))

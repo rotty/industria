@@ -118,6 +118,6 @@ There might be other problems as well. The algorithms themselves might
 be weak. Don't pick weak keys. Know your stuff.
 
 And remember what the license says about warranties. Don't come crying
-to me if the enemy deciphers your secret messages. These libraries
-have not been validated by the NIST or the FDA and probably can't be
-used for government work.
+to me if the enemy deciphers your secret messages and your whole
+convoy blows up. These libraries have not been validated by the NIST
+or the FDA and quite likely aren't allowed for government work.

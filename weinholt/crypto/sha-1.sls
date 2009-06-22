@@ -142,36 +142,39 @@
 
   ;; Add a bytevector to the state. Align your data to whole blocks if
   ;; you want this to go a little faster.
-  (define (update-sha-1! state data)
-    (let ((m (sha1state-m state))       ;unprocessed data
-          (H (sha1state-H state))
-          (W (sha1state-W state))
-          (len (bytevector-length data)))
-      (let lp ((offset 0))
-        (cond ((= (sha1state-pending state) 64)
-               ;; A whole block is pending
-               (sha-1-transform! H W m 0)
-               (sha1state-pending-set! state 0)
-               (sha1state-processed-set! state (+ 64 (sha1state-processed state)))
-               (lp offset))
-              ((= offset len)
-               (values))
-              ((or (> (sha1state-pending state) 0)
-                   (> (+ offset 64) len))
-               ;; Pending data exists or less than a block remains.
-               ;; Add more pending data.
-               (let ((added (min (- 64 (sha1state-pending state))
-                                 (- len offset))))
-                 (bytevector-copy! data offset
-                                   m (sha1state-pending state)
-                                   added)
-                 (sha1state-pending-set! state (+ added (sha1state-pending state)))
-                 (lp (+ offset added))))
-              (else
-               ;; Consume a whole block
-               (sha-1-transform! H W data offset)
-               (sha1state-processed-set! state (+ 64 (sha1state-processed state)))
-               (lp (+ offset 64)))))))
+  (define update-sha-1!
+    (case-lambda
+      ((state data start end)
+       (let ((m (sha1state-m state))    ;unprocessed data
+             (H (sha1state-H state))
+             (W (sha1state-W state)))
+         (let lp ((offset start))
+           (cond ((= (sha1state-pending state) 64)
+                  ;; A whole block is pending
+                  (sha-1-transform! H W m 0)
+                  (sha1state-pending-set! state 0)
+                  (sha1state-processed-set! state (+ 64 (sha1state-processed state)))
+                  (lp offset))
+                 ((= offset end)
+                  (values))
+                 ((or (> (sha1state-pending state) 0)
+                      (> (+ offset 64) end))
+                  ;; Pending data exists or less than a block remains.
+                  ;; Add more pending data.
+                  (let ((added (min (- 64 (sha1state-pending state))
+                                    (- end offset))))
+                    (bytevector-copy! data offset
+                                      m (sha1state-pending state)
+                                      added)
+                    (sha1state-pending-set! state (+ added (sha1state-pending state)))
+                    (lp (+ offset added))))
+                 (else
+                  ;; Consume a whole block
+                  (sha-1-transform! H W data offset)
+                  (sha1state-processed-set! state (+ 64 (sha1state-processed state)))
+                  (lp (+ offset 64)))))))
+      ((state data)
+       (update-sha-1! state data 0 (bytevector-length data)))))
 
   (define zero-block (make-bytevector 64 0))
 

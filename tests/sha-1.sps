@@ -139,6 +139,16 @@
 (test/s "30b86e44e6001403827a62c58b08893e77cf121f"
         "" "" "AAAAAAAAAAAAAAAAAAAAA" "" "AAAAAAAAAAAAAAAAAAAA" "A" "AAAAAAAAAAAAAAAAAA" "AAAA" "")
 
+(define (test/o expect string start end)
+  (let ((state (make-sha-1)))
+    (update-sha-1! state (string->utf8 string) start end)
+    (finish-sha-1! state)
+    (unless (string-ci=? (sha-1->string state) expect)
+      (error 'test/o "Wrong hash"
+             (sha-1->string state) expect ))))
+
+(test/o "3a8262b7c3b43877389d300986b0c0b1eedfdfbf" "xAAAAAAAAAAAAAAAAAAyy" 1 19)
+(test/o "3a8262b7c3b43877389d300986b0c0b1eedfdfbf" "xxAAAAAAAAAAAAAAAAAAyy" 2 20)
 
 
 ;; From RFC 3174
@@ -159,7 +169,7 @@
                   ((= i rep))
                 (update-sha-1! state data))
               (finish-sha-1! state)
-              (unless (equal? (sha-1->string state) expect)
+              (unless (string-ci=? (sha-1->string state) expect)
                 (error 'rfc3174-test "Wrong hash"
                        (sha-1->string state) expect )))
             (map car tests)
