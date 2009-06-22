@@ -25,8 +25,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 * What the assembler does
 Currently the assembler can operate in 32-bit and 64-bit mode. It
-takes your instructions as a list and returns a bytevector if
-everything went ok. The result is a statically linked binary.
+takes your instructions as a list and returns a bytevector and a
+symbol table if everything went ok. The result is a statically linked
+binary.
 
 * TODOs
 ** Output ELF relocatable object files?
@@ -36,7 +37,7 @@ I personally don’t need this right now.
 This could be useful to make it easier to use gdb.
 
 * Basic operation of the assembler
-(assemble '((cli))) => #vu8(250)
+(assemble '((cli))) => #vu8(250) #<hashtable>
 
 See the file program/x86-demo.sps for a program that assembles a
 Multiboot kernel, which can be loaded by e.g. GNU GRUB.

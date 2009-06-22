@@ -1,6 +1,6 @@
 #!/usr/bin/env scheme-script
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2008 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -26,11 +26,11 @@
   ;; Check that it's possible to encode the given instruction, and
   ;; compare the disassembly with the input.
   (let ((expected (if (pair? rest) (car rest) instruction)))
-    (let* ((bv (assemble (list '(%origin 0)
-                               `(%mode ,mode)
-                               instruction)))
-           (port (open-bytevector-input-port bv))
-           (bytes-returned 0))
+    (let*-values (((bv symbols) (assemble (list '(%origin 0)
+                                                `(%mode ,mode)
+                                                instruction)))
+                  ((port) (open-bytevector-input-port bv))
+                  ((bytes-returned) 0))
       (let ((instruction
              (get-instruction port mode
                               (lambda (_ . bytes)
@@ -54,17 +54,19 @@
 (define (testf instruction mode)
   ;; Check that it's not possible to encode the given instruction
   (unless (guard (con (else (display "OK\n")))
-             (assemble (list '(%origin 0)
-                             `(%mode ,mode)
-                             instruction))
-             #f)
+            (call-with-values
+              (lambda () (assemble (list '(%origin 0)
+                                         `(%mode ,mode)
+                                         instruction)))
+              list)
+            #f)
     (error 'testf "test did not fail" instruction mode)))
 
 (define (test= instruction mode expected)
   ;; Encode the instruction and compare it with the given bytevector
-  (let ((bv (assemble (list '(%origin 0)
-                            `(%mode ,mode)
-                            instruction))))
+  (let-values (((bv syms) (assemble (list '(%origin 0)
+                                          `(%mode ,mode)
+                                          instruction))))
     (unless (bytevector=? expected bv)
       (error 'test "Assembly is not as expected"
              instruction expected bv))))
