@@ -1,0 +1,231 @@
+;; -*- mode: scheme; coding: utf-8 -*-
+;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;;
+;; This program is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+;;
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+;;
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#!r6rs
+
+;; Byte-oriented SHA-1 from FIPS 180-3 and RFC 3174.
+
+;; The data being hashed will never be modified here.
+
+;; TODO: give an error if more than 2^64 bits are processed?
+;; TODO: Optimize. Should be simple enough with the help of a profiler.
+
+(library (weinholt crypto sha-1)
+  (export make-sha-1 update-sha-1! finish-sha-1! clear-sha-1! sha-1
+          sha-1-transform!              ;for interested parties only
+          sha-1-copy-hash! sha-1->bytevector sha-1->string)
+  (import (except (rnrs) bitwise-rotate-bit-field))
+
+  (define (print . x) (for-each display x) (newline))
+
+  (define (bitwise-rotate-bit-field ei1 ei2 ei3 ei4)
+    (let* ((n     ei1)
+           (start ei2)
+           (end   ei3)
+           (count ei4)
+           (width (- end start)))
+      (if (positive? width)
+          (let* ((count (mod count width))
+                 (field0 (bitwise-bit-field n start end))
+                 (field1 (bitwise-arithmetic-shift-left field0 count))
+                 (field2 (bitwise-arithmetic-shift-right field0 (- width count)))
+                 (field (bitwise-ior field1 field2)))
+            (bitwise-copy-bit-field n start end field))
+          n)))
+
+  (define-record-type sha1state
+    (fields (immutable H)               ;Hash
+            (immutable W)               ;temporary data
+            (immutable m)               ;unprocessed data
+            (mutable pending)           ;length of unprocessed data
+            (mutable processed)))       ;length of processed data
+
+  (define (make-sha-1)
+    (let ((H (list->vector initial-hash))
+          (W (make-bytevector (* 4 80)))
+          (m (make-bytevector (* 4 16))))
+      (make-sha1state H W m 0 0)))
+
+  (define (clear-sha-1! state)
+    (for-each (lambda (i v)
+                (vector-set! (sha1state-H state) i v))
+              '(0 1 2 3 4)
+              initial-hash)
+    (bytevector-fill! (sha1state-W state) 0)
+    (bytevector-fill! (sha1state-m state) 0)
+    (sha1state-pending-set! state 0)
+    (sha1state-processed-set! state 0))
+
+  (define initial-hash '(#x67452301 #xefcdab89 #x98badcfe #x10325476 #xc3d2e1f0))
+
+  (define (Ch x y z)
+    (bitwise-xor (bitwise-and x y)
+                 (bitwise-and (bitwise-not x) z)))
+
+  (define Parity bitwise-xor)
+
+  (define (Maj x y z)
+    (bitwise-xor (bitwise-and x y)
+                 (bitwise-and x z)
+                 (bitwise-and y z)))
+
+  (define k1 #x5a827999)
+  (define k2 #x6ed9eba1)
+  (define k3 #x8f1bbcdc)
+  (define k4 #xca62c1d6)
+
+  (define (f t B C D)
+    ((cond ((<= 0 t 19) Ch)
+           ((<= 20 t 39) Parity)
+           ((<= 40 t 59) Maj)
+           (else Parity))
+     B C D))
+
+  (define (K t)
+    (cond ((<= 0 t 19) k1)
+          ((<= 20 t 39) k2)
+          ((<= 40 t 59) k3)
+          (else k4)))
+
+  ;; This function transforms a whole 512 bit block.
+  (define (sha-1-transform! H W m offset)
+    ;; Copy the message block
+    (do ((t 0 (+ t 4)))
+        ((= t (* 4 16)))
+      (bytevector-u32-native-set! W t (bytevector-u32-ref m (+ t offset) (endianness big))))
+    ;; Initialize W[16..79]
+    (do ((t (* 4 16) (+ t 4)))
+        ((= t (* 4 80)))
+      (bytevector-u32-native-set! W t (bitwise-rotate-bit-field
+                                       (bitwise-xor (bytevector-u32-native-ref W (- t (* 4 3)))
+                                                    (bytevector-u32-native-ref W (- t (* 4 8)))
+                                                    (bytevector-u32-native-ref W (- t (* 4 14)))
+                                                    (bytevector-u32-native-ref W (- t (* 4 16))))
+                                       0 32 1)))
+    ;; Do the hokey pokey
+    (let lp ((A (vector-ref H 0))
+             (B (vector-ref H 1))
+             (C (vector-ref H 2))
+             (D (vector-ref H 3))
+             (E (vector-ref H 4))
+             (t 0))
+      (cond ((= t 80)
+             (vector-set! H 0 (bitwise-and #xffffffff (+ A (vector-ref H 0))))
+             (vector-set! H 1 (bitwise-and #xffffffff (+ B (vector-ref H 1))))
+             (vector-set! H 2 (bitwise-and #xffffffff (+ C (vector-ref H 2))))
+             (vector-set! H 3 (bitwise-and #xffffffff (+ D (vector-ref H 3))))
+             (vector-set! H 4 (bitwise-and #xffffffff (+ E (vector-ref H 4)))))
+            (else
+             (lp (bitwise-and #xffffffff
+                              (+ (bitwise-rotate-bit-field A 0 32 5)
+                                 (f t B C D)
+                                 E
+                                 (bytevector-u32-native-ref W (* 4 t))
+                                 (K t)))
+                 A
+                 (bitwise-rotate-bit-field B 0 32 30)
+                 C
+                 D
+                 (+ t 1))))))
+
+  ;; Add a bytevector to the state. Align your data to whole blocks if
+  ;; you want this to go a little faster.
+  (define (update-sha-1! state data)
+    (let ((m (sha1state-m state))       ;unprocessed data
+          (H (sha1state-H state))
+          (W (sha1state-W state))
+          (len (bytevector-length data)))
+      (let lp ((offset 0))
+        (cond ((= (sha1state-pending state) 64)
+               ;; A whole block is pending
+               (sha-1-transform! H W m 0)
+               (sha1state-pending-set! state 0)
+               (sha1state-processed-set! state (+ 64 (sha1state-processed state)))
+               (lp offset))
+              ((= offset len)
+               (values))
+              ((or (> (sha1state-pending state) 0)
+                   (> (+ offset 64) len))
+               ;; Pending data exists or less than a block remains.
+               ;; Add more pending data.
+               (let ((added (min (- 64 (sha1state-pending state))
+                                 (- len offset))))
+                 (bytevector-copy! data offset
+                                   m (sha1state-pending state)
+                                   added)
+                 (sha1state-pending-set! state (+ added (sha1state-pending state)))
+                 (lp (+ offset added))))
+              (else
+               ;; Consume a whole block
+               (sha-1-transform! H W data offset)
+               (sha1state-processed-set! state (+ 64 (sha1state-processed state)))
+               (lp (+ offset 64)))))))
+
+  (define zero-block (make-bytevector 64 0))
+
+  ;; Finish the state by adding a 1, zeros and the counter.
+  (define (finish-sha-1! state)
+    (let ((m (sha1state-m state))
+          (pending (+ (sha1state-pending state) 1)))
+      (bytevector-u8-set! m (sha1state-pending state) #x80)
+      (cond ((> pending 56)
+             (bytevector-copy! zero-block 0
+                               m pending
+                               (- 64 pending))
+             (sha-1-transform! (sha1state-H state)
+                               (sha1state-W state)
+                               m
+                               0)
+             (bytevector-fill! m 0))
+            (else
+             (bytevector-copy! zero-block 0
+                               m pending
+                               (- 64 pending))))
+      ;; Number of bits in the data
+      (bytevector-u64-set! m 56
+                           (* (+ (sha1state-processed state)
+                                 (- pending 1))
+                              8)
+                           (endianness big))
+      (sha-1-transform! (sha1state-H state)
+                        (sha1state-W state)
+                        m
+                        0)))
+
+  ;; Find the SHA-1 of the concatenation of the given bytevectors.
+  (define (sha-1 . data)
+    (let ((state (make-sha-1)))
+      (for-each (lambda (d) (update-sha-1! state d))
+                data)
+      (finish-sha-1! state)
+      state))
+
+  (define (sha-1-copy-hash! state bv off)
+    (do ((i 0 (+ i 1)))
+        ((= i 5))
+      (bytevector-u32-set! bv (+ off (* 4 i)) (vector-ref (sha1state-H state) i) (endianness big))))
+
+  (define (sha-1->bytevector state)
+    (let ((ret (make-bytevector (* 4 5))))
+      (sha-1-copy-hash! state ret 0)
+      ret))
+
+  (define (sha-1->string state)
+    (apply string-append
+           (map (lambda (x)
+                  (if (< x #x10)
+                      (string-append "0" (number->string x 16))
+                      (number->string x 16)))
+                (bytevector->u8-list (sha-1->bytevector state))))))

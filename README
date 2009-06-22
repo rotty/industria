@@ -31,6 +31,20 @@ complete and might generate bad code. It does not yet do any jump size
 optimization or produce relocatable object files. But it can be used
 to generate Multiboot images and programs/x86-demo shows this.
 
+** (weinholt crypto des)
+The Data Encryption Standard, FIPS 42. This library implements DES and
+3DES (TDEA) in ECB mode, and the DES based crypt() password hashing
+function from UN*X. See the security note below.
+
+** (weinholt crypto sha-1)
+The famous SHA-1 from the Secure Hash Standard, FIPS 180. Here's an
+example of the simple interface:
+
+> (sha-1->string (sha-1 (string->utf8 "A Scheme in every home")))
+"1153928E5092B8B64879C14128FE6CFB2F991CF9"
+
+See the security note below.
+
 ** (weinholt disassembler x86)
 Disassembler for the Intel x86 architecture. Supports most modern
 instructions encodings as of 2008, including the VEX prefix used by
@@ -71,9 +85,7 @@ also be useful if you want to see how a library is used.
 * PROGRAMS
 The programs/ directory contains small utilities that use the
 libraries. These scripts are implemented in the way recommended by
-R6RS non-normative appendix D. The file names follow the Unix
-convention, so if you use an adult operating system you will need to
-rename them.
+R6RS non-normative appendix D.
 
 ** fcdisasm
 The Full-Color Disassembler, which disassembles x86 code and colors
@@ -86,8 +98,26 @@ doesn't do anything other than joining channels and being rude in
 private messages. Shows how the (weinholt net irc) library can be
 used. It requires tcp-connect and uses printf from (ikarus).
 
+** sha1sum
+Compute the SHA-1 hash function of a file. Give it a filename and off
+it goes. It also demonstrates the superior slowness of this SHA-1
+library, as compared with the stock sha1sum program.
+
 ** x86-demo
 A demonstration of the (weinholt assembler x86) library. The program
 assembles a Multiboot image, which can be loaded by GNU GRUB. The demo
 uses the VGA text mode and a few VGA registers to generate a classic
 copper bar effect.
+
+* SECURITY NOTE
+Beware that if you're using some of these libraries for sensitive
+data, let's say passwords, then there is probably no way to make sure
+a password is ever gone from memory. There is no guarantee that the
+passwords will not be swapped out to disk or transmitted via radio.
+There might be other problems as well. The algorithms themselves might
+be weak. Don't pick weak keys. Know your stuff.
+
+And remember what the license says about warranties. Don't come crying
+to me if the enemy deciphers your secret messages. These libraries
+have not been validated by the NIST or the FDA and probably can't be
+used for government work.
