@@ -25,7 +25,8 @@
 (library (weinholt crypto sha-1)
   (export make-sha-1 update-sha-1! finish-sha-1! clear-sha-1! sha-1
           sha-1-transform!              ;for interested parties only
-          sha-1-copy-hash! sha-1->bytevector sha-1->string)
+          sha-1-copy-hash! sha-1->bytevector sha-1->string
+          hmac-sha-1)
   (import (except (rnrs) bitwise-rotate-bit-field))
 
   (define (print . x) (for-each display x) (newline))
@@ -231,4 +232,27 @@
                   (if (< x #x10)
                       (string-append "0" (number->string x 16))
                       (number->string x 16)))
-                (bytevector->u8-list (sha-1->bytevector state))))))
+                (bytevector->u8-list (sha-1->bytevector state)))))
+
+  (define (hmac-sha-1 secret data)
+    ;; RFC 2104.
+    (if (> (bytevector-length secret) 64)
+        (hmac-sha-1 (sha-1->bytevector (sha-1 secret)) data)
+        (let ((k-ipad (make-bytevector 64 0))
+              (k-opad (make-bytevector 64 0)))
+          (bytevector-copy! secret 0 k-ipad 0 (bytevector-length secret))
+          (bytevector-copy! secret 0 k-opad 0 (bytevector-length secret))
+          (do ((i 0 (fx+ i 1)))
+              ((fx=? i 64))
+            (bytevector-u8-set! k-ipad i (fxxor #x36 (bytevector-u8-ref k-ipad i)))
+            (bytevector-u8-set! k-opad i (fxxor #x5c (bytevector-u8-ref k-opad i))))
+          (let ((state (make-sha-1)))
+            (update-sha-1! state k-ipad)
+            (update-sha-1! state data)
+            (finish-sha-1! state)
+            (let ((digest (sha-1->bytevector state)))
+              (clear-sha-1! state)
+              (update-sha-1! state k-opad)
+              (update-sha-1! state digest)
+              (finish-sha-1! state)
+              state))))))

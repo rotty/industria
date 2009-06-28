@@ -171,7 +171,47 @@
               (finish-sha-1! state)
               (unless (string-ci=? (sha-1->string state) expect)
                 (error 'rfc3174-test "Wrong hash"
-                       (sha-1->string state) expect )))
+                       (sha-1->string state) expect)))
             (map car tests)
             (map cadr tests)
             (map caddr tests)))
+
+
+;; From RFC 2202, (in which some tests are repeated due to some weird
+;; typesetting error)
+
+(define (test-hmac expect key data)
+  (let ((result (sha-1->string (hmac-sha-1 key data))))
+    (unless (string-ci=? result expect)
+      (error 'test-hmac "bad result" result expect))))
+
+
+(test-hmac "b617318655057264e28bc0b6fb378c8ef146be00"
+           (make-bytevector 20 #x0b)
+           (string->utf8 "Hi There"))
+
+(test-hmac "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79"
+           (string->utf8 "Jefe")
+           (string->utf8 "what do ya want for nothing?"))
+
+(test-hmac "125d7342b9ac11cd91a39af48aa17b4f63f175d3"
+           (make-bytevector 20 #xaa)
+           (make-bytevector 50 #xdd))
+
+(test-hmac "4c9007f4026250c6bc8414f9bf50c86c2d7235da"
+           #vu8(#x01 #x02 #x03 #x04 #x05 #x06 #x07 #x08 #x09 #x0a #x0b #x0c
+                     #x0d #x0e #x0f #x10 #x11 #x12 #x13 #x14 #x15 #x16 #x17 #x18 #x19)
+           (make-bytevector 50 #xcd))
+
+(test-hmac "4c1a03424b55e07fe7f27be1d58bb9324a9a5a04"
+           (make-bytevector 20 #x0c)
+           (string->utf8 "Test With Truncation")) ;; not testing truncation...
+;; digest-96 = 0x4c1a03424b55e07fe7f27be1
+
+(test-hmac "aa4ae5e15272d00e95705637ce8a3b55ed402112"
+           (make-bytevector 80 #xaa)
+           (string->utf8 "Test Using Larger Than Block-Size Key - Hash Key First"))
+
+(test-hmac "e8e99d0f45237d786d6bbaa7965c7808bbff1a91"
+           (make-bytevector 80 #xaa)
+           (string->utf8 "Test Using Larger Than Block-Size Key and Larger Than One Block-Size Data"))
