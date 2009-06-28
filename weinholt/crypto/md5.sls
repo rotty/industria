@@ -19,7 +19,8 @@
 
 (library (weinholt crypto md5)
   (export make-md5 update-md5! finish-md5! clear-md5! md5
-          md5-copy-hash! md5->bytevector md5->string)
+          md5-copy-hash! md5->bytevector md5->string
+          hmac-md5)
   (import (except (rnrs) bitwise-rotate-bit-field))
 
   (define (print . x) (for-each display x) (newline))
@@ -230,4 +231,27 @@
                   (if (< x #x10)
                       (string-append "0" (number->string x 16))
                       (number->string x 16)))
-                (bytevector->u8-list (md5->bytevector state))))))
+                (bytevector->u8-list (md5->bytevector state)))))
+
+  (define (hmac-md5 secret data)
+    ;; RFC 2104.
+    (if (> (bytevector-length secret) 64)
+        (hmac-md5 (md5->bytevector (md5 secret)) data)
+        (let ((k-ipad (make-bytevector 64 0))
+              (k-opad (make-bytevector 64 0)))
+          (bytevector-copy! secret 0 k-ipad 0 (bytevector-length secret))
+          (bytevector-copy! secret 0 k-opad 0 (bytevector-length secret))
+          (do ((i 0 (fx+ i 1)))
+              ((fx=? i 64))
+            (bytevector-u8-set! k-ipad i (fxxor #x36 (bytevector-u8-ref k-ipad i)))
+            (bytevector-u8-set! k-opad i (fxxor #x5c (bytevector-u8-ref k-opad i))))
+          (let ((state (make-md5)))
+            (update-md5! state k-ipad)
+            (update-md5! state data)
+            (finish-md5! state)
+            (let ((digest (md5->bytevector state)))
+              (clear-md5! state)
+              (update-md5! state k-opad)
+              (update-md5! state digest)
+              (finish-md5! state)
+              state))))))

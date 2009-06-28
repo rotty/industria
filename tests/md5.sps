@@ -35,3 +35,39 @@
 (test/s "c3fcd3d76192e4007dfb496cca67e13b" "abcdefghijklmnopqrstuvwxyz")
 (test/s "d174ab98d277d9f5a5611c2c9f419d9f" "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
 (test/s "57edf4a22be3c955ac49da2e2107b67a" "12345678901234567890123456789012345678901234567890123456789012345678901234567890")
+
+;; From RFC 2104/2202
+(define (test-hmac expect key data)
+  (let ((result (md5->string (hmac-md5 key data))))
+    (unless (string-ci=? result expect)
+      (error 'test-hmac "bad result" result expect))))
+
+(test-hmac "9294727a3638bb1c13f48ef8158bfc9d"
+           (make-bytevector 16 #x0b)
+           (string->utf8 "Hi There"))
+
+(test-hmac "750c783e6ab0b503eaa86e310a5db738"
+           (string->utf8 "Jefe")
+           (string->utf8 "what do ya want for nothing?"))
+
+(test-hmac "56be34521d144c88dbb8c733f0e8b3f6"
+           (make-bytevector 16 #xAA)
+           (make-bytevector 50 #xDD))
+
+(test-hmac "697eaf0aca3a3aea3a75164746ffaa79"
+           #vu8(#x01 #x02 #x03 #x04 #x05 #x06 #x07 #x08 #x09 #x0a #x0b #x0c
+                     #x0d #x0e #x0f #x10 #x11 #x12 #x13 #x14 #x15 #x16 #x17 #x18 #x19)
+           (make-bytevector 50 #xcd))
+
+(test-hmac "56461ef2342edc00f9bab995690efd4c"
+           (make-bytevector 16 #x0c)
+           (string->utf8 "Test With Truncation")) ;; not testing truncation...
+;; digest-96 = 0x56461ef2342edc00f9bab995
+
+(test-hmac "6b1ab7fe4bd7bf8f0b62e6ce61b9d0cd"
+           (make-bytevector 80 #xaa)
+           (string->utf8 "Test Using Larger Than Block-Size Key - Hash Key First"))
+
+(test-hmac "6f630fad67cda0ee1fb1f562db3aa53e"
+           (make-bytevector 80 #xaa)
+           (string->utf8 "Test Using Larger Than Block-Size Key and Larger Than One Block-Size Data"))
