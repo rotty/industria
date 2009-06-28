@@ -233,10 +233,10 @@
                       (number->string x 16)))
                 (bytevector->u8-list (md5->bytevector state)))))
 
-  (define (hmac-md5 secret data)
+  (define (hmac-md5 secret . data)
     ;; RFC 2104.
     (if (> (bytevector-length secret) 64)
-        (hmac-md5 (md5->bytevector (md5 secret)) data)
+        (apply hmac-md5 (md5->bytevector (md5 secret)) data)
         (let ((k-ipad (make-bytevector 64 0))
               (k-opad (make-bytevector 64 0)))
           (bytevector-copy! secret 0 k-ipad 0 (bytevector-length secret))
@@ -247,7 +247,7 @@
             (bytevector-u8-set! k-opad i (fxxor #x5c (bytevector-u8-ref k-opad i))))
           (let ((state (make-md5)))
             (update-md5! state k-ipad)
-            (update-md5! state data)
+            (for-each (lambda (d) (update-md5! state d)) data)
             (finish-md5! state)
             (let ((digest (md5->bytevector state)))
               (clear-md5! state)
