@@ -38,9 +38,17 @@
 
   (define random-nonzero-byte
     (let* ((s (make-random-source))
-           (make-int (random-source-make-integers s)))
-      (random-source-randomize! s)
-      (lambda () (+ 1 (make-int 254)))))
+           (make-int (random-source-make-integers s))
+           (urandom (and (file-exists? "/dev/urandom")
+                         (open-file-input-port "/dev/urandom"))))
+      (unless urandom
+        (random-source-randomize! s))
+      (lambda ()
+        (if urandom
+            (let lp ()
+              (let ((v (get-u8 urandom)))
+                (if (zero? v) (lp) v)))
+            (+ 1 (make-int 254))))))
 
   (define-record-type rsa-public-key
     (fields modulus                     ;n

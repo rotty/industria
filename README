@@ -125,6 +125,14 @@ passwords will not be swapped out to disk or transmitted via radio.
 There might be other problems as well. The algorithms themselves might
 be weak. Don't pick weak keys. Know your stuff.
 
+Your Scheme's implementation of (srfi :27 random-bits) might be too
+weak. It's common that it will be initialized from time alone, so an
+attacker can easily guess your random-source's internal state by
+trying a few timestamps and seeing which one generates the data you
+sent. These libraries try to use /dev/urandom if it exists, but if it
+doesn't they fall back on SRFI-27 and could reveal the secret of your
+heart to the enemy.
+
 And remember what the license says about warranties. Don't come crying
 to me if the enemy deciphers your secret messages and your whole
 convoy blows up. These libraries have not been validated by the NIST
