@@ -49,6 +49,7 @@
           put-tls-application-data)
   (import (rnrs)
           (srfi :19 time)
+          (srfi :27 random-bits)
           (weinholt crypto des)
           (weinholt crypto sha-1)
           (weinholt crypto md5)
@@ -81,6 +82,27 @@
   (define TLS-RSA-WITH-AES-256-CBC-SHA256 #x003D)
 
   (define (print . x) (for-each display x) (newline))
+
+  ;; This function should return unpredictable random data. It should
+  ;; be initialized from as many different sources as possible (not
+  ;; e.g. just the current time and process ID). If an attacker knows
+  ;; exactly how this is initialized, or uses the client-random-bytes
+  ;; (which are plainly visible on the network) to deduce the inner
+  ;; state of the random source, then all is lost.
+  (define make-random-bytevector
+    (let* ((s (make-random-source))
+           (make-int (random-source-make-integers s))
+           (urandom (and (file-exists? "/dev/urandom")
+                         (open-file-input-port "/dev/urandom"))))
+      (lambda (len)
+        (unless urandom
+          (random-source-randomize! s))
+        (do ((bv (make-bytevector len))
+             (i 0 (fx+ i 1)))
+            ((fx=? i len) bv)
+          (if urandom
+              (bytevector-u8-set! bv i (get-u8 urandom))
+              (bytevector-u8-set! bv i (make-int 255)))))))
 
   (define (bv->string bv)
     (apply string-append
@@ -166,36 +188,38 @@
             (mutable server-write-mac-secret)
             (mutable server-write-key)
             (mutable server-write-IV)
-            (mutable handshakes-md5)
-            (mutable handshakes-sha-1)
+            (immutable handshakes-md5)
+            (immutable handshakes-sha-1)
             (immutable server-name)
             (immutable inbuf)
             (immutable out)))
 
   (define (make-tls-wrapper in out server-name)
-    (make-tls-conn TLS-NULL-WITH-NULL-NULL
-                   TLS-NULL-WITH-NULL-NULL
-                   #f
-                   #f
-                   0 0
-                   TLS-VERSION
-                   '()
-                   'no-server-key-yet
-                   'no-server-random
-                   'no-client-random
-                   'no-prf-yet
-                   'no-master-secret-yet
-                   'no-client-write-mac-secret-yet
-                   'no-client-write-key-yet
-                   'no-client-write-IV-yet
-                   'no-server-write-mac-secret-yet
-                   'no-server-write-key-yet
-                   'no-server-write-IV-yet
-                   (make-md5)
-                   (make-sha-1)
-                   server-name
-                   (make-buffer in)
-                   out))
+    (let ((random-source (make-random-source)))
+      (random-source-randomize! random-source)
+      (make-tls-conn TLS-NULL-WITH-NULL-NULL
+                     TLS-NULL-WITH-NULL-NULL
+                     #f
+                     #f
+                     0 0
+                     TLS-VERSION
+                     '()
+                     'no-server-key-yet
+                     'no-server-random
+                     'no-client-random
+                     'no-prf-yet
+                     'no-master-secret-yet
+                     'no-client-write-mac-secret-yet
+                     'no-client-write-key-yet
+                     'no-client-write-IV-yet
+                     'no-server-write-mac-secret-yet
+                     'no-server-write-key-yet
+                     'no-server-write-IV-yet
+                     (make-md5)
+                     (make-sha-1)
+                     server-name
+                     (make-buffer in)
+                     out)))
 
   (define (close-tls-immediately conn)
     (close-port (tls-conn-out conn))
@@ -474,15 +498,11 @@
     (define session-id '#vu8())
     (define cipher-suites (list TLS-RSA-WITH-3DES-EDE-CBC-SHA))
     (define compression-methods '(0))   ;null compression
-    (let ((crandom (make-bytevector (+ 4 28))))
+    (let ((crandom (make-random-bytevector (+ 4 28))))
       ;; Client time + random bytes
       (bytevector-u32-set! crandom 0
                            (bitwise-and #xffffffff (time-second (current-time)))
                            (endianness big))
-      (do ((i 4 (fx+ i 1))              ;FIXME: make portable
-           (/dev/urandom (open-file-input-port "/dev/urandom")))
-          ((fx=? i (bytevector-length crandom)))
-        (bytevector-u8-set! crandom i (get-u8 /dev/urandom)))
       (tls-conn-client-random-set! conn crandom)
 
       ;; Extensions (RFC4366).
@@ -514,23 +534,18 @@
                (u16be-list->bytevector (list (bytevector-length server-name-list)))
                server-name-list)))))
 
-
   (define (put-tls-handshake-certificate conn)
     ;; no certificates to give
     (put-tls-handshake conn TLS-HANDSHAKE-CERTIFICATE
                        (list '#vu8(0 0 0))))
 
   (define (put-tls-handshake-client-key-exchange conn)
-    (let* ((premaster-secret (make-bytevector 48))
+    (let* ((premaster-secret (make-random-bytevector 48))
            (keylen (rsa-public-key-byte-length (tls-conn-server-key conn)))
            (bv (make-bytevector (+ 2 keylen))))
       ;; Construct the premaster secret with our version number and 46
-      ;; random bytes.
+      ;; random bytes. Everything hinges on this being unpredictable...
       (bytevector-u16-set! premaster-secret 0 TLS-VERSION (endianness big))
-      (do ((i 2 (+ i 1))                ;FIXME: make portable
-           (/dev/urandom (open-file-input-port "/dev/urandom")))
-          ((= i (bytevector-length premaster-secret)))
-        (bytevector-u8-set! premaster-secret i (get-u8 /dev/urandom)))
 
       (bytevector-u16-set! bv 0 keylen (endianness big))
       (bytevector-uint-set! bv 2
@@ -582,8 +597,6 @@
 
           (put-tls-handshake conn TLS-HANDSHAKE-CLIENT-KEY-EXCHANGE
                              (list bv))))))
-
-
 
   (define (put-tls-handshake-finished conn)
     ;; PRF(master_secret, finished_label, MD5(handshake_messages) +
@@ -696,12 +709,10 @@
              (error 'get-tls-handshake-record
                     "an unknown handshake type arrived" type)))))
 
-
 ;;; Change cipher spec protocol
 
   (define (put-tls-change-cipher-spec conn)
-    (put-tls-record conn TLS-PROTOCOL-CHANGE-CIPHER-SPEC
-                    '(#vu8(1)))
+    (put-tls-record conn TLS-PROTOCOL-CHANGE-CIPHER-SPEC '(#vu8(1)))
     (tls-conn-client-cipher-set! conn TLS-RSA-WITH-3DES-EDE-CBC-SHA))
 
   (define (get-tls-change-cipher-spec conn)
@@ -712,7 +723,7 @@
              'change-cipher-spec)
             (else
              ;; TODO
-             (print "unexpected and so on...")))))
+             (error 'get-tls-change-cipher-spec "unexpected value etc")))))
 
 ;;; Application data protocol
 
