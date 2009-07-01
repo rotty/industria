@@ -57,25 +57,26 @@
             "ZZvIHp4MBMwSE")
 
 (define (test-tdea plaintext k1 k2 k3 expect)
-  (let ((bv (bytevector-copy plaintext)))
-    (tdea-encipher! bv k1 k2 k3)
+  (let ((bv (bytevector-copy plaintext))
+        (key (tdea-permute-key k1 k2 k3)))
+    (tdea-encipher! bv 0 key)
     (unless (equal? bv expect)
       (error 'test-tdea "Bad ciphertext" bv expect))
-    (tdea-decipher! bv k1 k2 k3)
+    (tdea-decipher! bv 0 key)
     (unless (equal? bv plaintext)
       (error 'test-tdea "Bad deciphered plaintext" bv plaintext))))
 
 (test-tdea (string->utf8 "The Msg.")
-           (permute-key (string->utf8 "01234567"))
-           (permute-key (string->utf8 "abcdefgh"))
-           (permute-key (string->utf8 "qwertyui"))
+           (string->utf8 "01234567")
+           (string->utf8 "abcdefgh")
+           (string->utf8 "qwertyui")
            #vu8(243 85 37 68 185 248 44 83))
 
 ;; From NIST Special Publication 800-67 version 1.1,
 ;; revised 19 may 2008.
-(let ((k1 (permute-key #vu8(#x01 #x23 #x45 #x67 #x89 #xAB #xCD #xEF)))
-      (k2 (permute-key #vu8(#x23 #x45 #x67 #x89 #xAB #xCD #xEF #x01)))
-      (k3 (permute-key #vu8(#x45 #x67 #x89 #xAB #xCD #xEF #x01 #x23))))
+(let ((k1 #vu8(#x01 #x23 #x45 #x67 #x89 #xAB #xCD #xEF))
+      (k2 #vu8(#x23 #x45 #x67 #x89 #xAB #xCD #xEF #x01))
+      (k3 #vu8(#x45 #x67 #x89 #xAB #xCD #xEF #x01 #x23)))
 
   (test-tdea (string->utf8 "The qufc")  ;sic
              k1 k2 k3

@@ -27,7 +27,9 @@
 
 (library (weinholt crypto des)
   (export des-key-bad-parity? des! permute-key crypt
-          tdea-encipher! tdea-decipher!)
+          tdea-permute-key tdea-encipher! tdea-decipher!
+          tdea-cbc-encipher!
+          tdea-cbc-decipher!)
   (import (except (rnrs) bitwise-rotate-bit-field))
 
   (define (bitwise-rotate-bit-field ei1 ei2 ei3 ei4)
@@ -59,7 +61,7 @@
         ((null? x) ret)))
 
   (define (permute input inlen table)
-    ;; This is basically what makes this library so slow.
+    ;; This is basically what makes this library so slow. Among other things.
     (do ((i 0 (fx+ i 1))
          (ret 0 (if (bitwise-bit-set? input (fx- inlen (bytevector-u8-ref table i)))
                     (bitwise-ior ret (bitwise-arithmetic-shift-left 1 (- (bytevector-length table) i 1)))
@@ -185,32 +187,80 @@
 
   ;; Runs the DES algorithm on the given plaintext bytevector. The key
   ;; list is the output from the permute-key function. Decryption is
-  ;; performed if you reverse the key list. This is the ECB mode.
+  ;; performed if you reverse the key list. This is the ECB mode. Only
+  ;; one eight-byte block is treated.
   (define des!
     (case-lambda
-      ((bv keys E)
-       (let ((m0 (IP (bytevector-u64-ref bv 0 (endianness big)))))
+      ((bv keys offset E)
+       (let ((m0 (IP (bytevector-u64-ref bv offset (endianness big)))))
          (do ((keys keys (cdr keys))
               (L (bitwise-bit-field m0 32 64) R)
               (R (bitwise-bit-field m0 0 32) (bitwise-xor L (feistel R (car keys) E))))
              ((null? keys)
               (bytevector-u64-set!
-               bv 0 (FP (bitwise-ior (bitwise-arithmetic-shift-left R 32) L))
+               bv offset (FP (bitwise-ior (bitwise-arithmetic-shift-left R 32) L))
                (endianness big))))))
       ((bv keys)
-       (des! bv keys E))))
+       (des! bv keys 0 E))))
 
 ;;; Triple DES, or Triple Data Encryption Algorithm.
 
-  (define (tdea-encipher! bv k1 k2 k3)
-    (des! bv k1 E)
-    (des! bv (reverse k2) E)
-    (des! bv k3 E))
+  (define-record-type tdea-key
+    (fields k1enc k1dec
+            k2enc k2dec
+            k3enc k3dec))
 
-  (define (tdea-decipher! bv k1 k2 k3)
-    (des! bv (reverse k3) E)
-    (des! bv k2 E)
-    (des! bv (reverse k1) E))
+  (define (tdea-encipher! bv offset key)
+    (des! bv (tdea-key-k1enc key) offset E)
+    (des! bv (tdea-key-k2dec key) offset E)
+    (des! bv (tdea-key-k3enc key) offset E))
+
+  (define (tdea-decipher! bv offset key)
+    (des! bv (tdea-key-k3dec key) offset E)
+    (des! bv (tdea-key-k2enc key) offset E)
+    (des! bv (tdea-key-k1dec key) offset E))
+
+  (define tdea-permute-key
+    (case-lambda
+      ((k1 k2 k3)
+       (let ((k1 (permute-key k1))
+             (k2 (permute-key k2))
+             (k3 (permute-key k3)))
+         (make-tdea-key k1 (reverse k1)
+                        k2 (reverse k2)
+                        k3 (reverse k3))))
+      ((key)
+       (let ((k1 (make-bytevector 24))
+             (k2 (make-bytevector 24))
+             (k3 (make-bytevector 24)))
+         (bytevector-copy! key 0 k1 0 8)
+         (bytevector-copy! key 8 k2 0 8)
+         (bytevector-copy! key 16 k3 0 8)
+         (tdea-permute-key k1 k2 k3)))))
+
+  ;; Encrypt the `data' bytevector with 3DES/TDEA in CBC mode. The
+  ;; data must be a multiple of eight bytes (and currently aligned on
+  ;; an eight byte boundary). The IV is updated.
+  (define (tdea-cbc-encipher! data key iv offset count)
+    (do ((i offset (fx+ i 8)))
+        ((fx>=? i (fx+ offset count)))
+      (bytevector-u64-native-set! data i
+                                  (bitwise-xor (bytevector-u64-native-ref iv 0)
+                                               (bytevector-u64-native-ref data i)))
+      (tdea-encipher! data i key)
+      (bytevector-copy! data i iv 0 8)))
+
+  ;; Same as above, but decrypt instead.
+  (define (tdea-cbc-decipher! data key iv offset count)
+    (do ((tmp (make-bytevector 8))
+         (i offset (fx+ i 8)))
+        ((fx>=? i (fx+ offset count)))
+      (bytevector-copy! data i tmp 0 8)
+      (tdea-decipher! data i key)
+      (bytevector-u64-native-set! data i
+                                  (bitwise-xor (bytevector-u64-native-ref iv 0)
+                                               (bytevector-u64-native-ref data i)))
+      (bytevector-copy! tmp 0 iv 0 8)))
 
 ;;; UNIX crypt()
 
@@ -263,4 +313,4 @@
         ;; 25 rounds of DES
         (do ((i 0 (fx+ i 1)))
             ((fx=? i 25) (string-append salt (bytevector->a64 block)))
-          (des! block keys E*))))))
+          (des! block keys 0 E*))))))
