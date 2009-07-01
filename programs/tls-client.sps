@@ -55,6 +55,7 @@
   (put-tls-application-data s (string->utf8
                                (string-append "GET / HTTP/1.1\r\n"
                                               "Host: " (cadr (command-line)) ":" (caddr (command-line)) "\r\n"
+                                              "Connection: close\r\n"
                                               "\r\n\r\n")))
   (flush-tls-output s)
 

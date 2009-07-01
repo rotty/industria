@@ -166,7 +166,8 @@
             (mutable server-write-mac-secret)
             (mutable server-write-key)
             (mutable server-write-IV)
-            (mutable handshakes)
+            (mutable handshakes-md5)
+            (mutable handshakes-sha-1)
             (immutable server-name)
             (immutable inbuf)
             (immutable out)))
@@ -190,7 +191,8 @@
                    'no-server-write-mac-secret-yet
                    'no-server-write-key-yet
                    'no-server-write-IV-yet
-                   '()
+                   (make-md5)
+                   (make-sha-1)
                    server-name
                    (make-buffer in)
                    out))
@@ -338,6 +340,7 @@
       (buffer-reset! b)
       (buffer-read! b 5)
       (print "reading record type: " (read-u8 b 0))
+      (print "reading record version: " (number->string (read-u16 b 1) 16))
       (print "reading record length: " (read-u16 b 3))
       ;; FIXME: defragment messages: read the header, set a flag and
       ;; then when coming back, don't reset the buffer. the protocol
@@ -443,6 +446,19 @@
   (define TLS-HANDSHAKE-CLIENT-KEY-EXCHANGE 16)
   (define TLS-HANDSHAKE-FINISHED 20)
 
+  (define tls-conn-hash-handshake!
+    (case-lambda
+      ((conn l)
+       (for-each (lambda (bv)
+                   (tls-conn-hash-handshake! conn bv 0 (bytevector-length bv)))
+                 l))
+      ((conn bv start count)
+       ;; Calculate the hashes of all incoming and outgoing
+       ;; handshakes. Used in the FINISH message. TODO: this is
+       ;; version-dependent.
+       (md5-update! (tls-conn-handshakes-md5 conn) bv start (+ start count))
+       (sha-1-update! (tls-conn-handshakes-sha-1 conn) bv start (+ start count)))))
+
   (define (put-tls-handshake conn type data)
     ;; Takes data from a handshake protocol and passes it to the
     ;; record protocol.
@@ -451,9 +467,7 @@
       (bytevector-u32-set! bv 0 (bitwise-ior (bitwise-arithmetic-shift-left type 24)
                                              len)
                            (endianness big))
-      ;; TODO: hash the handshake right here
-      (tls-conn-handshakes-set! conn (cons (bytevector-append (cons bv data))
-                                           (tls-conn-handshakes conn)))
+      (tls-conn-hash-handshake! conn (cons bv data))
       (put-tls-record conn TLS-PROTOCOL-HANDSHAKE (cons bv data))))
 
   (define (put-tls-handshake-client-hello conn)
@@ -574,36 +588,34 @@
   (define (put-tls-handshake-finished conn)
     ;; PRF(master_secret, finished_label, MD5(handshake_messages) +
     ;;                         SHA-1(handshake_messages)) [0..11];
-    (let ((handshakes (reverse (tls-conn-handshakes conn))))
-      ;; TODO: hash the handshakes as they come, don't save them
-      (put-tls-handshake conn TLS-HANDSHAKE-FINISHED
-                         (list ((tls-conn-prf conn) 12
-                                (tls-conn-master-secret conn)
-                                (string->utf8 "client finished")
-                                (list (md5->bytevector (apply md5 handshakes))
-                                      (sha-1->bytevector (apply sha-1 handshakes))))))))
-
+    (put-tls-handshake conn TLS-HANDSHAKE-FINISHED
+                       (list ((tls-conn-prf conn) 12
+                              (tls-conn-master-secret conn)
+                              (string->utf8 "client finished")
+                              (list (md5->bytevector (md5-finish (tls-conn-handshakes-md5 conn)))
+                                    (sha-1->bytevector (sha-1-finish (tls-conn-handshakes-sha-1 conn))))))))
 
   (define (get-tls-handshake-record conn)
     (let* ((b (tls-conn-inbuf conn))
            (type (read-u8 b 0))
-           (length (read-u24 b 1)))
-      ;; FIXME: might be fragmented, check the length...
-
+           (length (read-u24 b 1))
+           (hash! (let ((start (buffer-top b)))
+                    (lambda ()
+                      (tls-conn-hash-handshake! conn
+                                                (buffer-data b)
+                                                start
+                                                (+ 4 length))))))
+      ;; FIXME: might be fragmented
       (when (> length (- (buffer-bottom b) (buffer-top b)))
         (print (bv->string (buffer-data b)))
         (error 'get-tls-handshake-record "FIXME: short record" length))
 
-      (unless (= type TLS-HANDSHAKE-HELLO-REQUEST)
-        (tls-conn-handshakes-set! conn (cons (bytevector-copy* (buffer-data b)
-                                                               (buffer-top b)
-                                                               (+ 4 length))
-                                             (tls-conn-handshakes conn))))
       (buffer-seek! b 4)
 
       (cond ((= type TLS-HANDSHAKE-SERVER-HELLO)
              ;; The server replied (presumably, check this later) to
              ;; the CLIENT-HELLO message.
+             (hash!)
              (print "server says hello.")
              (tls-conn-version-set! conn (read-u16 b 0))
              (print "version " (number->string (tls-conn-version conn) 16))
@@ -629,6 +641,7 @@
              'handshake-server-hello)
 
             ((= type TLS-HANDSHAKE-CERTIFICATE)
+             (hash!)
              (print "server sends his certs")
              (let ((certs-end (+ (buffer-top b) 3 (read-u24 b 0))))
                (buffer-seek! b 3)
@@ -652,15 +665,30 @@
                           (lp (cons cert certs))))))))
 
             ((= type TLS-HANDSHAKE-SERVER-HELLO-DONE)
-             (print "server has finished sending hellos")
+             (hash!)
              'handshake-server-hello-done)
 
             ((= type TLS-HANDSHAKE-CERTIFICATE-REQUEST)
+             (hash!)
              (print "server requests a client certificate! well well well!")
              'handshake-certificate-request)
 
             ((= type TLS-HANDSHAKE-FINISHED)
-             (print "server is sending us the verification codes")
+             ;; If this message is correct, it proves that the server
+             ;; could decrypt the pre-master secret, so it has the
+             ;; private key for the certificate it sent.
+             (unless (bytevector=? (bytevector-copy* (buffer-data b)
+                                                            (buffer-top b)
+                                                            (- (buffer-bottom b)
+                                                               (buffer-top b)))
+                                   ((tls-conn-prf conn) 12
+                                    (tls-conn-master-secret conn)
+                                    (string->utf8 "server finished")
+                                    (list (md5->bytevector (md5-finish (tls-conn-handshakes-md5 conn)))
+                                          (sha-1->bytevector (sha-1-finish (tls-conn-handshakes-sha-1 conn))))))
+               (error 'get-tls-handshake "bad verify_data in HANDSHAKE-FINISHED"))
+             
+             (hash!)
              'handshake-finished)
 
             ;; TODO:

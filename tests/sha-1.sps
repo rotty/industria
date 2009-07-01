@@ -141,8 +141,8 @@
 
 (define (test/o expect string start end)
   (let ((state (make-sha-1)))
-    (update-sha-1! state (string->utf8 string) start end)
-    (finish-sha-1! state)
+    (sha-1-update! state (string->utf8 string) start end)
+    (sha-1-finish! state)
     (unless (string-ci=? (sha-1->string state) expect)
       (error 'test/o "Wrong hash"
              (sha-1->string state) expect ))))
@@ -163,12 +163,12 @@
                 "0123456701234567012345670123456701234567012345670123456701234567")))
       (state (make-sha-1)))
   (for-each (lambda (expect rep data)
-              (clear-sha-1! state)
+              (sha-1-clear! state)
               (do ((data (string->utf8 data))
                    (i 0 (+ i 1)))
                   ((= i rep))
-                (update-sha-1! state data))
-              (finish-sha-1! state)
+                (sha-1-update! state data))
+              (sha-1-finish! state)
               (unless (string-ci=? (sha-1->string state) expect)
                 (error 'rfc3174-test "Wrong hash"
                        (sha-1->string state) expect)))

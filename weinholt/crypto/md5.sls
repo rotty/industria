@@ -18,10 +18,12 @@
 ;; The MD5 Message-Digest Algorithm. RFC 1321
 
 (library (weinholt crypto md5)
-  (export make-md5 update-md5! finish-md5! clear-md5! md5
+  (export make-md5 md5-update! md5-finish! md5-clear!
+          md5 md5-copy md5-finish
           md5-copy-hash! md5->bytevector md5->string
           hmac-md5)
-  (import (except (rnrs) bitwise-rotate-bit-field))
+  (import (except (rnrs) bitwise-rotate-bit-field)
+          (only (srfi :43 vectors) vector-copy))
 
   (define (print . x) (for-each display x) (newline))
 
@@ -53,7 +55,15 @@
           (m (make-bytevector (* 4 16))))
       (make-md5state H W m 0 0)))
 
-  (define (clear-md5! state)
+  (define (md5-copy state)
+    (let ((H (vector-copy (md5state-H state)))
+          (W (make-bytevector (* 4 16)))
+          (m (bytevector-copy (md5state-m state))))
+      (make-md5state H W m
+                     (md5state-pending state)
+                     (md5state-processed state))))
+
+  (define (md5-clear! state)
     (for-each (lambda (i v)
                 (vector-set! (md5state-H state) i v))
               '(0 1 2 3)
@@ -141,7 +151,7 @@
 
   ;; Add a bytevector to the state. Align your data to whole blocks if
   ;; you want this to go a little faster.
-  (define update-md5!
+  (define md5-update!
     (case-lambda
       ((state data start end)
        (let ((m (md5state-m state))    ;unprocessed data
@@ -173,12 +183,12 @@
                   (md5state-processed-set! state (+ 64 (md5state-processed state)))
                   (lp (+ offset 64)))))))
       ((state data)
-       (update-md5! state data 0 (bytevector-length data)))))
+       (md5-update! state data 0 (bytevector-length data)))))
 
   (define zero-block (make-bytevector 64 0))
 
   ;; Finish the state by adding a 1, zeros and the counter.
-  (define (finish-md5! state)
+  (define (md5-finish! state)
     ;; TODO: the rfc has a prettier way to do this.
     (let ((m (md5state-m state))
           (pending (+ (md5state-pending state) 1)))
@@ -207,12 +217,17 @@
                       m
                       0)))
 
+  (define (md5-finish state)
+    (let ((copy (md5-copy state)))
+      (md5-finish! copy)
+      copy))
+
   ;; Find the MD5 of the concatenation of the given bytevectors.
   (define (md5 . data)
     (let ((state (make-md5)))
-      (for-each (lambda (d) (update-md5! state d))
+      (for-each (lambda (d) (md5-update! state d))
                 data)
-      (finish-md5! state)
+      (md5-finish! state)
       state))
 
   (define (md5-copy-hash! state bv off)
@@ -246,12 +261,12 @@
             (bytevector-u8-set! k-ipad i (fxxor #x36 (bytevector-u8-ref k-ipad i)))
             (bytevector-u8-set! k-opad i (fxxor #x5c (bytevector-u8-ref k-opad i))))
           (let ((state (make-md5)))
-            (update-md5! state k-ipad)
-            (for-each (lambda (d) (update-md5! state d)) data)
-            (finish-md5! state)
+            (md5-update! state k-ipad)
+            (for-each (lambda (d) (md5-update! state d)) data)
+            (md5-finish! state)
             (let ((digest (md5->bytevector state)))
-              (clear-md5! state)
-              (update-md5! state k-opad)
-              (update-md5! state digest)
-              (finish-md5! state)
+              (md5-clear! state)
+              (md5-update! state k-opad)
+              (md5-update! state digest)
+              (md5-finish! state)
               state))))))

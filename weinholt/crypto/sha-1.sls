@@ -23,11 +23,13 @@
 ;; TODO: Optimize. Should be simple enough with the help of a profiler.
 
 (library (weinholt crypto sha-1)
-  (export make-sha-1 update-sha-1! finish-sha-1! clear-sha-1! sha-1
+  (export make-sha-1 sha-1-update! sha-1-finish! sha-1-clear!
+          sha-1 sha-1-copy sha-1-finish
           sha-1-transform!              ;for interested parties only
           sha-1-copy-hash! sha-1->bytevector sha-1->string
           hmac-sha-1)
-  (import (except (rnrs) bitwise-rotate-bit-field))
+  (import (except (rnrs) bitwise-rotate-bit-field)
+          (only (srfi :43 vectors) vector-copy))
 
   (define (print . x) (for-each display x) (newline))
 
@@ -59,7 +61,15 @@
           (m (make-bytevector (* 4 16))))
       (make-sha1state H W m 0 0)))
 
-  (define (clear-sha-1! state)
+  (define (sha-1-copy state)
+    (let ((H (vector-copy (sha1state-H state)))
+          (W (make-bytevector (* 4 80)))
+          (m (bytevector-copy (sha1state-m state))))
+      (make-sha1state H W m
+                      (sha1state-pending state)
+                      (sha1state-processed state))))
+
+  (define (sha-1-clear! state)
     (for-each (lambda (i v)
                 (vector-set! (sha1state-H state) i v))
               '(0 1 2 3 4)
@@ -143,7 +153,7 @@
 
   ;; Add a bytevector to the state. Align your data to whole blocks if
   ;; you want this to go a little faster.
-  (define update-sha-1!
+  (define sha-1-update!
     (case-lambda
       ((state data start end)
        (let ((m (sha1state-m state))    ;unprocessed data
@@ -175,12 +185,12 @@
                   (sha1state-processed-set! state (+ 64 (sha1state-processed state)))
                   (lp (+ offset 64)))))))
       ((state data)
-       (update-sha-1! state data 0 (bytevector-length data)))))
+       (sha-1-update! state data 0 (bytevector-length data)))))
 
   (define zero-block (make-bytevector 64 0))
 
   ;; Finish the state by adding a 1, zeros and the counter.
-  (define (finish-sha-1! state)
+  (define (sha-1-finish! state)
     (let ((m (sha1state-m state))
           (pending (+ (sha1state-pending state) 1)))
       (bytevector-u8-set! m (sha1state-pending state) #x80)
@@ -208,12 +218,17 @@
                         m
                         0)))
 
+  (define (sha-1-finish state)
+    (let ((copy (sha-1-copy state)))
+      (sha-1-finish! copy)
+      copy))
+
   ;; Find the SHA-1 of the concatenation of the given bytevectors.
   (define (sha-1 . data)
     (let ((state (make-sha-1)))
-      (for-each (lambda (d) (update-sha-1! state d))
+      (for-each (lambda (d) (sha-1-update! state d))
                 data)
-      (finish-sha-1! state)
+      (sha-1-finish! state)
       state))
 
   (define (sha-1-copy-hash! state bv off)
@@ -247,12 +262,12 @@
             (bytevector-u8-set! k-ipad i (fxxor #x36 (bytevector-u8-ref k-ipad i)))
             (bytevector-u8-set! k-opad i (fxxor #x5c (bytevector-u8-ref k-opad i))))
           (let ((state (make-sha-1)))
-            (update-sha-1! state k-ipad)
-            (for-each (lambda (d) (update-sha-1! state d)) data)
-            (finish-sha-1! state)
+            (sha-1-update! state k-ipad)
+            (for-each (lambda (d) (sha-1-update! state d)) data)
+            (sha-1-finish! state)
             (let ((digest (sha-1->bytevector state)))
-              (clear-sha-1! state)
-              (update-sha-1! state k-opad)
-              (update-sha-1! state digest)
-              (finish-sha-1! state)
+              (sha-1-clear! state)
+              (sha-1-update! state k-opad)
+              (sha-1-update! state digest)
+              (sha-1-finish! state)
               state))))))
