@@ -267,6 +267,9 @@
       (error 'read-generic "attempt to seek past bottom of buffer"))
     (buffer-top-set! buf (+ (buffer-top buf) offset)))
 
+  (define (buffer-length b)
+    (- (buffer-bottom b) (buffer-top b)))
+
   (define (read-generic buf ref size index)
     (when (> (+ index (buffer-top buf) size) (buffer-bottom buf))
       (error 'read-generic "attempt to read past bottom of buffer" ref))
@@ -329,11 +332,8 @@
                     (mac-data (make-bytevector (+ 8 1 2 2))))
 
                (print "plaintext: " data)
-               ;; TODO: if the sequence numbers above exceed 2^64-1, renegotiate
-               (bytevector-u64-set! mac-data 0
-                                    (tls-conn-seq-write conn)
-                                    (endianness big))
-               (tls-conn-seq-write-set! conn (+ (tls-conn-seq-write conn) 1))
+               ;; TODO: if the sequence numbers exceed 2^64-1, renegotiate
+               (bytevector-u64-set! mac-data 0 (tls-conn-seq-write conn) (endianness big))
                (bytevector-u8-set! mac-data 8 type)
                (bytevector-u16-set! mac-data 9 (tls-conn-version conn) (endianness big))
                (bytevector-u16-set! mac-data 11 len (endianness big))
@@ -343,6 +343,7 @@
                                         mac-data data)
                                  blocks len)
 
+               (tls-conn-seq-write-set! conn (+ (tls-conn-seq-write conn) 1))
                (let ((plaintext (bytevector-append data)))
                  (bytevector-copy! plaintext 0
                                    blocks 0
@@ -383,10 +384,27 @@
                               (tls-conn-server-write-IV conn)
                               (buffer-top b)
                               len)
-          (let ((padding (bytevector-u8-ref (buffer-data b) (- (buffer-bottom b) 1))))
+          (let ((mac-data (make-bytevector (+ 8 1 2 2)))
+                (padding (bytevector-u8-ref (buffer-data b) (- (buffer-bottom b) 1))))
             ;; FIXME: verify the MAC
-            (print "padding: " 20)
-            (buffer-bottom-set! b (- (buffer-bottom b) padding 20 1))))
+            (print "padding: " padding)
+            (buffer-bottom-set! b (- (buffer-bottom b) padding 1)) ;remove padding
+
+            (bytevector-u64-set! mac-data 0 (tls-conn-seq-read conn) (endianness big))
+            (bytevector-u8-set! mac-data 8 type)
+            (bytevector-u16-set! mac-data 9 (tls-conn-version conn) (endianness big))
+            (bytevector-u16-set! mac-data 11 (- (buffer-length b) 20) (endianness big))
+
+            (unless (bytevector=? (sha-1->bytevector
+                                   (hmac-sha-1
+                                    (tls-conn-server-write-mac-secret conn)
+                                    mac-data
+                                    (bytevector-copy* (buffer-data b) (buffer-top b) (- (buffer-length b) 20))))
+                                  (bytevector-copy* (buffer-data b) (- (buffer-bottom b) 20) 20))
+              (error 'get-tls-record "bad mac"))
+
+            (tls-conn-seq-read-set! conn (+ (tls-conn-seq-read conn) 1))
+            (buffer-bottom-set! b (- (buffer-bottom b) 20)))) ;remove MAC
 
         (cond ((= type TLS-PROTOCOL-ALERT)
                (get-tls-alert-record conn))
@@ -619,7 +637,7 @@
                                                 start
                                                 (+ 4 length))))))
       ;; FIXME: might be fragmented
-      (when (> length (- (buffer-bottom b) (buffer-top b)))
+      (when (> length (buffer-length b))
         (print (bv->string (buffer-data b)))
         (error 'get-tls-handshake-record "FIXME: short record" length))
 
@@ -691,9 +709,8 @@
              ;; could decrypt the pre-master secret, so it has the
              ;; private key for the certificate it sent.
              (unless (bytevector=? (bytevector-copy* (buffer-data b)
-                                                            (buffer-top b)
-                                                            (- (buffer-bottom b)
-                                                               (buffer-top b)))
+                                                     (buffer-top b)
+                                                     (buffer-length b))
                                    ((tls-conn-prf conn) 12
                                     (tls-conn-master-secret conn)
                                     (string->utf8 "server finished")
@@ -735,7 +752,7 @@
     (let* ((b (tls-conn-inbuf conn))
            (appdata (bytevector-copy* (buffer-data b)
                                       (buffer-top b)
-                                      (- (buffer-bottom b) (buffer-top b)))))
+                                      (buffer-length b))))
       (print "Application data: " (utf8->string appdata))
       
       'application-data)))
