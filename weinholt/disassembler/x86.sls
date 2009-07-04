@@ -74,7 +74,7 @@
 
   (define-enumeration prefix
     (operand address cs ds es fs gs ss lock repz repnz rex rex.w rex.r
-             rex.x rex.b vex vex.l drex drex.oc0)
+             rex.x rex.b vex vex.l)
     prefix-set)
 
   (define-condition-type &invalid-opcode &condition
@@ -83,7 +83,7 @@
   (define-enumeration tag
     ;; Just used for the `tag' syntax. So here is a list of all tags
     ;; that can be given to the "collect" function.
-    (modr/m sib disp immediate /is4 drex prefix opcode)
+    (modr/m sib disp immediate /is4 prefix opcode)
     tag-set)
 
   (define (raise-UD msg . irritants)
@@ -110,11 +110,6 @@
   (define (has-/is4? instr)
     (and (list? instr)
          (exists (lambda (op) (memq op '(In Kpd Kps Kss Ksd)))
-                 (cdr instr))))
-
-  (define (has-DREX? instr)
-    (and (list? instr)
-         (exists (lambda (op) (memq op '(Zpd Zps Zss Zsd Zdq)))
                  (cdr instr))))
 
 
@@ -223,34 +218,6 @@ no conflict with LES/LDS)."
     (let ((byte (lookahead-u8 port)))
       (and (not (eof-object? byte))
            (= (bitwise-bit-field byte 6 8) #b11))))
-
-  (define (DREX-dest byte mode)
-    ;; This is kinda like VEX.vvvv, but it only allows an XMM
-    ;; destination register to be encoded (which in four-operand
-    ;; instructions is the same as one of the source operands).
-    (bitwise-and (if (= mode 64) #b1111 #b111)
-                 (bitwise-bit-field byte 4 8)))
-
-  (define (DREX->prefixes prefixes mode drex opcode)
-    (when (enum-set-member? (prefix rex) prefixes)
-      (raise-UD "REX prefix invalid with 0F24/0F25 instructions"))
-    (let ((drex (if (= mode 64) drex (bitwise-and drex #b011111000))))
-      (fold-left enum-set-union
-                 prefixes
-                 (list
-                  (if (bitwise-bit-set? drex 0)
-                      (prefix-set rex.b) (prefix-set))
-                  (if (bitwise-bit-set? drex 1)
-                      (prefix-set rex.x) (prefix-set))
-                  (if (bitwise-bit-set? drex 2)
-                      (prefix-set rex.r) (prefix-set))
-                  ;; DREX.OC0 is kinda like VEX.W, and together with
-                  ;; Opcode3.OC1 allows for different orders for the
-                  ;; source operands.
-                  (if (bitwise-bit-set? drex 3)
-                      (prefix-set drex.oc0) (prefix-set))
-                  (prefix-set drex)
-                  (if (= mode 64) (prefix-set rex) (prefix-set))))))
 
 ;;;
   (define (VEX-prefix-check prefixes)
@@ -451,7 +418,7 @@ operand is an opcode extension."
         instruction))
 
 ;;; Instruction stream decoding
-  (define (get-displacement port collect prefixes modr/m sib address-size)
+  (define (get-displacement port collect prefixes modr/m address-size)
     "Reads a SIB and a memory offset, if present. Returns a memory
 reference or a register number. This is later passed to
 translate-displacement."
@@ -486,7 +453,9 @@ translate-displacement."
                                   (list (get-s8/collect port collect (tag disp)))))
                   ((#b10) (append (vector-ref addr16 r/m)
                                   (list (get-s16/collect port collect (tag disp)))))))
-              (let ((regs (if (fx=? address-size 64) reg-names64 reg-names32)))
+              (let ((regs (if (fx=? address-size 64) reg-names64 reg-names32))
+                    (sib (and (fx=? (ModR/M-r/m modr/m) #b100)
+                              (get-u8/collect port collect (tag sib)))))
                 (if sib
                     (append (mem32/64 (SIB-base sib prefixes) regs #t)
                             (if (fx=? (SIB-index sib prefixes) #b100)
@@ -494,15 +463,6 @@ translate-displacement."
                                 `((* ,(vector-ref regs (SIB-index sib prefixes))
                                      ,(SIB-scale sib)))))
                     (mem32/64 r/m regs #f)))))))
-
-  (define (needs-SIB? modr/m address-size)
-    "This function decides if a SIB byte should be read. Kept separate
-from get-diplacement, because a DREX follows SIB and contains the REX
-bits, which are neded in get-displacement."
-    (and (number? modr/m)
-         (not (fx=? (ModR/M-mod modr/m) #b11))
-         (not (fx=? address-size 16))
-         (fx=? (ModR/M-r/m modr/m) #b100)))
 
   (define (translate-displacement prefixes mode disp operand-size . memsize)
     (cond ((integer? disp)
@@ -549,8 +509,7 @@ bits, which are neded in get-displacement."
                         (lambda (seg) (cons seg disp)))
                        (else disp))))
           (else
-           ;; This happens if ModR/M or DREX.dest should've been read,
-           ;; but weren't.
+           ;; This happens if ModR/M should've been read, but wasn't.
            (error 'translate-displacement
                   "Bad displacement" disp))))
 
@@ -570,7 +529,7 @@ bits, which are neded in get-displacement."
                      (else default))))))
 
   (define (get-operand port mode collect op prefixes opcode vex.v
-                       operand-size address-size modr/m drex.dest
+                       operand-size address-size modr/m
                        disp /is4)
     (let get-operand ((op op))
       (case op
@@ -814,32 +773,6 @@ bits, which are neded in get-displacement."
 
         ((In) (bitwise-bit-field /is4 0 4))
 
-        ;; AMD SSE5. The Z, VW and WV syntaxes are not official.
-        ((Zpd Zps Zss Zsd Zdq)
-         (translate-displacement prefixes mode drex.dest 'xmm))
-
-        ((VWpd) (if (enum-set-member? (prefix drex.oc0) prefixes)
-                    (get-operand 'Vpd) (get-operand 'Wpd)))
-        ((VWps) (if (enum-set-member? (prefix drex.oc0) prefixes)
-                    (get-operand 'Vps) (get-operand 'Wps)))
-        ((VWsd) (if (enum-set-member? (prefix drex.oc0) prefixes)
-                    (get-operand 'Vsd) (get-operand 'Wsd)))
-        ((VWss) (if (enum-set-member? (prefix drex.oc0) prefixes)
-                    (get-operand 'Vss) (get-operand 'Wss)))
-        ((VWdq) (if (enum-set-member? (prefix drex.oc0) prefixes)
-                    (get-operand 'Vdq) (get-operand 'Wdq)))
-
-        ((WVpd) (if (enum-set-member? (prefix drex.oc0) prefixes)
-                    (get-operand 'Wpd) (get-operand 'Vpd)))
-        ((WVps) (if (enum-set-member? (prefix drex.oc0) prefixes)
-                    (get-operand 'Wps) (get-operand 'Vps)))
-        ((WVsd) (if (enum-set-member? (prefix drex.oc0) prefixes)
-                    (get-operand 'Wsd) (get-operand 'Vsd)))
-        ((WVss) (if (enum-set-member? (prefix drex.oc0) prefixes)
-                    (get-operand 'Wss) (get-operand 'Vss)))
-        ((WVdq) (if (enum-set-member? (prefix drex.oc0) prefixes)
-                    (get-operand 'Wdq) (get-operand 'Vdq)))
-
         ;; These must be memory references
         ((M Ms) (translate-displacement prefixes mode disp 'notreg 'generic))
         ((Mb) (translate-displacement prefixes mode disp 'notreg 8))
@@ -875,7 +808,6 @@ bits, which are neded in get-displacement."
         ((Rv/Mw) (translate-displacement prefixes mode disp operand-size 16))
         ((Rd/Mw) (translate-displacement prefixes mode disp 32 16))
         ((Rd/Mb) (translate-displacement prefixes mode disp 32 8))
-
 
         ((*rAX/r8 *rCX/r9 *rDX/r10 *rBX/r11 *rSP/r12 *rBP/r13 *rSI/r14 *rDI/r15)
          (translate-displacement prefixes mode (ModR/M-r/m opcode prefixes)
@@ -926,12 +858,8 @@ bits, which are neded in get-displacement."
                            ((16) (cond ((enum-set-member? (prefix address) prefixes) 32)
                                        (else 16)))))
            (modr/m (or modr/m (and (has-modr/m? instr) (get-u8/collect port collect (tag modr/m)))))
-           (sib (and (needs-SIB? modr/m address-size) (get-u8/collect port collect (tag sib))))
-           (drex (and (has-DREX? instr) (get-u8/collect port collect (tag drex))))
-           (drex.dest (and drex (DREX-dest drex mode)))
-           (prefixes (if drex (DREX->prefixes prefixes mode drex opcode) prefixes))
            (disp (and (number? modr/m)
-                      (get-displacement port collect prefixes modr/m sib address-size)))
+                      (get-displacement port collect prefixes modr/m address-size)))
            (/is4 (and (has-/is4? instr) (get-u8/collect port collect (tag /is4)))))
       ;; At this point in the instruction stream, the only things left
       ;; are I, J and O (immediate, jump offset, offset) values.
@@ -941,10 +869,8 @@ bits, which are neded in get-displacement."
                " opcode=" (number->string opcode 16)
                " vex.v=" vex.v
                " displacement=" disp)
-        (if (number? drex) (print "DREX=#b" (number->string drex 2)))
         (if (number? /is4) (print "/is4=" (number->string /is4 2)))
-        (if (number? modr/m) (print-modr/m modr/m prefixes))
-        (if (number? sib) (print-sib sib prefixes)))
+        (if (number? modr/m) (print-modr/m modr/m prefixes)))
 
       (fix-rep
        (fix-branches
@@ -954,7 +880,7 @@ bits, which are neded in get-displacement."
            (cons (car instr)
                  (map-in-order (lambda (op)
                                  (get-operand port mode collect op prefixes opcode vex.v
-                                              operand-size address-size modr/m drex.dest
+                                              operand-size address-size modr/m
                                               disp /is4))
                                (cdr instr)))
            prefixes mode operand-size))

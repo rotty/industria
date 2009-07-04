@@ -42,7 +42,7 @@
 ;; FIXME: when evaluating expressions and a label is unknown in the
 ;; second pass, give an error.
 
-;; TODO: SSE5 (DREX byte), AVX (VEX prefix), etc
+;; TODO: AVX (VEX prefix)
 
 ;; FIXME: unify the names for address size, operand size, data size,
 ;; addressing mode....
@@ -896,7 +896,6 @@
 
 
   ;; prefixes | opcode bytes | ModR/M | SIB | displacement | immediates
-  ;; opcode bytes | ModR/M | SIB | DREX | displacement | immediates
   ;; VEX | opcode | ModR/M | SIB | displacement | /is4 | immediates
 
   (define (put-instruction instr state)
