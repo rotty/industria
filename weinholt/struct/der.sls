@@ -22,7 +22,11 @@
 ;; TODO: output
 
 (library (weinholt struct der (1))
-  (export der-decode translate-asn1data)
+  (export decode translate
+          data-type
+          data-start-index
+          data-length
+          data-value)
   (import (rnrs)
           (srfi :19 time)
           (srfi :26 cut))
@@ -33,7 +37,7 @@
 
 ;;; The code that follows reads DER encoded data from bytevectors and
 ;;; turns it into a parse tree.
-  
+
   (define (get-type bv start end)
     (let* ((t (bytevector-u8-ref bv start))
            (class (vector-ref '#(universal application context private)
@@ -155,7 +159,7 @@
           '()
           (let lp ((i i) (number 0))
             (unless (< i (+ start length))
-              (error 'der-decode "went over a cliff"))
+              (error 'decode "went over a cliff"))
             (let* ((v (bytevector-u8-ref bv i))
                    (number (bitwise-ior (bitwise-arithmetic-shift-left number 7)
                                         (fxand v #x7f))))
@@ -169,13 +173,13 @@
             (else     (values 2 (- p 80)))))
     (let ((subids (get start)))
       (cond ((null? subids)
-             (error 'der-decode "empty OID"))
+             (error 'decode "empty OID"))
             (relative?
              subids)
             (else
              (let-values (((x y) (solve-oid (car subids))))
                (unless (= (car subids) (+ (* 40 x) y))
-                 (error 'der-decode "unable to decode first byte in OID"
+                 (error 'decode "unable to decode first byte in OID"
                         (car subids)))
                (cons x (cons y (cdr subids))))))))
 
@@ -188,13 +192,14 @@
             (let-values (((start* value) (get-value bv start end)))
               (lp start* (cons value ret)))))))
 
+  ;; These are the names you need to use in your type definitions.
   (define universal-types
     `#((reserved #f #f)                 ;end of contents marker, not used in DER
        (boolean ,get-boolean #f)
        (integer ,get-integer #f)
        (bit-string ,get-bit-string #f)
        (octet-string ,get-octet-string #f)
-       (null ,(lambda (bv start length) '()) #f)
+       (null ,(lambda (bv start length) #f) #f)
        (object-identifier ,(lambda (bv start length) (get-oid bv start length #f)) #f)
        (object-descriptor #f #f)
        (external #f #f)
@@ -229,7 +234,7 @@
                   ((len start) (get-length bv startl end*))
                   ((end) (+ start len)))
       (unless (<= end end*)
-        (error 'der-decode "over the edge now" end end*))
+        (error 'decode "over the edge now" end end*))
       (if (eq? class 'universal)
           (let* ((decoder (vector-ref universal-types number))
                  (offset (if constructed 2 1))
@@ -237,10 +242,10 @@
             (print ";" type-name)
             (cond ((list-ref decoder offset) =>
                    (lambda (dec)
-                     (values end (list type-name start len
+                     (values end (list type-name start* (- end start*)
                                        (dec bv start len)))))
                   (else
-                   (error 'der-decode
+                   (error 'decode
                           "can't handle this universal value"
                           type-name constructed))))
           ;; Delay parsing implicitly encoded types (their real type
@@ -248,12 +253,12 @@
           ;; handle it). Explicitly tagged values have their tag
           ;; stripped below.
           (values end (list (list (if constructed 'explicit 'implicit) class number)
-                            start len
+                            start* (- end start*)
                             (if constructed
                                 (car (get-sequence/set bv start len))
                                 (get-octet-string bv start len)))))))
 
-  (define der-decode
+  (define decode
     (case-lambda
       ((bv start end)
        (let-values (((len value) (get-value bv start end)))
@@ -271,31 +276,48 @@
   (define field-opts cddr)
 
   (define data-type car)
+  (define data-start-index cadr)
+  (define data-length caddr)
   (define data-value cadddr)
-  
-  (define (translate-asn1sequence data type)
+
+  ;; TODO: rewrite this function. It's a horrible mess of duplicated
+  ;; functionality.
+
+  (define (translate-sequence data type format-field)
     (case (car type)
       ((integer)
        ;; An integer with named values
        (unless (eq? (car data) 'integer)
-         (error 'translate-asn1data "expected integer"))
+         (error 'translate "expected integer"))
        (let ((names (map (lambda (x) (cons (cdr x) (car x))) (cadr type))))
          (cond ((assv (cadddr data) names) => cdr)
-               (else (error 'translate-asn1data "bad named integer maybe?"
+               (else (error 'translate "bad named integer maybe?"
                             (data-value data))))))
+
+      ((choice)
+       (let ((choice (find (lambda (choice)
+                             ;; FIXME: eq? is not good enough
+                             (eq? (cadr choice) (data-type data)))
+                           (cdr type))))
+         (unless choice
+           (error 'translate "no right choice" type data))
+         (format-field (car choice)
+                       (cadr choice)
+                       (translate data (cadr choice)
+                                  format-field))))
 
       ((sequence-of set-of)
        (unless (or (and (eq? (car type) 'sequence-of) (eq? (car data) 'sequence))
                    (and (eq? (car type) 'set-of) (eq? (car data) 'set)))
-         (error 'translate-asn1data "expected set/sequence" (car data)))
+         (error 'translate "expected set/sequence" (car data)))
        (unless (<= (cadr type) (length data) (caddr type))
-         (error 'translate-asn1data "too little data for set"))
-       (map (cut translate-asn1data <> (cadddr type)) (data-value data)))
+         (error 'translate "too little data for set"))
+       (map (cut translate <> (cadddr type)) (data-value data)))
 
       ((sequence set)
        (print ";SEQUENCE/SET")
        (unless (eq? (car type) (car data))
-         (error 'translate-asn1data "expected set/sequence" type (car data)))
+         (error 'translate "expected set/sequence" type (car data)))
        (let lp ((fields (cdr type))
                 (data (cadddr data))
                 (ret '()))
@@ -311,14 +333,17 @@
                   (print ";using default")
                   (lp (cdr fields)
                       data
-                      (cons (list (field-name (car fields)) (cadr default))
+                      (cons (format-field (field-name (car fields))
+                                          (field-type (car fields))
+                                          (cadr default))
                             ret))))
                ((null? data)
-                (error 'translate-asn1data "non-optional data missing" fields))
+                (error 'translate "non-optional data missing" fields))
                (else
                 (let ((f (car fields))
                       (d (car data)))
-                  (print ";Field:\n  " (field-name f) ", " (field-type f) ", " (field-opts f))
+                  (print ";Field:\n  " (field-name f) ", " (field-type f) ", "
+                         (field-opts f))
                   (print ";data1:\n  " (data-type d) ", " (data-value d))
                   (cond ((and (list? (field-type f)) (list? (data-type d))
                               (eq? 'explicit (car (field-type f)))
@@ -329,9 +354,11 @@
                          ;; (data-type d): (explicit context number)
                          (lp (cdr fields)
                              (cdr data)
-                             (cons (list (field-name f)
-                                         (translate-asn1data (data-value d)
-                                                             (cadddr (field-type f))))
+                             (cons (format-field (field-name f)
+                                                 (cadddr (field-type f))
+                                                 (translate (data-value d)
+                                                            (cadddr (field-type f))
+                                                            format-field))
                                    ret)))
 
                         ;; CHOICE
@@ -345,19 +372,21 @@
                          (lambda (choice)
                            (lp (cdr fields)
                                (cdr data)
-                               (cons (list (car choice)
-                                           (translate-asn1data (car data) (cadr choice)))
+                               (cons (format-field (car choice)
+                                                   (cadr choice)
+                                                   (translate (car data) (cadr choice)
+                                                              format-field))
                                      ret))))
 
                         ;; FIXME: implicit
-                        ((and (list? (field-type f)) (list (data-type d))
+                        ((and (list? (field-type f)) (list? (data-type d))
                               (eq? 'implicit (car (field-type f)))
                               (eq? 'implicit (car (data-type d)))
                               (eq? (cadr (field-type f)) (cadr (data-type d)))
                               (eq? (caddr (field-type f)) (caddr (data-type d))))
                          ;; (field-type f): (implicit context number type)
                          ;; (data-type d): (implicit context number)
-                         (error 'translate-asn1data "implicit data handling not implemented"
+                         (error 'translate "implicit data handling not implemented"
                                 f d))
 
                         ((or (and (list? (field-type f))
@@ -365,10 +394,13 @@
                                              '(implicit explicit choice))))
                              (eq? (data-type d) (field-type f))
                              (eq? (field-type f) 'ANY))
+                         ;; The field type matches the data type
                          (lp (cdr fields)
                              (cdr data)
-                             (cons (list (field-name f)
-                                         (translate-asn1data (car data) (field-type f)))
+                             (cons (format-field (field-name f)
+                                                 (field-type f)
+                                                 (translate (car data) (field-type f)
+                                                            format-field))
                                    ret)))
 
                         ((assoc 'default (field-opts f)) =>
@@ -376,24 +408,29 @@
                            (print ";using default")
                            (lp (cdr fields)
                                data
-                               (cons (list (field-name f) (cadr default))
+                               (cons (format-field (field-name f)
+                                                   (field-type f)
+                                                   (cadr default))
                                      ret))))
                         (else
-                         (error 'translate-asn1data
-                                "unexpected type" (caar data) (field-type f)))))))))
+                         (error 'translate
+                                "unexpected data" (caar data) (field-type f)))))))))
       (else
-       (error 'translate-asn1data "error in type" type))))
 
-  (define (translate-asn1data data type)
-    (print ";translate-asn1data")
-    (cond ((list? type)
-           (print "%- type: " (car type)
-                  ", data: " data)
-           (translate-asn1sequence data type))
-          (else
-           (print "%- type: " type
-                  ", data: " data)
-           (unless (or (eq? type (car data))
-                       (eq? type 'ANY))
-             (error 'translate-asn1data "unexpected type" type (car data)))
-           (cadddr data)))))
+       (error 'translate "error in type" type))))
+
+  (define translate
+    (case-lambda
+      ((data type)
+       (translate data type (lambda (name type value) value)))
+      ((data type format-field)
+       (cond ((list? type)
+              (translate-sequence data type format-field))
+             ((eq? 'ANY type)
+              ;; Delay interpretation. Usually the ANY type is
+              ;; combined with an OID which decides the type.
+              data)
+             ((eq? type (data-type data))
+              (data-value data))
+             (else
+              (error 'translate "unexpected type" type (car data))))))))

@@ -249,6 +249,10 @@
                       (number->string x 16)))
                 (bytevector->u8-list (sha-1->bytevector state)))))
 
+;;; HMAC-SHA-1. RFC 2104.
+
+  ;; TODO: an API with make, update!, finish!, finish, clear!, copy, etc
+  
   (define (hmac-sha-1 secret . data)
     ;; RFC 2104.
     (if (> (bytevector-length secret) 64)

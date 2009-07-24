@@ -31,10 +31,11 @@
           rsa-public-key-byte-length
           rsa-decrypt
           rsa-encrypt
-          rsa-pkcs1-encrypt)
+          rsa-pkcs1-encrypt
+          rsa-pkcs1-decrypt-digest)
   (import (rnrs)
           (srfi :27 random-bits)
-          (weinholt struct der))
+          (prefix (weinholt struct der (1)) der:))
 
   (define random-nonzero-byte
     (let* ((s (make-random-source))
@@ -49,6 +50,25 @@
               (let ((v (get-u8 urandom)))
                 (if (zero? v) (lp) v)))
             (+ 1 (make-int 254))))))
+
+  (define (RSAPublicKey)
+    `(sequence (modulus integer)
+               (publicExponent integer)))
+
+  (define (DigestInfo)
+    `(sequence (digestAlgorithm ,(DigestAlgorithmIdentifier))
+               (digest ,(Digest))))
+
+  (define (DigestAlgorithmIdentifier)
+    (AlgorithmIdentifier))
+
+  (define (Digest)
+    'octet-string)
+
+  (define (AlgorithmIdentifier)
+    ;; Same as in x509.sls
+    `(sequence (algorithm object-identifier)
+               (parameters ANY (default #f))))
 
   (define-record-type rsa-public-key
     (fields modulus                     ;n
@@ -70,14 +90,15 @@
 
   (define (rsa-public-key-byte-length key)
     (let ((bitlen (rsa-public-key-length key)))
-      (fxdiv (fxand (+ bitlen 7) -8) 8)))
+      (fxdiv (fxand (fx+ bitlen 7) -8) 8)))
 
   (define (public<-private key)
     (make-rsa-public-key (rsa-private-key-modulus key)
                          (rsa-private-key-public-exponent key)))
 
   (define (rsa-public-key<-bytevector bv)
-    (apply make-rsa-public-key (der-decode bv)))
+    (apply make-rsa-public-key (der:translate (der:decode bv)
+                                              (RSAPublicKey))))
   
   (define (invmod a b)
     ;; Extended Euclidian algorithm. Used to find the inverse of a
@@ -145,4 +166,27 @@
                                         0
                                         (endianness big)
                                         (bytevector-length eb))
-                   key))))
+                   key)))
+
+  (define (rsa-pkcs1-decrypt-digest signature key)
+    ;; Encrypt the signature with a public key. If it comes out
+    ;; alright, the signature was signed with the corresponding
+    ;; private key. For X.509-certificates this means the signature
+    ;; came from the issuer, but anyone can copy a decryptable
+    ;; signature, so the message digest also has to be checked.
+    (let* ((sig (rsa-encrypt signature key))
+           (len (fxdiv (fxand -8 (fx+ 7 (bitwise-length sig)))
+                       8))
+           (bvsig (make-bytevector len)))
+      (bytevector-uint-set! bvsig 0 sig (endianness big) len)
+      (case (bytevector-u8-ref bvsig 0)
+        ((#x01)
+         (do ((i 1 (fx+ i 1)))
+             ((fxzero? (bytevector-u8-ref bvsig i))
+              (der:translate (der:decode bvsig (fx+ i 1) len)
+                             (DigestInfo)))
+           (unless (fx=? #xff (bytevector-u8-ref bvsig i))
+             (error 'rsa-pkcs-decrypt-signature "bad signature"))))
+        (else
+         (error 'rsa-pkcs1-decrypt-signature "bad signature"))))))
+
