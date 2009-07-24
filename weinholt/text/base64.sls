@@ -30,9 +30,11 @@
                 string-prefix? string-suffix?
                 string-concatenate string-trim-both))
 
-  (define base64-alphabet "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+  (define base64-alphabet
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
 
-  (define base64url-alphabet "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+  (define base64url-alphabet
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 
   (define base64-encode
     (case-lambda
@@ -122,15 +124,20 @@
                   (else
                    (error 'base64-decode "invalid input"
                           (list c1 c2 c3 c4)))))))))
+
+  (define (get-line-comp f port)
+    (if (eof-object? (lookahead-char port))
+        (eof-object)
+        (f (get-line port))))
   
   ;; Reads the common -----BEGIN/END type----- delimited format from
   ;; the given port. Returns two values: a string with the type and a
   ;; bytevector containing the base64 decoded data. The second value
   ;; is the eof object if there is an eof before the BEGIN delimiter.
   (define (get-delimited-base64 port)
-    (let ((line (get-line port)))
+    (let ((line (get-line-comp string-trim-both port)))
       (cond ((eof-object? line)
-             (values "" line))
+             (values "" (eof-object)))
             ((string=? line "")
              (get-delimited-base64 port))
             ((and (string-prefix? "-----BEGIN " line)
@@ -138,7 +145,7 @@
              (let* ((type (substring line 11 (- (string-length line) 5)))
                     (endline (string-append "-----END " type "-----")))
                (let lp ((lines '()))
-                 (let ((line (get-line port)))
+                 (let ((line (get-line-comp string-trim-both port)))
                    ;; TODO: some basic error checking by keeping track
                    ;; of line lengths.
                    (cond ((eof-object? line)
@@ -148,12 +155,12 @@
                           (unless (string=? line endline)
                             (error 'get-delimited-base64
                                    "bad end delimiter" type line))
-                          (values type (base64-decode (string-concatenate (reverse lines)))))
+                          (values type (base64-decode (string-concatenate
+                                                       (reverse lines)))))
                          (else
-                          (lp (cons (string-trim-both line) lines))))))))
-            (else
-             (error 'get-delimited-base64
-                    "unexpected input" line)))))
+                          (lp (cons line lines))))))))
+            (else ;skip garbage (like in openssl x509 -in foo -text output).
+             (get-delimited-base64 port)))))
 
   (define put-delimited-base64
     (case-lambda

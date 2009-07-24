@@ -54,4 +54,17 @@
        "TXkgbmFtZSBpcyBPenltYW5kaWFzLCBraW5nIG9mIGtpbmdzOgpMb29rIG9uIG15IHdvcmtzLCB5\n\
         ZSBNaWdodHksIGFuZCBkZXNwYWlyIQ==")
 
+;; ascii armor
+
+(let-values (((p extract) (open-string-output-port))
+             ((str) "Crusoe's Law: With every new C++ standard, its syntax\n\
+                     asymptotically approaches that of a PERL regex."))
+  (put-delimited-base64 p "TEST" (string->utf8 str))
+  (let-values (((type str*) (get-delimited-base64 (open-string-input-port
+                                                   (string-append
+                                                    "This is garbage\n"
+                                                    (extract))))))
+    (check type => "TEST")
+    (check (utf8->string str*) => str)))
+
 (check-report)
