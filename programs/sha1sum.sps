@@ -26,9 +26,9 @@
     (let lp ()
       (let ((bytes-read (get-bytevector-n! port data 0 8192)))
         (unless (eof-object? bytes-read)
-          (update-sha-1! state data 0 bytes-read)
+          (sha-1-update! state data 0 bytes-read)
           (lp))))
-    (finish-sha-1! state)
+    (sha-1-finish! state)
     (sha-1->string state)))
 
 (when (null? (cdr (command-line)))
