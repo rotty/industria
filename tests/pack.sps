@@ -176,7 +176,7 @@ the format string. Then see if pack/unpack gives the expected result."
 (check-pack '#vu8(4 0 1 0) "u!CaS" 4 #x100)
 
 (check-pack '#vu8(4 0 0 1 0) "u!C L" 4 #x100)
-#;
+
 (check-pack '#vu8(4 0 0 0 0 0 0 1 0) "u!C Q" 4 #x100)
 
 (check-report)
