@@ -1,7 +1,7 @@
 #!/usr/bin/env scheme-script
 ;; -*- mode: scheme; coding: utf-8 -*-
 ;; Actual - the scheming operating system
-;; Copyright © 2008 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -17,41 +17,32 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!r6rs
 
+;; Test suite for the (weinholt struct pack) library.
+
+;; This program also tests the host implementation's bytevector
+;; procedures quite thoroughly, as it turns out.
+
 (import (rnrs)
         (rnrs eval)
         (weinholt struct pack)
         (weinholt struct pack-aux)
-        (only (ikarus) random))
+        (srfi :78 lightweight-testing)
+        (only (srfi :1 lists) make-list)
+        (rename (only (srfi :27 random-bits) random-integer
+                      default-random-source random-source-randomize!)
+                (random-integer random)))
 
-;; Needs (random n) which gives a random integer x, 0 <= x < n.
-
-(define (make-list n v)
-  (if (> n 0) (cons v (make-list (- n 1) v)) '()))
+(random-source-randomize! default-random-source)
 
 (define (check-pack expect fmt . values)
-  (let ((result (apply pack fmt values)))
-    (unless (bytevector=? result expect)
-      (error 'check-pack "Bad result from pack"
-             result expect
-             fmt values))
-    (let ((result2
-           (eval `(call-with-values (lambda () (unpack ,fmt ',result)) list)
-                 (environment '(rnrs) '(weinholt struct pack)))))
-      (unless (equal? values result2)
-        (error 'check-pack "Bad result from unpack syntax"
-               result2 values fmt)))
-    (let ((result2 (call-with-values (lambda () (unpack fmt result)) list)))
-      (unless (equal? values result2)
-        (error 'check-pack "Bad result from unpack function"
-               result2 values fmt)))))
-
-
-(define-syntax check
-  (lambda (x)
-    (syntax-case x ()
-      ((_ test)
-       #'(unless test
-           (error 'check "Test returned #f" 'test))))))
+  (display "\nFormat: ") (write fmt)
+  (display "\nValues: ") (write values) (newline)
+  (check (apply pack fmt values) => expect)
+  (check (call-with-values (lambda () (unpack fmt expect)) list)
+         => values)
+  (check (eval `(call-with-values (lambda () (unpack ,fmt ',expect)) list)
+               (environment '(rnrs) '(weinholt struct pack)))
+         => values))
 
 (define (print . x) (for-each display x) (newline))
 
@@ -69,7 +60,15 @@
     (ref bv 0 (native-endianness))))
 
 (define types
-  (vector (vector #\s bytevector-s16-ref bytevector-s16-set! 2 #f)
+  (vector (vector #\c
+                  (lambda (b i e) (bytevector-s8-ref b i))
+                  (lambda (b i v e) (bytevector-s8-set! b i v))
+                  1 #f)
+          (vector #\C
+                  (lambda (b i e) (bytevector-u8-ref b i))
+                  (lambda (b i v e) (bytevector-u8-set! b i v))
+                  1 #f)
+          (vector #\s bytevector-s16-ref bytevector-s16-set! 2 #f)
           (vector #\S bytevector-u16-ref bytevector-u16-set! 2 #f)
           (vector #\l bytevector-s32-ref bytevector-s32-set! 4 #f)
           (vector #\L bytevector-u32-ref bytevector-u32-set! 4 #f)
@@ -80,59 +79,69 @@
 
 (define (random-test endianness)
   "Construct random format strings and values, alongside a bytevector
-that is expected to contain the values encoded correctly accordingto
-the format string. Then see if pack/unpack give the expected result."
-  (call-with-values open-bytevector-output-port
-    (lambda (p extract)
-      (let ((count (random 10)))
-        (let lp ((i 0)
-                 (codes (case endianness
-                          ((little) '(#\<))
-                          ((big) '(#\>))))
-                 (values '())
-                 (o 0))
-          (let ((t (vector-ref types (random (vector-length types)))))
-            (cond ((= i count)
-                   (let ((fmt (list->string (reverse codes)))
-                         (values (reverse values))
-                         (bv (extract)))
-                     (apply check-pack bv fmt values)))
-                  (else
-                   (let* ((v ((if (vector-ref t 4)
-                                  random-float
-                                  random-integer)
-                              (vector-ref t 3) (vector-ref t 2) (vector-ref t 1)))
-                          (padsize (random 5))
-                          (pad (make-list padsize #\x))
-                          (rep (random 5))
-                          (repcode (string->list (number->string rep)))
-                          (bv (make-bytevector (vector-ref t 3))))
-                     (let ((no (roundb o (vector-ref t 3))))
-                       ;; align
-                       (put-bytevector p (make-bytevector (- no o) 0))
-                       ((vector-ref t 2) bv 0 v endianness)
-                       (do ((i 0 (+ i 1))
-                            (m (if (zero? rep) 1 rep)))
-                           ((= i m))
-                         ;; values
-                         (put-bytevector p bv))
-                       ;; "x"
-                       (put-bytevector p (make-bytevector padsize 0))
-                       (cond ((zero? rep)
-                              (lp (+ i 1)
-                                  (append pad (cons (vector-ref t 0) codes))
-                                  (cons v values)
-                                  (+ no padsize (vector-ref t 3))))
-                             (else
-                              (lp (+ i 1)
-                                  (append pad (cons (vector-ref t 0)
-                                                    (append repcode codes)))
-                                  (append (make-list rep v) values)
-                                  (+ no padsize (* rep (vector-ref t 3))))))))))))))))
+that is expected to contain the values encoded correctly according to
+the format string. Then see if pack/unpack gives the expected result."
+  (let-values (((p extract) (open-bytevector-output-port))
+               ((count) (random 15)))
+    (let lp ((i 0)
+             (align #t)
+             (codes (case endianness
+                      ((little) '(#\<))
+                      ((big) (if (zero? (random 2))
+                                 '(#\!) '(#\>)))
+                      ((native) '(#\=))))
+             (values '())
+             (o 0))
+      (let ((t (vector-ref types (random (vector-length types)))))
+        (if (= i count)
+            (let ((fmt (list->string (reverse codes)))
+                  (values (reverse values))
+                  (bv (extract)))
+              (apply check-pack bv fmt values))
+            (let* ((v ((if (eq? (vector-ref t 4) 'float)
+                           random-float
+                           random-integer)
+                       (vector-ref t 3) (vector-ref t 2) (vector-ref t 1)))
+                   (padsize (random 5))
+                   (pad (make-list padsize #\x))
+                   (rep (random 5))
+                   (repcode (string->list (number->string rep)))
+                   (bv (make-bytevector (vector-ref t 3)))
+                   (new-align (if (zero? (random 3)) (not align) align))
+                   (no (if align (roundb o (vector-ref t 3)) o)))
+              ;; align
+              (put-bytevector p (make-bytevector (- no o) 0))
+              ((vector-ref t 2) bv 0 v (if (eq? endianness 'native)
+                                           (native-endianness)
+                                           endianness))
+              (do ((i 0 (+ i 1))
+                   (m (if (zero? rep) 1 rep)))
+                  ((= i m))
+                ;; values
+                (put-bytevector p bv))
+              ;; "x"
+              (put-bytevector p (make-bytevector padsize 0))
+              (cond ((zero? rep)
+                     (lp (+ i 1) new-align
+                         (append pad
+                                 (if (boolean=? align new-align) '()
+                                     (if new-align '(#\a) '(#\u)))
+                                 (cons (vector-ref t 0) codes))
+                         (cons v values)
+                         (+ no padsize (vector-ref t 3))))
+                    (else
+                     (lp (+ i 1) new-align
+                         (append pad
+                                 (if (boolean=? align new-align) '()
+                                     (if new-align '(#\a) '(#\u)))
+                                 (cons (vector-ref t 0)
+                                       (append repcode codes)))
+                         (append (make-list rep v) values)
+                         (+ no padsize (* rep (vector-ref t 3))))))))))))
 
 (do ((i 0 (+ i 1)))
     ((= i 50))
-  (random-test (native-endianness)))
+  (random-test 'native))
 
 (do ((i 0 (+ i 1)))
     ((= i 50))
@@ -156,10 +165,18 @@ the format string. Then see if pack/unpack give the expected result."
 (check-pack '#vu8(0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 2 0 0 0 3) ">SQL" 1 2 3)
 (check-pack '#vu8(1 0 0 0 0 0 0 0 2 0 0 0 3 0) "<QLS" 1 2 3)
 
-(check (zero? (unpack "!C" '#vu8(1 2 3 4 6 0) 5)))
-(check (zero? (unpack "!S" '#vu8(1 2 3 4 0 0) 4)))
+(check (unpack "!C" '#vu8(1 2 3 4 6 0) 5) => 0)
+(check (unpack "!S" '#vu8(1 2 3 4 0 0) 4) => 0)
 
-(check (let ((bv (make-bytevector 4 0)))
-         (pack! "!S" bv 2 #xffee)
-         (bytevector=? bv '#vu8(0 0 #xff #xee))))
+(check (let ((bv (make-bytevector 4 0))) (pack! "!S" bv 2 #xffee) bv)
+       => '#vu8(0 0 #xff #xee))
 
+
+(check-pack '#vu8(4 1 0) "u!C S" 4 #x100)
+(check-pack '#vu8(4 0 1 0) "u!CaS" 4 #x100)
+
+(check-pack '#vu8(4 0 0 1 0) "u!C L" 4 #x100)
+#;
+(check-pack '#vu8(4 0 0 0 0 0 0 1 0) "u!C Q" 4 #x100)
+
+(check-report)

@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2008 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -22,8 +22,9 @@
     (import (rnrs))
 
   (define (roundb x n)
-    (+ x (bitwise-and (- n (bitwise-and x (- n 1))) (- n 1))))
-
+    (bitwise-and (+ x (- n 1))
+                 (- n)))
+  
   ;; Find the number of bytes the format requires.
   ;; (format-size "2SQ") => 16
   (define (format-size fmt)
@@ -35,18 +36,25 @@
         ((#\q #\Q #\d) 8)
         (else
          (error 'format-size "Bad character in format string" fmt c))))
-    (let lp ((i 0) (s 0) (rep #f))
+    (let lp ((i 0) (s 0) (rep #f) (align #t))
       (cond ((= i (string-length fmt))
              s)
             ((char<=? #\0 (string-ref fmt i) #\9)
              (lp (+ i 1) s
                  (+ (- (char->integer (string-ref fmt i))
                        (char->integer #\0))
-                    (* (if rep rep 0) 10))))
+                    (* (if rep rep 0) 10))
+                 align))
             ((char-whitespace? (string-ref fmt i))
-             (lp (+ i 1) s rep))
+             (lp (+ i 1) s rep align))
+            ((char=? (string-ref fmt i) #\a)
+             (lp (+ i 1) s rep #t))
+            ((char=? (string-ref fmt i) #\u)
+             (lp (+ i 1) s rep #f))
             ((memv (string-ref fmt i) '(#\@ #\= #\< #\> #\!))
-             (lp (+ i 1) s #f))
+             (lp (+ i 1) s #f align))
             (else
              (let ((n (size (string-ref fmt i))))
-               (lp (+ i 1) (+ (roundb s n) (if rep (* n rep) n)) #f)))))))
+               (lp (+ i 1) (+ (if align (roundb s n) s)
+                              (if rep (* n rep) n))
+                   #f align)))))))

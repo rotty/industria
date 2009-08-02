@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2008 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -24,11 +24,12 @@
 
 ;; x: padding; c: s8; C: u8; s: s16; S: u16; l: s32; L: u32; q: s64;
 ;; Q: u64; f: ieee-single; d: ieee-double; ! or >: big-endian (network
-;; byte order); <: little-endian; =: native-endian. Whitespace is
-;; ignored. Format characters can be prefixed with a decimal number,
-;; which repeats the format character. Padding is done with zeros.
+;; byte order); <: little-endian; =: native-endian. u: disable natural
+;; alignment. a: enable natural alignment. Whitespace is ignored.
+;; Format characters can be prefixed with a decimal number, which
+;; repeats the format character. Padding is done with zeros.
 
-;; Fields are aligned to their natural alignment!
+;; Fields are by default aligned to their natural alignment!
 
 ;; (pack "!xd" 3.14)
 ;; => #vu8(0 0 0 0 0 0 0 0 64 9 30 184 81 235 133 31)
@@ -36,26 +37,30 @@
 ;; (unpack "!xd" (pack "!xd" 3.14))
 ;; => 3.14
 
+;; TODO: pack syntax
+
 ;;; Version history
 
 ;; (1 0 0) - Initial version.
 
 ;; (1 1 0) - `unpack' can now be used as a function.
 
+;; (1 2 0) - added the format characters a and u
+
 ;;; Versioning scheme
 
 ;; The version is made of (major minor patch) sub-versions.
 
-;; `patch' is incremented when backwards-compatible changes are made.
+;; `patch' is incremented when backwards-compatible changes are made. TODO: this sub-version is probably not needed
 
 ;; `minor' is incremented when new functionality is introduced.
 
 ;; `major' is incremented when backwards compatibility is broken.
 
-(library (weinholt struct pack (1 1 0))
-    (export format-size pack pack! unpack)
-    (import (rnrs)
-            (weinholt struct pack-aux (1 0 0)))
+(library (weinholt struct pack (1 2 0))
+  (export format-size pack pack! unpack)
+  (import (rnrs)
+          (weinholt struct pack-aux (1 0 0)))
 
   (define-syntax unpack*
     (lambda (x)
@@ -91,11 +96,12 @@
                                      (o (syntax->datum #'offset))
                                      (rep #f)
                                      (endian #f)
+                                     (align #t)
                                      (refs '()))
                               (cond ((= i (string-length fmt))
                                      (reverse refs))
                                     ((char-whitespace? (string-ref fmt i))
-                                     (lp (+ i 1) o rep endian refs))
+                                     (lp (+ i 1) o rep endian align refs))
                                     (else
                                      (case (string-ref fmt i)
                                        ((#\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9)
@@ -103,35 +109,39 @@
                                             (+ (- (char->integer (string-ref fmt i))
                                                   (char->integer #\0))
                                                (* (if rep rep 0) 10))
-                                            endian refs))
+                                            endian align refs))
                                        ((#\=)
-                                        (lp (+ i 1) o #f #f refs))
+                                        (lp (+ i 1) o #f #f align refs))
                                        ((#\<)
-                                        (lp (+ i 1) o #f #'(endianness little) refs))
+                                        (lp (+ i 1) o #f #'(endianness little) align refs))
                                        ((#\> #\!)
-                                        (lp (+ i 1) o #f #'(endianness big) refs))
+                                        (lp (+ i 1) o #f #'(endianness big) align refs))
                                        ((#\x)
-                                        (lp (+ i 1) (+ o (or rep 1)) #f endian refs))
+                                        (lp (+ i 1) (+ o (or rep 1)) #f endian align refs))
+                                       ((#\a)
+                                        (lp (+ i 1) o #f endian #t refs))
+                                       ((#\u)
+                                        (lp (+ i 1) o #f endian #f refs))
                                        (else
-                                        (call-with-values (lambda ()
-                                                            (type (string-ref fmt i)))
-                                          (lambda (ref nref n)
-                                            (let ((o (roundb o n))
-                                                  (rep (or rep 1)))
-                                              (lp (+ i 1) (+ o (* n rep)) #f
-                                                  endian
-                                                  (let lp ((o o) (rep rep) (refs refs))
-                                                    (if (zero? rep) refs
-                                                        (lp (+ o n) (- rep 1)
-                                                            (cons (cond ((eq? ref 's8)
-                                                                         #`(bytevector-s8-ref bv #,o))
-                                                                        ((eq? ref 'u8)
-                                                                         #`(bytevector-u8-ref bv #,o))
-                                                                        (endian
-                                                                         #`(#,ref bv #,o #,endian))
-                                                                        (else
-                                                                         #`(#,nref bv #,o)))
-                                                                  refs))))))))))))))))
+                                        (let-values (((ref nref n) (type (string-ref fmt i))))
+                                          (let ((o (if align (roundb o n) o))
+                                                (rep (or rep 1)))
+                                            (lp (+ i 1) (+ o (* n rep)) #f
+                                                endian align
+                                                (let lp* ((o o) (rep rep) (refs refs))
+                                                  (if (zero? rep) refs
+                                                      (lp* (+ o n) (- rep 1)
+                                                           (cons (cond ((eq? ref 's8)
+                                                                        #`(bytevector-s8-ref bv #,o))
+                                                                       ((eq? ref 'u8)
+                                                                        #`(bytevector-u8-ref bv #,o))
+                                                                       (endian
+                                                                        #`(#,ref bv #,o #,endian))
+                                                                       ((not align)
+                                                                        #`(#,ref bv #,o (native-endianness)))
+                                                                       (else
+                                                                        #`(#,nref bv #,o)))
+                                                                 refs)))))))))))))))
              #`(let ((bv bytevector))
                  (unless (= #,(format-size (syntax->datum #'fmt))
                             (- (bytevector-length bv) offset))
@@ -140,7 +150,7 @@
                    (error 'unpack
                           "The bytevector size does not match the format"
                           fmt (bytevector-length bv)))
-                      (values refs ...))))))))
+                 (values refs ...))))))))
 
   (define unpack**
     (case-lambda
@@ -176,11 +186,12 @@
                   (o offset)
                   (rep #f)
                   (endian #f)
+                  (align #t)
                   (refs '()))
            (cond ((= i (string-length fmt))
                   (apply values (reverse refs)))
                  ((char-whitespace? (string-ref fmt i))
-                  (lp (+ i 1) o rep endian refs))
+                  (lp (+ i 1) o rep endian align refs))
                  (else
                   (case (string-ref fmt i)
                     ((#\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9)
@@ -188,35 +199,39 @@
                          (+ (- (char->integer (string-ref fmt i))
                                (char->integer #\0))
                             (* (if rep rep 0) 10))
-                         endian refs))
+                         endian align refs))
                     ((#\=)
-                     (lp (+ i 1) o #f #f refs))
+                     (lp (+ i 1) o #f #f align refs))
                     ((#\<)
-                     (lp (+ i 1) o #f (endianness little) refs))
+                     (lp (+ i 1) o #f (endianness little) align refs))
                     ((#\> #\!)
-                     (lp (+ i 1) o #f (endianness big) refs))
+                     (lp (+ i 1) o #f (endianness big) align refs))
                     ((#\x)
-                     (lp (+ i 1) (+ o (or rep 1)) #f endian refs))
+                     (lp (+ i 1) (+ o (or rep 1)) #f endian align refs))
+                    ((#\a)
+                     (lp (+ i 1) o #f endian #t refs))
+                    ((#\u)
+                     (lp (+ i 1) o #f endian #f refs))
                     (else
-                     (call-with-values (lambda ()
-                                         (type (string-ref fmt i)))
-                       (lambda (ref nref n)
-                         (let ((o (roundb o n))
-                               (rep (or rep 1)))
-                           (lp (+ i 1) (+ o (* n rep)) #f
-                               endian
-                               (let lp ((o o) (rep rep) (refs refs))
-                                 (if (zero? rep) refs
-                                     (lp (+ o n) (- rep 1)
-                                         (cons (cond ((eq? ref 's8)
-                                                      (bytevector-s8-ref bv o))
-                                                     ((eq? ref 'u8)
-                                                      (bytevector-u8-ref bv o))
-                                                     (endian
-                                                      (ref bv o endian))
-                                                     (else
-                                                      (nref bv o)))
-                                               refs)))))))))))))))
+                     (let-values (((ref nref n) (type (string-ref fmt i))))
+                       (let ((o (if align (roundb o n) o))
+                             (rep (or rep 1)))
+                         (lp (+ i 1) (+ o (* n rep)) #f
+                             endian align
+                             (let lp* ((o o) (rep rep) (refs refs))
+                               (if (zero? rep) refs
+                                   (lp* (+ o n) (- rep 1)
+                                        (cons (cond ((eq? ref 's8)
+                                                     (bytevector-s8-ref bv o))
+                                                    ((eq? ref 'u8)
+                                                     (bytevector-u8-ref bv o))
+                                                    (endian
+                                                     (ref bv o endian))
+                                                    ((not align)
+                                                     (ref bv o (native-endianness)))
+                                                    (else
+                                                     (nref bv o)))
+                                              refs))))))))))))))
       ((fmt bv)
        (unpack** fmt bv 0))))
 
@@ -262,6 +277,7 @@
              (o offset)
              (rep #f)
              (endian (native-endianness))
+             (align #t)
              (vals vals))
       (cond ((= i (string-length fmt))
              (unless (null? vals)
@@ -270,7 +286,7 @@
                (error 'pack! "The bytevector is smaller than the format"
                       fmt (bytevector-length bv))))
             ((char-whitespace? (string-ref fmt i))
-             (lp (+ i 1) o rep endian vals))
+             (lp (+ i 1) o rep endian align vals))
             (else
              (case (string-ref fmt i)
                ((#\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9)
@@ -278,29 +294,33 @@
                     (+ (- (char->integer (string-ref fmt i))
                           (char->integer #\0))
                        (* (if rep rep 0) 10))
-                    endian vals))
-               ((#\=) (lp (+ i 1) o #f (native-endianness) vals))
-               ((#\<) (lp (+ i 1) o #f (endianness little) vals))
-               ((#\> #\!) (lp (+ i 1) o #f (endianness big) vals))
+                    endian align vals))
+               ((#\=) (lp (+ i 1) o #f (native-endianness) align vals))
+               ((#\<) (lp (+ i 1) o #f (endianness little) align vals))
+               ((#\> #\!) (lp (+ i 1) o #f (endianness big) align vals))
                ((#\x)
                 (zero! o (or rep 1))
-                (lp (+ i 1) (+ o (or rep 1)) #f endian vals))
+                (lp (+ i 1) (+ o (or rep 1)) #f endian align vals))
+               ((#\a)
+                (lp (+ i 1) o #f endian #t vals))
+               ((#\u)
+                (lp (+ i 1) o #f endian #f vals))
                (else
-                (call-with-values (lambda () (type (string-ref fmt i)))
-                  (lambda (set n)
-                    (zero! o (- (roundb o n) o))
-                    (do ((rep (or rep 1) (- rep 1))
-                         (o (roundb o n) (+ o n))
-                         (vals vals (cdr vals)))
-                        ((zero? rep)
-                         (lp (+ i 1) (+ o (* n rep)) #f endian vals))
-                      (when (> (+ o n) (bytevector-length bv))
-                        (error 'pack! "The bytevector is larger than the format"))
-                      (when (null? vals)
-                        (error 'pack! "Too few values for the format" fmt))
-                      (cond ((eq? set 's8)
-                             (bytevector-s8-set! bv o (car vals)))
-                            ((eq? set 'u8)
-                             (bytevector-u8-set! bv o (car vals)))
-                            (else
-                             (set bv o (car vals) endian)))))))))))))
+                (let*-values (((set n) (type (string-ref fmt i)))
+                              ((o*) (if align (roundb o n) o)))
+                  (zero! o (- o* o))
+                  (do ((rep (or rep 1) (- rep 1))
+                       (o o* (+ o n))
+                       (vals vals (cdr vals)))
+                      ((zero? rep)
+                       (lp (+ i 1) (+ o (* n rep)) #f endian align vals))
+                    (when (> (+ o n) (bytevector-length bv))
+                      (error 'pack! "The bytevector is larger than the format"))
+                    (when (null? vals)
+                      (error 'pack! "Too few values for the format" fmt))
+                    (cond ((eq? set 's8)
+                           (bytevector-s8-set! bv o (car vals)))
+                          ((eq? set 'u8)
+                           (bytevector-u8-set! bv o (car vals)))
+                          (else
+                           (set bv o (car vals) endian))))))))))))
