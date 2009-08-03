@@ -17,60 +17,55 @@
 #!r6rs
 
 (import (weinholt crypto des)
+        (srfi :78 lightweight-testing)
         (rnrs))
 
-;; TESTING IMPLEMENTATIONS OF DES, Ronald L. Rivest
-;; http://people.csail.mit.edu/rivest/Destest.txt
-(do ((x (bytevector-copy '#vu8(#x94 #x74 #xB8 #xE8 #xC7 #x3B #xCA #x7D)))
-     (i 0 (+ i 1)))
-    ((= i 16)
-     (unless (equal? x '#vu8(#x1B #x1A #x2D #xDB #x4C #x64 #x24 #x38))
-       (error 'test-des "Ron Rivest's test failed")))
-  (des! x (if (even? i)
-              (permute-key x)           ;encipher
-              (reverse (permute-key x))))) ;decipher
+(define (print . x) (for-each display x) (newline))
 
-(define (test-crypt password salt expect)
-  (let ((result (crypt password salt)))
-    (unless (string=? result expect)
-      (error 'test-crypt "Bad result" result))))
+(define (rivest)
+  ;; TESTING IMPLEMENTATIONS OF DES, Ronald L. Rivest
+  ;; http://people.csail.mit.edu/rivest/Destest.txt
+  (do ((x (bytevector-copy '#vu8(#x94 #x74 #xB8 #xE8 #xC7 #x3B #xCA #x7D)))
+       (i 0 (+ i 1)))
+      ((= i 16) x)
+    (print i ": " x)
+    (des! x (if (even? i)
+                (permute-key x)            ;encipher
+                (reverse (permute-key x)))))) ;decipher
 
-(test-crypt "foodbard" ".."
-            "..o6avrdNBOA6")
+(check (rivest) => '#vu8(#x1B #x1A #x2D #xDB #x4C #x64 #x24 #x38))
 
-(test-crypt "test" ".."
-            "..9sjyf8zL76k")
+(check (crypt "foodbard" "..") => "..o6avrdNBOA6")
 
-(test-crypt "X" ".."
-            "..XhpOnw6KMZg")
+(check (crypt "test" "..") => "..9sjyf8zL76k")
 
-(test-crypt "foobar" "Ax"
-            "AxTdjVtckZ0Rs")
+(check (crypt "X" "..") => "..XhpOnw6KMZg")
 
-(test-crypt "ZZZZ" "zz"
-            "zz/CBDeUpwD26")
+(check (crypt "foobar" "Ax") => "AxTdjVtckZ0Rs")
 
-(test-crypt "" ".."
-            "..X8NBuQ4l6uQ")
+(check (crypt "ZZZZ" "zz") => "zz/CBDeUpwD26")
 
-(test-crypt "" "ZZ"
-            "ZZvIHp4MBMwSE")
+(check (crypt "" "..") => "..X8NBuQ4l6uQ")
 
-(define (test-tdea plaintext k1 k2 k3 expect)
+(check (crypt "" "ZZ") => "ZZvIHp4MBMwSE")
+
+
+(define (test-tdea plaintext k1 k2 k3)
+  ;; Returns the ciphertext and the deciphered ciphertext, which
+  ;; should match the plaintext.
   (let ((bv (bytevector-copy plaintext))
         (key (tdea-permute-key k1 k2 k3)))
     (tdea-encipher! bv 0 key)
-    (unless (equal? bv expect)
-      (error 'test-tdea "Bad ciphertext" bv expect))
-    (tdea-decipher! bv 0 key)
-    (unless (equal? bv plaintext)
-      (error 'test-tdea "Bad deciphered plaintext" bv plaintext))))
+    (let ((enciphered (bytevector-copy bv)))
+      (tdea-decipher! bv 0 key)
+      (list enciphered bv))))
 
-(test-tdea (string->utf8 "The Msg.")
-           (string->utf8 "01234567")
-           (string->utf8 "abcdefgh")
-           (string->utf8 "qwertyui")
-           #vu8(243 85 37 68 185 248 44 83))
+(check (test-tdea (string->utf8 "The Msg.")
+                  (string->utf8 "01234567")
+                  (string->utf8 "abcdefgh")
+                  (string->utf8 "qwertyui"))
+       => (list #vu8(243 85 37 68 185 248 44 83)
+                (string->utf8 "The Msg.")))
 
 ;; From NIST Special Publication 800-67 version 1.1,
 ;; revised 19 may 2008.
@@ -78,12 +73,19 @@
       (k2 #vu8(#x23 #x45 #x67 #x89 #xAB #xCD #xEF #x01))
       (k3 #vu8(#x45 #x67 #x89 #xAB #xCD #xEF #x01 #x23)))
 
-  (test-tdea (string->utf8 "The qufc")  ;sic
-             k1 k2 k3
-             #vu8(#xA8 #x26 #xFD #x8C #xE5 #x3B #x85 #x5F))
-  (test-tdea (string->utf8 "k brown ")
-             k1 k2 k3
-             #vu8(#xCC #xE2 #x1C #x81 #x12 #x25 #x6F #xE6))
-  (test-tdea (string->utf8 "fox jump")
-             k1 k2 k3
-             #vu8(#x68 #xD5 #xC0 #x5D #xD9 #xB6 #xB9 #x00)))
+  (check (test-tdea (string->utf8 "The qufc") ;sic
+                    k1 k2 k3)
+         => (list #vu8(#xA8 #x26 #xFD #x8C #xE5 #x3B #x85 #x5F)
+                  (string->utf8 "The qufc")))
+
+  (check (test-tdea (string->utf8 "k brown ")
+                    k1 k2 k3)
+         => (list #vu8(#xCC #xE2 #x1C #x81 #x12 #x25 #x6F #xE6)
+                  (string->utf8 "k brown ")))
+  
+  (check (test-tdea (string->utf8 "fox jump")
+                    k1 k2 k3)
+         => (list #vu8(#x68 #xD5 #xC0 #x5D #xD9 #xB6 #xB9 #x00)
+                  (string->utf8 "fox jump"))))
+
+(check-report)
