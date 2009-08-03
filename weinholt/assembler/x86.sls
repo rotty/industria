@@ -39,8 +39,7 @@
 ;; 81E7F8FFFFFF  (and edi #xFFFFFFF8)  ; #xFFFFFFF8
 ;; 83E7F8        (and edi #xFFFFFFF8)  ; -8
 
-;; FIXME: when evaluating expressions and a label is unknown in the
-;; second pass, give an error.
+;; 48B81F00000000000000 (mov rax #x1F)  (mov eax #x1f) is equivalent
 
 ;; TODO: AVX (VEX prefix)
 
