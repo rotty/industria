@@ -32,13 +32,9 @@
           tdea-cbc-decipher!)
   (import (except (rnrs) bitwise-rotate-bit-field))
 
-  (define (bitwise-rotate-bit-field ei1 ei2 ei3 ei4)
+  (define (bitwise-rotate-bit-field n start end count)
     ;; From R6RS, not yet implemented in Ikarus.
-    (let* ((n     ei1)
-           (start ei2)
-           (end   ei3)
-           (count ei4)
-           (width (- end start)))
+    (let ((width (- end start)))
       (if (positive? width)
           (let* ((count (mod count width))
                  (field0 (bitwise-bit-field n start end))
@@ -64,7 +60,8 @@
     ;; This is basically what makes this library so slow. Among other things.
     (do ((i 0 (fx+ i 1))
          (ret 0 (if (bitwise-bit-set? input (fx- inlen (bytevector-u8-ref table i)))
-                    (bitwise-ior ret (bitwise-arithmetic-shift-left 1 (- (bytevector-length table) i 1)))
+                    (bitwise-ior ret (bitwise-arithmetic-shift-left
+                                      1 (- (bytevector-length table) i 1)))
                     ret)))
         ((fx=? i (bytevector-length table)) ret)))
 
@@ -88,12 +85,16 @@
                41 52 31 37 47 55 30 40 51 45 33 48
                44 49 39 56 34 53 46 42 50 36 29 32))
     (let ((CD (permute (bytevector-u64-ref key 0 (endianness big)) 64 pc1)))
-      (do ((rotates '(1 1 2 2 2 2 2 2 1 2 2 2 2 2 2 1 0) (cdr rotates))
-           (C (bitwise-bit-field CD 28 56) (bitwise-rotate-bit-field C 0 28 (car rotates)))
-           (D (bitwise-bit-field CD 0 28) (bitwise-rotate-bit-field D 0 28 (car rotates)))
-           (subkeys '() (cons (permute (bitwise-ior (bitwise-arithmetic-shift-left C 28) D)
-                                       56 pc2)
-                              subkeys)))
+      (do ((rotates '(1 1 2 2 2 2 2 2 1 2 2 2 2 2 2 1 0)
+                    (cdr rotates))
+           (C (bitwise-bit-field CD 28 56)
+              (bitwise-rotate-bit-field C 0 28 (car rotates)))
+           (D (bitwise-bit-field CD 0 28)
+              (bitwise-rotate-bit-field D 0 28 (car rotates)))
+           (subkeys '()
+                    (cons (permute (bitwise-ior (bitwise-arithmetic-shift-left C 28) D)
+                                   56 pc2)
+                          subkeys)))
           ((null? rotates)
            (cdr (reverse subkeys))))))
 
