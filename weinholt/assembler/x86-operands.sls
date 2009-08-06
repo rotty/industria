@@ -590,7 +590,7 @@
             ((list? op)
 ;;              (unless (and (memq (car op) '(+ -)) (>= (length op) 2))
 ;;                (error 'build-expression "Bad assembler operand" op))
-             (when (and (eqv? (cadr op) '(eip rip))
+             (when (and (memq (cadr op) '(eip rip))
                         (not (integer? (caddr op)))
                         (not (null? (cdddr op))))
                (error 'build-expression "Bad rip-relative assembler operand" op)))
