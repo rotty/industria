@@ -47,6 +47,8 @@
 
 ;; (1 2 0) - added the format characters a and u
 
+;; (1 3 0) - added get-unpack. Removed the unnecessary size check.
+
 ;;; Versioning scheme
 
 ;; The version is made of (major minor patch) sub-versions.
@@ -57,8 +59,8 @@
 
 ;; `major' is incremented when backwards compatibility is broken.
 
-(library (weinholt struct pack (1 2 0))
-  (export format-size pack pack! unpack)
+(library (weinholt struct pack (1 3 0))
+  (export format-size pack pack! unpack get-unpack)
   (import (rnrs)
           (weinholt struct pack-aux (1 0 0)))
 
@@ -143,13 +145,6 @@
                                                                         #`(#,nref bv #,o)))
                                                                  refs)))))))))))))))
              #`(let ((bv bytevector))
-                 (unless (= #,(format-size (syntax->datum #'fmt))
-                            (- (bytevector-length bv) offset))
-                   ;; Don't report the bytevector here, as it might
-                   ;; contain sensitive information.
-                   (error 'unpack
-                          "The bytevector size does not match the format"
-                          fmt (bytevector-length bv)))
                  (values refs ...))))))))
 
   (define unpack**
@@ -176,12 +171,6 @@
                           ((#\d) (values bytevector-ieee-double-ref
                                          bytevector-ieee-double-native-ref 8))
                           (else (error 'unpack "Bad character in format string" fmt c))))))
-         (unless (= (format-size fmt) (- (bytevector-length bv) offset))
-           ;; Don't report the bytevector here, as it might
-           ;; contain sensitive information.
-           (error 'unpack
-                  "The bytevector size does not match the format"
-                  fmt (bytevector-length bv)))
          (let lp ((i 0)
                   (o offset)
                   (rep #f)
@@ -243,11 +232,14 @@
        (syntax-case x ()
          ((_ fmt bytevector) #'(unpack fmt bytevector 0))
          ((_ fmt bytevector offset)
-          (if (string? (syntax->datum #'fmt))
-              #'(unpack* fmt bytevector offset)
-              #'(unpack** fmt bytevector offset)))
+          ;; FIXME: handle non-constant offsets!
+          (and (string? (syntax->datum #'fmt)) (integer? (syntax->datum #'o)))
+          #'(unpack* fmt bytevector offset))
          ((_ . rest) #'(unpack** . rest))
          (_ #'unpack**)))))
+
+  (define (get-unpack port fmt)
+    (unpack fmt (get-bytevector-n port (format-size fmt))))
 
   (define (pack fmt . values)
     (let ((bv (make-bytevector (format-size fmt))))
@@ -314,8 +306,6 @@
                        (vals vals (cdr vals)))
                       ((zero? rep)
                        (lp (+ i 1) (+ o (* n rep)) #f endian align vals))
-                    (when (> (+ o n) (bytevector-length bv))
-                      (error 'pack! "The bytevector is larger than the format"))
                     (when (null? vals)
                       (error 'pack! "Too few values for the format" fmt))
                     (cond ((eq? set 's8)
