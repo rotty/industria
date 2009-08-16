@@ -20,8 +20,31 @@
 ;; Ross N. Williams, "A painless guide to CRC error detection
 ;; algorithms". http://www.ross.net/crc/crcpaper.html
 
-;; Quick and possibly confusing guide to using define-crc, for those
-;; who are too busy to read the above paper:
+;;; Simple usage with pre-defined CRCs
+
+;; If you want to use one of the pre-defined CRCs
+
+;; (define-crc crc-32)
+;;     calculates the CRC table at expand-time and defines the
+;;     procedures below
+
+;; (crc-32 bytevector)
+;;     returns the final CRC of the entire bytevector
+;; (crc-32-init)
+;;     returns an initial CRC state
+;; (crc-32-update state bv)
+;; (crc-32-update state bv start)
+;; (crc-32-update state bv start end)
+;;     returns a new state which includes the CRC on the given bytes
+;; (crc-32-finish state)
+;;     returns the final CRC
+;; (crc-32-self-test)
+;;     returns 'sucess, 'failure, or 'no-self-test
+
+;;; Advanced usage
+
+;; Quick and possibly confusing guide to using define-crc with new
+;; CRCs, for those who are too busy to read the above paper:
 
 ;; Syntax: (define-src name width polynomial init ref-in ref-out
 ;;                     xor-out check)
@@ -41,34 +64,33 @@
 
 ;; check is either the CRC of the ASCII string "123456789", or #f.
 
-;; The functions defined are like these:
+;; Syntax: (define-crc name (coefficients ...) init ref-in ref-out
+;;                     xor-out check)
 
-;; (crc-32 bytevector)
-;;     returns the final CRC of the entire bytevector
-;; (crc-32-init)
-;;     returns an initial CRC state
-;; (crc-32-update state bv)
-;; (crc-32-update state bv start)
-;; (crc-32-update state bv start end)
-;;     returns a new state which includes the CRC on the given bytes
-;; (crc-32-finish state)
-;;     returns the final CRC
-;; (crc-32-self-test)
-;;     returns 'sucess, 'failure, or 'no-self-test
+;; This is the slightly easier interface where you can simply specify
+;; the powers of the coefficients. CRC-16 in this syntax becomes:
 
-;; CRC-32 is supposedly used for .ZIP, AUTODIN II, Ethernet, FDDI,
-;; PNG, MPEG-2 and various other things. No doubt it is very popular
-;; indeed.
+;; (define-crc crc-16 (16 15 2 0) #x0000 #t #t #x0000 #xBB3D)
 
-(library (weinholt crypto crc (0 0))
-  (export define-crc
-          crc-32 crc-32-init crc-32-update crc-32-finish crc-32-self-test
-          crc-16 crc-16-init crc-16-update crc-16-finish crc-16-self-test)
+;; Another example: the polynomial x^8 + x^2 + x + 1 in this syntax
+;; becomes: (8 2 1 0)
+
+;;; Version history
+
+;; (1 0 20090816) - Initial version. Includes crc-32, crc-16,
+;; crc-16/ccitt, crc-32c, and crc-24.
+
+(library (weinholt crypto crc (1 0 20090816))
+  (export define-crc)
   (import (rnrs)
           (for (only (srfi :1 lists) iota) expand))
 
   (define-syntax define-crc
     (lambda (x)
+      (define (decode-coefficients coeffs)
+        (do ((i coeffs (cdr i))
+             (p 0 (bitwise-ior p (bitwise-arithmetic-shift-left 1 (car i)))))
+            ((null? i) p)))
       (define (bitwise-reverse-bit-field v start end)
         ;; This is only for the benefit of Ikarus, which does not
         ;; implement this procedure as of 2009-08-16.
@@ -96,10 +118,38 @@
                                              (symbol->string (syntax->datum name))
                                              suffix))))
       (syntax-case x ()
+        ((_ name)
+         ;; Contributions are welcome. There should also be more
+         ;; references here. A lot of work went into finding these
+         ;; polynomials, and they are reduced to one-liners.
+         (case (syntax->datum #'name)
+           ;; Used for .ZIP, AUTODIN II, Ethernet, FDDI, PNG, MPEG-2
+           ;; and various other things.
+           ((crc-32)
+            #'(define-crc name 32 #x04C11DB7 #xFFFFFFFF #t #t #xFFFFFFFF #xCBF43926))
+           ((crc-16)
+            #'(define-crc name 16 #x8005 #x0000 #t #t #x0000 #xBB3D))
+           ((crc-16/ccitt)
+            ;; Used by XMODEM, PPP and much more
+            #'(define-crc name 16 #x1021 #xffff #f #f 0 #x29B1))
+           ((crc-32c)
+            ;; CRC-32C specified in e.g. RFC4960 or RFC3385. Used by SCTP
+            ;; and iSCSI. Find more errors than CRC-32.
+            #'(define-crc name 32 #x1EDC6F41 #xFFFFFFFF #t #t #xFFFFFFFF #xE3069283))
+           ;; OpenPGP, see RFC2440.
+           ((crc-24)
+            #'(define-crc name (24 23 18 17 14 11 10 7 6 5 4 3 1 0)
+                          #xB704CE #f #f 0 #x21CF02))
+           (else
+            (syntax-violation #f "this CRC is not pre-defined" #'name))))
+
+        ((_ name (width coeffs ...) . rest)
+         (with-syntax ((polynomial (decode-coefficients (syntax->datum #'(coeffs ...)))))
+           #'(define-crc name width polynomial . rest)))
         ((_ name width polynomial init ref-in ref-out xor-out check)
-         ;; TODO: do a sanity check on the width. Not every width is
-         ;; supported... only 32 and 16 have been tested properly.
-         ;; Sub-byte widths need something completely different.
+         (and (identifier? #'name) (>= (syntax->datum #'width) 8))
+         ;; TODO: test different widths. Sub-byte widths need a
+         ;; different API.
          (let* ((width* (syntax->datum #'width))
                 (polynomial* (syntax->datum #'polynomial))
                 (init* (syntax->datum #'init))
@@ -132,7 +182,7 @@
                      ((r* bv start)
                       (crc-update r* bv start (bytevector-length bv)))
                      ((r* bv start end)
-                      (do ((i 0 (+ i 1))
+                      (do ((i start (+ i 1))
                            (r r*
                               ;; TODO: implement the other ref-in ref-out combinations?
                               #,(cond ((and ref-in* ref-out*)
@@ -150,19 +200,4 @@
                                                            (bitwise-arithmetic-shift-right r (- width 8))
                                                            #xff)))))
                                       (else (syntax-violation #f "unimplemented reflection" x)))))
-                          ((= i (bytevector-length bv)) r))))))))))))
-
-;;; Parameterized CRCs, using the parameters from Williams's paper
-
-  (define-crc crc-32 32 #x04C11DB7 #xFFFFFFFF #t #t #xFFFFFFFF #xCBF43926)
-
-  (define-crc crc-16 16 #x8005 #x0000 #t #t #x0000 #xBB3D)
-
-  ;; Some examples...
-
-  ;; (define-crc crc-16/ccitt 16 #x1021 #xffff #f #f 0 #x29B1)
-
-  ;; CRC-32C specified in e.g. RFC4960 or RFC3385. Used by SCTP and iSCSI.
-  ;; (define-crc crc-32c 32 #x1EDC6F41 #xFFFFFFFF #t #t #xFFFFFFFF #xE3069283)
-
-  )
+                          ((= i end) r)))))))))))))
