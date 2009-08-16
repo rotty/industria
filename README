@@ -31,6 +31,18 @@ complete and might generate bad code. It does not yet do any jump size
 optimization or produce relocatable object files. But it can be used
 to generate Multiboot images and programs/x86-demo shows this.
 
+** (weinholt crypto crc)
+This library exports the define-crc syntax which generates tables and
+procedures for calculating CRCs. Some pre-defined CRCs are available,
+but you can define your own by simply passing the CRC's parameters to
+define-crc. See the library source code for more information. Example
+usage:
+
+> (import (weinholt crypto crc))
+> (define-crc crc-32)
+> (number->string (crc-32 (string->utf8 "I worship His Shadow")) 16)
+"F130CA55"
+
 ** (weinholt crypto des)
 The Data Encryption Standard, FIPS 42. This library implements DES and
 3DES (TDEA) in ECB mode, and the DES based crypt() password hashing
@@ -85,6 +97,33 @@ documentation.
 > (unpack "!2S" (pack "!2s" -1 1))
 65535
 1
+
+* LIBRARY VERSIONING
+I intend to follow this library versioning scheme:
+
+The versions consist of (major minor date) sub-versions.
+`major' is incremented when backwards compatibility is broken.
+`minor' is incremented when new functionality is introduced.
+`date' is the date of the latest change in YYYYMMDD format.
+
+To use the versioning scheme you might import libraries like this:
+
+(import (rnrs)
+        (weinholt struct pack (1 (>= 3))))
+
+In the above example you're importing the version of the pack library
+that supports all programs and libraries that were written against
+version (1 3)'s supported features. If there are major changes to the
+library that need to break backwards compatibility, the version will
+be incremented to (2 0). New functionality that does not break current
+programs and libraries will be introduced in version (1 4), (1 5) etc.
+
+There haven't been any releases yet, so there is no guarantee that the
+versioning scheme will be followed. I'll try to keep a version history
+in each library source file. The `date' sub-version doesn't have to be
+used, but it can be used to depend on bug-fixed versions. It is
+automatically incremented by my editor, so it could possibly be more
+correct than the other sub-versions, which are modified manually.
 
 * TEST ROUTINES
 The tests/ directory contains scripts that test the libraries. Can
