@@ -17,7 +17,7 @@
 
 ;; RFC 4648 Base-N Encodings
 
-(library (weinholt text base64)
+(library (weinholt text base64 (1 0 20090821))
   (export base64-encode
           base64-decode
           base64-alphabet

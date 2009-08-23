@@ -41,28 +41,18 @@
 
 ;;; Version history
 
-;; (1 0 0) - Initial version.
+;; (1 0) - Initial version.
 
-;; (1 1 0) - `unpack' can now be used as a function.
+;; (1 1) - `unpack' can now be used as a function.
 
-;; (1 2 0) - added the format characters a and u
+;; (1 2) - added the format characters a and u
 
-;; (1 3 0) - added get-unpack. Removed the unnecessary size check.
+;; (1 3) - added get-unpack. Removed the unnecessary size check.
 
-;;; Versioning scheme
-
-;; The version is made of (major minor patch) sub-versions.
-
-;; `patch' is incremented when backwards-compatible changes are made. TODO: this sub-version is probably not needed
-
-;; `minor' is incremented when new functionality is introduced.
-
-;; `major' is incremented when backwards compatibility is broken.
-
-(library (weinholt struct pack (1 3 0))
+(library (weinholt struct pack (1 3 20090821))
   (export format-size pack pack! unpack get-unpack)
   (import (rnrs)
-          (weinholt struct pack-aux (1 0 0)))
+          (weinholt struct pack-aux (1 0)))
 
   (define-syntax unpack*
     (lambda (x)

@@ -85,7 +85,7 @@
 ;;            101 51)))
 
 
-(library (weinholt crypto x509)
+(library (weinholt crypto x509 (0 0 20090821))
   (export certificate<-bytevector
           public-key<-certificate
           decipher-certificate-signature
@@ -99,7 +99,7 @@
           (srfi :19 time)
           (weinholt crypto rsa)
           (weinholt crypto sha-1)
-          (prefix (weinholt struct der (1)) der:))
+          (prefix (weinholt struct der (0 0)) der:))
 
   (define (print . x) (for-each display x) (newline))
 

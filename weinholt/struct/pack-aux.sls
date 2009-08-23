@@ -17,7 +17,7 @@
 
 ;; Auxiliary library for (weinholt struct)
 
-(library (weinholt struct pack-aux (1 0 0))
+(library (weinholt struct pack-aux (1 0 20090821))
     (export format-size roundb)
     (import (rnrs))
 

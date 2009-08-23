@@ -22,7 +22,7 @@
 ;; TODO: give an error if more than 2^64 bits are processed?
 ;; TODO: Optimize. Should be simple enough with the help of a profiler.
 
-(library (weinholt crypto sha-1)
+(library (weinholt crypto sha-1 (1 0 20090821))
   (export make-sha-1 sha-1-update! sha-1-finish! sha-1-clear!
           sha-1 sha-1-copy sha-1-finish
           sha-1-transform!              ;for interested parties only

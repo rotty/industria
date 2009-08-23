@@ -17,35 +17,11 @@
 
 ;; Disassembler for some of MIPS II (big-endian).
 
-;; The instruction reference I primarily used was Appendix A of
-;; Patterson, Hennessy: Computer Organization and Design, The
-;; Hardware/Software Interface. Third edition, revised printing.
-;; Morgan Kaufmann Publishers, 2005. The appendix (written by a
-;; Microsoft stooge) contains numerous typos, just like the rest of
-;; the book. It's rather incredible that it was published at all,
-;; considering that it contains the equivalent of FIXMEs (p. 550),
-;; can't get facts straight (e.g., the maximum instruction length of
-;; x86 varies between 15 and 17 (p. 140, 142), the FastMATH's page
-;; size is sometimes 4kB but then "really" 16kB (p. 524, 528)),
-;; contains more fluff (e.g. "Indian villager using the simputer")
-;; than Joe Sixpack's belly button, and is in general poorly written
-;; and difficult to learn from. The inconsistencies make it impossible
-;; to trust anything written in this book. But go ahead, buy this
-;; book. You will cherish the fact that half of it is written in a
-;; different style and the $1.00 bounty for technical errors is sure
-;; to make you a very rich man! Try googling bgczall.
-
-;; And that's why this disassembler might give wrong disassembly.
-
-;; cvt.d.w and cvt.s.w are not implemented, because the opcode map in
-;; the book couldn't fit them (what, FPU instructions have an fmt
-;; field?) and then I couldn't be bothered.
-
 ;; TODO: call the collect routine, use the same illegal instruction
 ;; behavior as the x86 disassembler. The collect routine could
 ;; possibly indicate the instruction format.
 
-(library (weinholt disassembler mips)
+(library (weinholt disassembler mips (0 0 20090821))
   (export get-instruction)
   (import (rnrs))
 

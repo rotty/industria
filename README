@@ -98,33 +98,6 @@ documentation.
 65535
 1
 
-* LIBRARY VERSIONING
-I intend to follow this library versioning scheme:
-
-The versions consist of (major minor date) sub-versions.
-`major' is incremented when backwards compatibility is broken.
-`minor' is incremented when new functionality is introduced.
-`date' is the date of the latest change in YYYYMMDD format.
-
-To use the versioning scheme you might import libraries like this:
-
-(import (rnrs)
-        (weinholt struct pack (1 (>= 3))))
-
-In the above example you're importing the version of the pack library
-that supports all programs and libraries that were written against
-version (1 3)'s supported features. If there are major changes to the
-library that need to break backwards compatibility, the version will
-be incremented to (2 0). New functionality that does not break current
-programs and libraries will be introduced in version (1 4), (1 5) etc.
-
-There haven't been any releases yet, so there is no guarantee that the
-versioning scheme will be followed. I'll try to keep a version history
-in each library source file. The `date' sub-version doesn't have to be
-used, but it can be used to depend on bug-fixed versions. It is
-automatically incremented by my editor, so it could possibly be more
-correct than the other sub-versions, which are modified manually.
-
 * TEST ROUTINES
 The tests/ directory contains scripts that test the libraries. Can
 also be useful if you want to see how a library is used.
@@ -155,6 +128,33 @@ A demonstration of the (weinholt assembler x86) library. The program
 assembles a Multiboot image, which can be loaded by GNU GRUB. The demo
 uses the VGA text mode and a few VGA registers to generate a classic
 copper bar effect.
+
+* LIBRARY VERSIONING
+I intend to follow this library versioning scheme:
+
+The versions consist of (major minor date) sub-versions.
+`major' is incremented when backwards compatibility is broken.
+`minor' is incremented when new functionality is introduced.
+`date' is the date of the latest change in YYYYMMDD format.
+
+To use the versioning scheme you might import libraries like this:
+
+(import (rnrs)
+        (weinholt struct pack (1 (>= 3))))
+
+In the above example you're importing the version of the pack library
+that supports all programs and libraries that were written against
+version (1 3)'s supported features. If there are major changes to the
+library that need to break backwards compatibility, the version will
+be incremented to (2 0). New functionality that does not break current
+programs and libraries will be introduced in version (1 4), (1 5) etc.
+
+There haven't been any releases yet, so there is no guarantee that the
+versioning scheme will be followed. I'll try to keep a version history
+in each library source file. The `date' sub-version doesn't have to be
+used, but it can be used to depend on bug-fixed versions. It is
+automatically incremented by my editor, so it could possibly be more
+correct than the other sub-versions, which are modified manually.
 
 * SECURITY NOTE
 Beware that if you're using some of these libraries for sensitive

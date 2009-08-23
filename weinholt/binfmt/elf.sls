@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2008 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -21,47 +21,46 @@
 
 ;; http://www.caldera.com/developers/gabi/
 
-(library (weinholt binfmt elf (1 0 0))
-    (export is-elf-image?
-            open-elf-image-file
-            elf-input-file-port
-            elf-input-file-word-size
-            elf-input-file-endianness
-            elf-input-file-os-abi
-            elf-input-file-abi-version
-            elf-input-file-type
-            elf-input-file-machine
-            elf-input-file-entry
-            elf-input-file-phoff
-            elf-input-file-shoff
-            elf-input-file-flags
-            elf-input-file-ehsize
-            elf-input-file-phentsize
-            elf-input-file-phnum
-            elf-input-file-shentsize
-            elf-input-file-shnum
-            elf-input-file-shstrndx
+(library (weinholt binfmt elf (0 0 20090823))
+  (export is-elf-image?
+          open-elf-image-file
+          elf-input-file-port
+          elf-input-file-word-size
+          elf-input-file-endianness
+          elf-input-file-os-abi
+          elf-input-file-abi-version
+          elf-input-file-type
+          elf-input-file-machine
+          elf-input-file-entry
+          elf-input-file-phoff
+          elf-input-file-shoff
+          elf-input-file-flags
+          elf-input-file-ehsize
+          elf-input-file-phentsize
+          elf-input-file-phnum
+          elf-input-file-shentsize
+          elf-input-file-shnum
+          elf-input-file-shstrndx
 
-            EM-NONE EM-M32 EM-SPARC EM-386 EM-68K EM-88K EM-860
-            EM-MIPS EM-MIPS-RS3-LE EM-PARISC EM-SPARC32PLUS EM-PPC
-            EM-PPC64 EM-S390 EM-ARM EM-SPARCV9 EM-IA-64 EM-X86-64
-            EM-names
+          EM-NONE EM-M32 EM-SPARC EM-386 EM-68K EM-88K EM-860
+          EM-MIPS EM-MIPS-RS3-LE EM-PARISC EM-SPARC32PLUS EM-PPC
+          EM-PPC64 EM-S390 EM-ARM EM-SPARCV9 EM-IA-64 EM-X86-64
+          EM-names
 
-            elf-section-header-name
-            elf-section-header-type
-            elf-section-header-flags
-            elf-section-header-addr
-            elf-section-header-offset
-            elf-section-header-size
-            elf-section-header-link
-            elf-section-header-info
-            elf-section-header-addralign
-            elf-section-header-entsize
+          elf-section-header-name
+          elf-section-header-type
+          elf-section-header-flags
+          elf-section-header-addr
+          elf-section-header-offset
+          elf-section-header-size
+          elf-section-header-link
+          elf-section-header-info
+          elf-section-header-addralign
+          elf-section-header-entsize
 
-            elf-input-file-section-by-name)
-
-    (import (rnrs)
-            (weinholt struct pack (1 (>= 0) (>= 0))))
+          elf-input-file-section-by-name)
+  (import (rnrs)
+          (weinholt struct pack (1 (>= 0))))
 
 ;;; Utilities
 

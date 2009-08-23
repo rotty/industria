@@ -1,6 +1,6 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
 ;; An IRC parser library useful for both IRC clients and servers.
-;; Copyright © 2008 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -52,15 +52,15 @@
 
 ;; Should follow RFC 2812 and RFC 2813.
 
-(library (weinholt net irc (1 0 0))
-    (export irc-format-condition? irc-parse-condition?
-            parse-message parse-message-bytevector
-            format-message-raw format-message-and-verify
-            format-message-with-whitewash
-            extended-prefix? prefix-split prefix-nick
-            swe-ascii-string-ci=?)
-    (import (rnrs)
-            (rnrs mutable-strings))
+(library (weinholt net irc (1 0 20090821))
+  (export irc-format-condition? irc-parse-condition?
+          parse-message parse-message-bytevector
+          format-message-raw format-message-and-verify
+          format-message-with-whitewash
+          extended-prefix? prefix-split prefix-nick
+          swe-ascii-string-ci=?)
+  (import (rnrs)
+          (rnrs mutable-strings))
 
   (define-condition-type &irc-format &condition
     make-irc-format-condition irc-format-condition?)

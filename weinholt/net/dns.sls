@@ -43,7 +43,7 @@
 
 ;; RFC 5452 DNS Resilience against Forged Answers
 
-(library (weinholt net dns (0 0))
+(library (weinholt net dns (0 0 20090816))
   (export print-dns-message
           make-normal-query
           put-dns-message
@@ -750,6 +750,8 @@
   ;;               (lambda ()
   ;;                 (n (make-hashtable cache-key-hash cache-key-question=?))))))
 
+  ;; XXX: should unsigned resources be cached at all? should they be used in the ttl calculation?
+  ;; rfc4035 sec 4.5
   ;; (define (dns-cache-set! cache question response)
   ;;   (assert (and (question? question) (dns-message? response)))
   ;;   (hashtable-set! (dns-cache-data cache)

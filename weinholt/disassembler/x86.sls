@@ -63,10 +63,10 @@
 ;; the &invalid-opcode condition will be raised. Use invalid-opcode?
 ;; to guard against it.
 
-(library (weinholt disassembler x86 (1 0 0))
-    (export get-instruction invalid-opcode?)
-    (import (except (rnrs) get-u8)
-            (weinholt disassembler x86-opcodes (1 0 (>= 0))))
+(library (weinholt disassembler x86 (1 0 20090821))
+  (export get-instruction invalid-opcode?)
+  (import (except (rnrs) get-u8)
+          (weinholt disassembler x86-opcodes (1 0 (>= 0))))
 
   (define debug #f)
 

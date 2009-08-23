@@ -17,7 +17,7 @@
 
 ;; The MD5 Message-Digest Algorithm. RFC 1321
 
-(library (weinholt crypto md5)
+(library (weinholt crypto md5 (1 0 20090821))
   (export make-md5 md5-update! md5-finish! md5-clear!
           md5 md5-copy md5-finish
           md5-copy-hash! md5->bytevector md5->string

@@ -24,7 +24,7 @@
 
 ;; But look at RFC 2313, it's easier to read...
 
-(library (weinholt crypto rsa)
+(library (weinholt crypto rsa (0 0 20090821))
   (export rsa-public-key?
           rsa-public-key<-bytevector
           rsa-public-key-length
@@ -35,7 +35,7 @@
           rsa-pkcs1-decrypt-digest)
   (import (rnrs)
           (srfi :27 random-bits)
-          (prefix (weinholt struct der (1)) der:))
+          (prefix (weinholt struct der (0 0)) der:))
 
   (define random-nonzero-byte
     (let* ((s (make-random-source))

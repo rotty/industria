@@ -21,7 +21,7 @@
 
 ;; TODO: output
 
-(library (weinholt struct der (1))
+(library (weinholt struct der (0 0 20090821))
   (export decode translate
           data-type
           data-start-index

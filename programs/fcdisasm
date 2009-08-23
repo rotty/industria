@@ -22,8 +22,8 @@
 ;; hex dump!
 
 (import (rnrs)
-        (weinholt disassembler x86 (1 (>= 0) (>= 0)))
-        (weinholt binfmt elf (1 (>= 0) (>= 0))))
+        (weinholt disassembler x86 (1 (>= 0)))
+        (weinholt binfmt elf (0 (>= 0))))
 
 (define (print-instr/sexpr i)
   "Print an instruction with hexadecimal numbers."
@@ -111,7 +111,6 @@
                                                     (display ")")))
                                              (newline)
                                              (exit))))))
-                        ;; Phony seek
                         (set-port-position! (elf-input-file-port image)
                                             (elf-section-header-offset text))
                         (disassemble (elf-input-file-port image)
