@@ -36,7 +36,7 @@
 ;; all messages have their checksums calculated with something like
 ;; SHA-1 and then encrypted with the cipher.
 
-(library (weinholt net tls)
+(library (weinholt net tls (0 0 20090821))
   (export make-tls-wrapper
           flush-tls-output
           put-tls-record get-tls-record
@@ -54,7 +54,9 @@
           (weinholt crypto sha-1)
           (weinholt crypto md5)
           (weinholt crypto rsa)
-          (weinholt crypto x509))
+          (weinholt crypto x509)
+          (weinholt net buffer)
+          (weinholt struct pack))
 
   (define TLS-VERSION-1.2 #x0303)
   (define TLS-VERSION-1.1 #x0302)
@@ -225,75 +227,6 @@
     (close-port (tls-conn-out conn))
     (close-port (buffer-port (tls-conn-inbuf conn))))
 
-  ;; This buffer is similar to the one in x.sls. Could maybe be
-  ;; merged. Also, TODO: raise proper conditions. output buffering
-  ;; could be done from the end of the buffer.
-  (define-record-type buffer
-    (fields (immutable port)
-            (mutable data)
-            (mutable top)
-            (mutable bottom))
-    (protocol (lambda (p)
-                (lambda (port)
-                  (p port (make-bytevector 1024) 0 0)))))
-
-  (define (buffer-read! buf n)
-    (cond ((> (+ (buffer-bottom buf) n)
-              (bytevector-length (buffer-data buf)))
-           ;; Extend the buffer size
-           (let* ((old (buffer-data buf))
-                  (new (make-bytevector (* (bytevector-length old) 2))))
-             (buffer-data-set! buf new)
-             (bytevector-copy! old 0
-                               new 0 (buffer-bottom buf))
-             (buffer-read! buf n)))
-          (else
-           (let ((bytes-read (get-bytevector-n! (buffer-port buf)
-                                                (buffer-data buf)
-                                                (buffer-bottom buf) n)))
-             (cond ((eof-object? bytes-read)
-                    (error 'buffer-read! "port closed, whyyyy!?"))
-                   ((< bytes-read n)
-                    (error 'buffer-read! "premature end of data!! yikes!"))
-                   (else
-                    (buffer-bottom-set! buf (+ (buffer-bottom buf) n))))))))
-
-  (define (buffer-reset! buf)
-    (buffer-top-set! buf 0)
-    (buffer-bottom-set! buf 0))
-
-  (define (buffer-seek! buf offset)
-    (when (> (+ (buffer-top buf) offset) (buffer-bottom buf))
-      (error 'read-generic "attempt to seek past bottom of buffer"))
-    (buffer-top-set! buf (+ (buffer-top buf) offset)))
-
-  (define (buffer-length b)
-    (- (buffer-bottom b) (buffer-top b)))
-
-  (define (read-generic buf ref size index)
-    (when (> (+ index (buffer-top buf) size) (buffer-bottom buf))
-      (error 'read-generic "attempt to read past bottom of buffer" ref))
-    (ref (buffer-data buf) (+ (buffer-top buf) index) (endianness big)))
-
-  (define (read-u8 buf index)
-    (when (> (+ index (buffer-top buf) 1) (buffer-bottom buf))
-      (error 'read-u8 "attempt to read past bottom of buffer" index))
-    (bytevector-u8-ref (buffer-data buf) (+ (buffer-top buf) index)))
-
-  (define (read-u16 buf i)
-    (read-generic buf bytevector-u16-ref 2 i))
-
-  (define (read-u24 buf index)
-    (when (> (+ index (buffer-top buf) 3) (buffer-bottom buf))
-      (error 'read-u24 "attempt to read past bottom of buffer" index))
-    (let ((data (buffer-data buf))
-          (offset (+ (buffer-top buf) index)))
-      (fxior (fxarithmetic-shift-left (bytevector-u8-ref data (+ offset 0)) 16)
-             (fxarithmetic-shift-left (bytevector-u8-ref data (+ offset 1)) 8)
-             (bytevector-u8-ref data (+ offset 2)))))
-
-  (define (read-u32 buf i)
-    (read-generic buf bytevector-u32-ref 4 i))
 
 ;;; Record protocol
 
@@ -526,31 +459,24 @@
       ;; Extensions (RFC4366).
       ;; http://www.iana.org/assignments/tls-extensiontype-values
 
-      ;; TODO: make this readable. And investigate why server_name is
-      ;; a *list*....
-      (let* ((sn (string->utf8 (tls-conn-server-name conn)))
-             (server-name (bytevector-append (list #vu8(0) ;HostName
-                                                   (u16be-list->bytevector
-                                                    (list (+ 1 (bytevector-length sn))))
-                                                   sn)))
-             (server-name-list (bytevector-append (list
-                                                   #vu8(0 0)      ;server_name
-                                                   (u16be-list->bytevector
-                                                    (list (bytevector-length server-name)))
-                                                   server-name))))
-        
+      (let ((server-name (string->utf8 (tls-conn-server-name conn))))
         (put-tls-handshake
          conn TLS-HANDSHAKE-CLIENT-HELLO
          (list tls-client-version-bytevector
                crandom
-               (u8-list->bytevector (list (bytevector-length session-id)))
+               (pack "C" (bytevector-length session-id))
                session-id
-               (uint-list->bytevector (list (* 2 (length cipher-suites))) (endianness big) 2)
-               (uint-list->bytevector cipher-suites (endianness big) 2)
+               (pack "!S" (* 2 (length cipher-suites)))
+               (u16be-list->bytevector cipher-suites)
                (u8-list->bytevector (cons (length compression-methods)
                                           compression-methods))
-               (u16be-list->bytevector (list (bytevector-length server-name-list)))
-               server-name-list)))))
+               (pack "!uS SS CS"
+                     (+ (format-size "!uSSCS") (bytevector-length server-name))
+                     0 ;server_name
+                     (+ (format-size "!uCS") (bytevector-length server-name))
+                     0 ;HostName
+                     (+ 1 (bytevector-length server-name)))
+               server-name)))))
 
   (define (put-tls-handshake-certificate conn)
     ;; no certificates to give
