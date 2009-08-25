@@ -54,7 +54,7 @@
                 ((= (dns-message-rcode r) rcode-NOERROR)
                  ;; TODO: restore the case from qname
                  (print ";;; Reply:") (print-dns-message r)
-                 (dnssec-experiment r))
+                 #;(dnssec-experiment r))
                 (else
                  (print ";; Reply with an ERROR:")
                  (print-dns-message r)
