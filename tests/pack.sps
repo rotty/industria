@@ -25,7 +25,7 @@
 (import (rnrs)
         (rnrs eval)
         (weinholt struct pack)
-        (weinholt struct pack-aux)
+        (only (weinholt struct pack-aux) roundb)
         (srfi :78 lightweight-testing)
         (only (srfi :1 lists) make-list)
         (rename (only (srfi :27 random-bits) random-integer
@@ -38,6 +38,9 @@
   (display "\nFormat: ") (write fmt)
   (display "\nValues: ") (write values) (newline)
   (check (apply pack fmt values) => expect)
+  (check (eval `(pack ,fmt ,@values)
+               (environment '(rnrs) '(weinholt struct pack)))
+         => expect)
   (check (call-with-values (lambda () (unpack fmt expect)) list)
          => values)
   (check (eval `(call-with-values (lambda () (unpack ,fmt ',expect)) list)
@@ -178,5 +181,45 @@ the format string. Then see if pack/unpack gives the expected result."
 (check-pack '#vu8(4 0 0 1 0) "u!C L" 4 #x100)
 
 (check-pack '#vu8(4 0 0 0 0 0 0 1 0) "u!C Q" 4 #x100)
+
+(check (let-values ((x (get-unpack (open-bytevector-input-port #vu8(4 3 2 1 2 1 1 #xff #xff))
+                                "<LSC")))
+         x)
+       => '(#x01020304 #x0102 #x01))
+
+(check (apply get-unpack (open-bytevector-input-port #vu8(#xff))
+              "c" '())
+       => -1)
+
+(check (unpack "C" #vu8(0 1) 1) => 1)
+
+(check (let ((offset 1)) (unpack "C" #vu8(0 1) offset)) => 1)
+
+(check (let ((offset 1))
+         (unpack "!uxxS" #vu8(5 5 5 0 1) offset))
+       => 1)
+
+(check (pack "!SS" 1 2) => #vu8(0 1 0 2))
+
+(check (let ((bv (make-bytevector 6 #xff))
+             (offset 1))
+         (pack! "!SS" bv offset 1 2)
+         bv)
+       => #vu8(#xff 0 0 1 0 2))
+
+(check (let ((bv (make-bytevector 9 #xff)))
+         (pack! "<ucQ" bv (+ 0) 1 2)
+         bv)
+       => #vu8(1 2 0 0 0 0 0 0 0))
+
+(check (map unpack
+            '("C" "!S" "!xxC")
+            '(#vu8(1) #vu8(0 1) #vu8(42 42 1)))
+       => '(1 1 1))
+
+(check (map pack
+            '("C" "!S" "!xxC")
+            '(1 1 1))
+       => '(#vu8(1) #vu8(0 1) #vu8(0 0 1)))
 
 (check-report)

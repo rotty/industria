@@ -15,15 +15,33 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!r6rs
 
-;; Auxiliary library for (weinholt struct)
+;; Auxiliary library for (weinholt struct). Please don't use this
+;; library directly.
 
-(library (weinholt struct pack-aux (1 0 20090821))
-    (export format-size roundb)
+(library (weinholt struct pack-aux (1 0 20090825))
+    (export format-size roundb add)
     (import (rnrs))
 
-  (define (roundb x n)
-    (bitwise-and (+ x (- n 1))
-                 (- n)))
+  ;; (define (roundb x n)
+  ;;   (bitwise-and (+ x (- n 1))
+  ;;                (- n)))
+
+  (define (add augend addend)
+    (if (integer? augend)
+        (+ augend addend)
+        (with-syntax ((x augend) (y addend))
+          #'(+ x y))))
+
+  (define (roundb offset alignment)
+    (cond ((integer? offset)
+           (bitwise-and (+ offset (- alignment 1))
+                        (- alignment)))
+          ((and (integer? alignment) (= alignment 1))
+           offset)
+          (else
+           (with-syntax ((x offset))
+             #`(bitwise-and (+ x #,(- alignment 1))
+                            #,(- alignment))))))
   
   ;; Find the number of bytes the format requires.
   ;; (format-size "2SQ") => 16
