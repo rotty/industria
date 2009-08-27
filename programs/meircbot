@@ -15,11 +15,13 @@
 ;;
 ;; You should have received a copy of the GNU General Public License
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#!ikarus
+#!r6rs
 
 (import (weinholt net irc)
-        (rnrs)
-        (only (ikarus) tcp-connect printf))
+        (weinholt net tcp)
+        (only (srfi :13 strings) string-join)
+        (rnrs))
+
 
 ;;; Configuration default
 
@@ -29,19 +31,30 @@
 (define *nickname* (car *nicknames*))
 (define *realname* "The Minimum-Effort IRC bot")
 (define *username* "meircbot")
-(define *channels* '("#spencer"))
+(define *channels* '("#test"))
 (define *joined-channels* '())
+(define *isupport* (isupport-defaults))
 
 (define *server-hostname* "localhost")
 (define *server-port* "6667")
 
 ;; Incoming messages will be transcoded with utf-8 and if that fails,
 ;; fall back on latin-1.
-(define *incoming-codec* (utf-8-codec))
-(define *fallback-codec* (latin-1-codec))
 (define *outgoing-codec* (utf-8-codec))
+(define transcode-incoming
+  (let ((t1 (make-transcoder (utf-8-codec)
+                             (eol-style none)
+                             (error-handling-mode raise)))
+        (t2 (make-transcoder (latin-1-codec))))
+    (lambda (bv)
+      (guard (con
+              ((i/o-decoding-error? con)
+               (bytevector->string bv t2)))
+        (bytevector->string bv t1)))))
 
 ;;; Helpers
+
+(define (print . x) (for-each display x) (newline))
 
 (define (binary-get-line port)
   (let lp ((l '()))
@@ -60,22 +73,43 @@
              (lp (cons b l)))))))
 
 (define (its-me? nick)
-  (and nick (swe-ascii-string-ci=? nick *nickname*)))
+  (and nick (string-irc=? nick *nickname* (assq 'CASEMAPPING *isupport*))))
 
 ;;; Main program
 
 (define *server-out* #f)
 
+(define (log-msg direction prefix cmd args)
+  (display direction) (display #\space)
+  (display prefix) (display #\space)
+  (display cmd) (display #\space)
+  (write args)
+  (newline))
+
 (define (fmt cmd . args)
-  (printf "=> ~a ~s~%" cmd args)
-  (apply format-message-with-whitewash *server-out* (utf-8-codec) #f cmd args)
+  (log-msg '=> #f cmd args)
+  (apply format-message-with-whitewash *server-out* *outgoing-codec* #f cmd args)
   (flush-output-port *server-out*))
 
 (define (handle-message prefix nick-src cmd args)
-  (printf "<= ~a ~a ~s~%" prefix cmd args)
+  (log-msg '<= prefix cmd args)
   (case cmd
     ((PING)
      (fmt 'PONG (car args)))
+
+    ((PRIVMSG)
+     (when (and nick-src (= (length args) 2))
+       (cond ((its-me? (car args))
+              ;; Private message
+              (let ((msg (cadr args)))
+                (if (ctcp-message? msg)
+                    (fmt 'NOTICE nick-src "I don't support CTCP!")
+                    (fmt 'NOTICE nick-src "Whaddaya want?")))
+              #f)
+             ((exists (lambda (c) (string-ci=? c (car args)))
+                      *joined-channels*)
+              ;; Public message to a channel
+              #f))))
 
     ((433)
      ;; ERR_NICKNAMEINUSE
@@ -97,7 +131,7 @@
        (set! *joined-channels*
              (cons (car args)
                    *joined-channels*))
-       (printf "Currently joined to ~a~%" *joined-channels*)))
+       (print "Currently joined to " (string-join *joined-channels* ", "))))
 
     ((PART)
      (when (its-me? nick-src)
@@ -105,7 +139,7 @@
        (set! *joined-channels*
              (remp (lambda (x) (string-ci=? x (car args)))
                    *joined-channels*))
-       (printf "Currently joined to ~a~%" *joined-channels*)))
+       (print "Currently joined to " (string-join *joined-channels* ", "))))
 
     ((001)
      ;; RPL_WELCOME
@@ -115,36 +149,11 @@
                      (fmt 'JOIN c)))
                *channels*))
 
-    ((PRIVMSG)
-     (when (and nick-src (= (length args) 2))
-       (cond ((its-me? (car args))
-              ;; Private message
-              (let ((msg (cadr args)))
-                (cond ((and (>= (string-length msg) 2)
-                            (char=? #\x01 (string-ref msg 0))
-                            (char=? #\x01 (string-ref msg (- (string-length msg) 1))))
-                       (fmt 'PRIVMSG nick-src "I don't support CTCP!"))
-                      (else
-                       (fmt 'PRIVMSG nick-src "Whaddaya want?"))))
-              #f)
-             ((exists (lambda (c) (string-ci=? c (car args)))
-                      *joined-channels*)
-              ;; Public message to a channel
-              #f))))))
+    ((005)
+     ;; RPL_BOUNCE in the RFCs, but in practice, RPL_ISUPPORT.
+     (set! *isupport* (append (parse-isupport (cdr args))
+                              *isupport*)))))
 
-(define (transcode-message prefix cmd parameters)
-  (handle-message
-   prefix
-   (if (extended-prefix? prefix) (prefix-nick prefix) #f)
-   cmd
-   (map (lambda (x)
-          (guard (con
-                  ((i/o-decoding-error? con)
-                   (bytevector->string x (make-transcoder *fallback-codec*))))
-            (bytevector->string x (make-transcoder *incoming-codec*
-                                                   (eol-style none)
-                                                   (error-handling-mode raise)))))
-        parameters)))
 
 ;; main loop
 (let-values (((in out) (tcp-connect *server-hostname* *server-port*)))
@@ -154,10 +163,13 @@
   (let lp ()
     (let ((line (binary-get-line in)))
       (cond ((eof-object? line)
-             (display "The server hung up on me!\n"))
+             (print "The server hung up on me!"))
             (else
-             (call-with-values
-               (lambda ()
-                 (parse-message-bytevector line))
-               transcode-message)
+             (guard (exn
+                     (else
+                      (write exn) (newline)
+                      (print "The exception above was raised while parsing this line: " line)))
+               (let-values (((prefix cmd parameters) (parse-message-bytevector line)))
+                 (handle-message prefix (and (extended-prefix? prefix) (prefix-nick prefix))
+                                 cmd (map transcode-incoming parameters))))
              (lp))))))

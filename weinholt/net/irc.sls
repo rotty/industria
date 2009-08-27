@@ -18,19 +18,12 @@
 
 ;;; Version history
 
-;; (1 0 0) - Unreleased - Initial version.
+;; (1 0) - Unreleased. Initial version.
 
-;;; Versioning scheme
-
-;; The version is made of (major minor patch) sub-versions.
-
-;; The `patch' sub-version will be incremented when bug fixes have
-;; been made, that do not introduce new features or break old ones.
-
-;; The `minor' is incremented when new features are implemented.
-
-;; The `major' is incremented when old features may no longer work
-;; without changes to the code that imports this library.
+;; (2 0) - Unreleased. Replace swe-ascii-string-ci=? with
+;; string-irc=?, which uses the CASEMAPPING ISUPPORT parameter. Added
+;; string-upcase-irc, string-downcase-irc, parse-isupport,
+;; isupport-defaults and ctcp-message?.
 
 ;;; Usage etc
 
@@ -52,15 +45,22 @@
 
 ;; Should follow RFC 2812 and RFC 2813.
 
-(library (weinholt net irc (1 0 20090821))
+;; Good IRC bot netiquette: never do anything in response to a NOTICE,
+;; and send all your replies as NOTICEs. IRC bots can get into wars
+;; with each other if they send PRIVMSGs.
+
+(library (weinholt net irc (2 0 20090827))
   (export irc-format-condition? irc-parse-condition?
           parse-message parse-message-bytevector
           format-message-raw format-message-and-verify
           format-message-with-whitewash
           extended-prefix? prefix-split prefix-nick
-          swe-ascii-string-ci=?)
+          parse-isupport isupport-defaults ctcp-message?
+          string-irc=? string-upcase-irc string-downcase-irc)
   (import (rnrs)
-          (rnrs mutable-strings))
+          (only (srfi :1 lists) make-list drop-right append-map)
+          (only (srfi :13 strings) string-index string-map)
+          (weinholt text strings))
 
   (define-condition-type &irc-format &condition
     make-irc-format-condition irc-format-condition?)
@@ -84,33 +84,6 @@
 
 ;;; Helpers
 
-  (define string-index
-    (case-lambda
-      ((s c start end)
-       (let lp ((i start))
-         (cond ((= end i)
-                #f)
-               ((char=? (string-ref s i) c)
-                i)
-               (else
-                (lp (+ i 1))))))
-      ((s c start)
-       (string-index s c start (string-length s)))
-      ((s c)
-       (string-index s c 0 (string-length s)))))
-
-  (define (string-map f s)
-    (do ((ret (make-string (string-length s)))
-         (i 0 (+ i 1)))
-        ((= i (string-length s))
-         ret)
-      (string-set! ret i (f (string-ref s i)))))
-
-  (define (string-delete s charset)
-    (list->string
-     (filter (lambda (c) (not (memv c charset)))
-             (string->list s))))
-
   (define bytevector-u8-index
     (case-lambda
       ((bv c start end)
@@ -132,12 +105,9 @@
                         ret 0 (- end start))
       ret))
 
-  (define (bytevector->ascii-string bv)
-    (do ((ret (make-string (bytevector-length bv)))
-         (i 0 (+ i 1)))
-        ((= i (bytevector-length bv))
-         ret)
-      (string-set! ret i (integer->char (bytevector-u8-ref bv i)))))
+  (define (ascii->string bv)
+    (list->string (map (lambda (b) (integer->char (fxand #x7f b)))
+                       (bytevector->u8-list bv))))
 
   (define (parameter->bytevector x transcoder)
     (cond ((bytevector? x)
@@ -180,47 +150,46 @@
   (define parse-message
     (case-lambda
       ((msg remote-server)
-       (call-with-values
-           (lambda () (if (string-index msg #\: 0 1)
-                          (let ((idx (string-index msg #\space 1)))
-                            (values (substring msg 1 idx)
-                                    (+ idx 1)))
-                          (values remote-server 0)))
-         (lambda (prefix start)
-           (define (args-done args)
-             (let* ((args (reverse args))
-                    (cmd (car args)))
-               (when (> (length (cdr args)) 15)
-                 (parse-error 'parse-message
-                              "Too many parameters"
-                              prefix cmd args))
-               (values prefix
-                       (cond ((char-numeric? (string-ref cmd 0))
-                              (unless (and (= (string-length cmd) 3)
-                                           (for-all char-numeric? (string->list cmd)))
-                                (parse-error 'parse-message
-                                             "Malformed numerical command"
-                                             prefix args))
-                              (string->number cmd))
-                             (else
-                              (string->symbol cmd)))
-                       (cdr args))))
-           (let lp ((i start) (tokens '()))
-             (let ((start i))
-               (let lpc ((end i))
-                 (cond ((= end (string-length msg))
-                        (args-done (cons (substring msg start end) tokens)))
-                       ((and (char=? #\space (string-ref msg end))
-                             (< (+ 1 end) (string-length msg))
-                             (char=? #\: (string-ref msg (+ 1 end))))
-                        ;; If there's a " :" then what's behind that is the last param
-                        (args-done (cons (substring msg (+ 2 end) (string-length msg))
-                                         (cons (substring msg start end)
-                                               tokens))))
-                       ((char=? #\space (string-ref msg end))
-                        (lp (+ end 1) (cons (substring msg start end) tokens)))
-                       (else
-                        (lpc (+ end 1))))))))))
+       (let-values (((prefix start)
+                     (if (string-index msg #\: 0 1)
+                         (let ((idx (string-index msg #\space 1)))
+                           (values (substring msg 1 idx)
+                                   (+ idx 1)))
+                         (values remote-server 0))))
+         (define (args-done args)
+           (let* ((args (reverse args))
+                  (cmd (car args)))
+             (when (> (length (cdr args)) 15)
+               (parse-error 'parse-message
+                            "Too many parameters"
+                            prefix cmd args))
+             (values prefix
+                     (cond ((char-numeric? (string-ref cmd 0))
+                            (unless (and (= (string-length cmd) 3)
+                                         (for-all char-numeric? (string->list cmd)))
+                              (parse-error 'parse-message
+                                           "Malformed numerical command"
+                                           prefix args))
+                            (string->number cmd))
+                           (else
+                            (string->symbol cmd)))
+                     (cdr args))))
+         (let lp ((i start) (tokens '()))
+           (let ((start i))
+             (let lpc ((end i))
+               (cond ((= end (string-length msg))
+                      (args-done (cons (substring msg start end) tokens)))
+                     ((and (char=? #\space (string-ref msg end))
+                           (< (+ 1 end) (string-length msg))
+                           (char=? #\: (string-ref msg (+ 1 end))))
+                      ;; If there's a " :" then what's behind that is the last param
+                      (args-done (cons (substring msg (+ 2 end) (string-length msg))
+                                       (cons (substring msg start end)
+                                             tokens))))
+                     ((char=? #\space (string-ref msg end))
+                      (lp (+ end 1) (cons (substring msg start end) tokens)))
+                     (else
+                      (lpc (+ end 1)))))))))
       ((msg)
        (parse-message msg #f))))
 
@@ -236,55 +205,55 @@
   (define parse-message-bytevector
     (case-lambda
       ((msg bvstart bvend remote-server)
-       (call-with-values
-           (lambda () (if (bytevector-u8-index msg (char->integer #\:)
-                                               bvstart (min (+ bvstart 1) bvend))
-                          (let ((idx (bytevector-u8-index msg (char->integer #\space)
-                                                          (+ bvstart 1) bvend)))
-                            (values (subbytevector msg (+ bvstart 1) idx)
-                                    (+ idx 1)))
-                          (values remote-server bvstart)))
-         (lambda (prefix start)
-           (define (args-done args)
-             (let* ((args (reverse args))
-                    (cmd (bytevector->ascii-string (car args))))
-               (when (> (length (cdr args)) 15)
-                 (parse-error 'parse-message-binary
-                              "Too many parameters"
-                              prefix cmd args))
-               (values (if (bytevector? prefix) (bytevector->ascii-string prefix) prefix)
-                       (cond ((char-numeric? (string-ref cmd 0))
-                              (unless (and (= (string-length cmd) 3)
-                                           (for-all char-numeric? (string->list cmd)))
-                                (parse-error 'parse-message-binary
-                                             "Malformed numerical command"
-                                             prefix args))
-                              (string->number cmd))
-                             (else
-                              (string->symbol cmd)))
-                       (cdr args))))
-           (let lp ((i start) (tokens '()))
-             (let ((start i))
-               (let lpc ((end i))
-                 (cond ((= end bvend)
-                        (args-done (cons (subbytevector msg start end) tokens)))
-                       ((and (= (char->integer #\space) (bytevector-u8-ref msg end))
-                             (< (+ 1 end) bvend)
-                             (= (char->integer #\:) (bytevector-u8-ref msg (+ 1 end))))
-                        ;; If there's a " :" then what's behind that is the last param
-                        (args-done (cons (subbytevector msg (+ 2 end) bvend)
-                                         (cons (subbytevector msg start end)
-                                               tokens))))
-                       ((= (char->integer #\space) (bytevector-u8-ref msg end))
-                        (lp (+ end 1) (cons (subbytevector msg start end) tokens)))
-                       (else
-                        (lpc (+ end 1))))))))))
+       (let-values (((prefix start)
+                     (if (bytevector-u8-index msg (char->integer #\:)
+                                              bvstart (min (+ bvstart 1) bvend))
+                         (let ((idx (bytevector-u8-index msg (char->integer #\space)
+                                                         (+ bvstart 1) bvend)))
+                           (values (subbytevector msg (+ bvstart 1) idx)
+                                   (+ idx 1)))
+                         (values remote-server bvstart))))
+         (define (args-done args)
+           (let* ((args (reverse args))
+                  (cmd (ascii->string (car args))))
+             (when (> (length (cdr args)) 15)
+               (parse-error 'parse-message-binary
+                            "Too many parameters"
+                            prefix cmd args))
+             (values (if (bytevector? prefix) (ascii->string prefix) prefix)
+                     (cond ((char-numeric? (string-ref cmd 0))
+                            (unless (and (= (string-length cmd) 3)
+                                         (for-all char-numeric? (string->list cmd)))
+                              (parse-error 'parse-message-binary
+                                           "Malformed numerical command"
+                                           prefix args))
+                            (string->number cmd))
+                           (else
+                            (string->symbol cmd)))
+                     (cdr args))))
+         (let lp ((i start) (tokens '()))
+           (let ((start i))
+             (let lpc ((end i))
+               (cond ((= end bvend)
+                      (args-done (cons (subbytevector msg start end) tokens)))
+                     ((and (= (char->integer #\space) (bytevector-u8-ref msg end))
+                           (< (+ 1 end) bvend)
+                           (= (char->integer #\:) (bytevector-u8-ref msg (+ 1 end))))
+                      ;; If there's a " :" then what's behind that is the last param
+                      (args-done (cons (subbytevector msg (+ 2 end) bvend)
+                                       (cons (subbytevector msg start end)
+                                             tokens))))
+                     ((= (char->integer #\space) (bytevector-u8-ref msg end))
+                      (lp (+ end 1) (cons (subbytevector msg start end) tokens)))
+                     (else
+                      (lpc (+ end 1)))))))))
       ((msg bvstart bvend)
        (parse-message-bytevector msg bvstart bvend #f))
       ((msg bvstart)
        (parse-message-bytevector msg bvstart (bytevector-length msg) #f))
       ((msg)
        (parse-message-bytevector msg 0 (bytevector-length msg) #f))))
+
 
 ;;; Formatting
 
@@ -379,12 +348,9 @@
   ;; newline.
 
   (define (format-message-and-verify port codec prefix cmd . parameters)
-    (define (do-format)
-      (call-with-values open-bytevector-output-port
-        (lambda (port extract)
-          (apply format-message-raw port codec prefix cmd parameters)
-          (extract))))
-    (let ((bv (do-format))
+    (let ((bv (call-with-bytevector-output-port
+                (lambda (p)
+                  (apply format-message-raw p codec prefix cmd parameters))))
           (t (make-transcoder codec)))
       (call-with-values
           (lambda ()
@@ -437,7 +403,7 @@
                      (else
                       (lp (cdr p) (cons (car p) l))))))))
 
-;;; Routines for parsing prefixes and so on. These deal only with
+;;; Procedures for parsing prefixes and so on. These deal only with
 ;;; strings.
 
   (define (extended-prefix? p)
@@ -460,49 +426,158 @@
               (substring prefix (+ 1 at) (string-length prefix)))))
 
   (define (prefix-nick prefix)
-    (call-with-values (lambda ()
-                        (prefix-split prefix))
-      (lambda (nick user host)
-        nick)))
+    (let-values (((nick user host) (prefix-split prefix)))
+      nick))
 
-  ;; ISO646-SE2 is Swedish ASCII and the original IRC server uses this
-  ;; encoding for nicknames. Many networks still do. Nicknames are
-  ;; case insensitive, so the character "[" is the same as "{", and so
-  ;; on. The "@" can't appear in nicks though, and in RFC2813 section
-  ;; 3.2 that character (and "`") are not listed as equivalent.
-  (define (swe-ascii-char-ci=? x y)
-    (case x
-      ((#\}) (or (char=? y #\}) (char=? y #\])))
-      ((#\{) (or (char=? y #\{) (char=? y #\[)))
-      ((#\|) (or (char=? y #\|) (char=? y #\\)))
-      ;; ((#\`) (or (char=? y #\`) (char=? y #\@)))
-      ((#\~) (or (char=? y #\~) (char=? y #\^)))
+  (define (char-ascii-upcase c)
+    (let ((i (char->integer c)))
+      (if (<= 97 i 122)
+          (integer->char (+ (- i 97) 65))
+          c)))
 
-      ((#\]) (or (char=? y #\]) (char=? y #\})))
-      ((#\[) (or (char=? y #\[) (char=? y #\{)))
-      ((#\\) (or (char=? y #\\) (char=? y #\|)))
-      ;; ((#\@) (or (char=? y #\@) (char=? y #\`)))
-      ((#\^) (or (char=? y #\^) (char=? y #\~)))
-      (else (char-ci=? x y))))
+  (define (char-rfc1459-upcase c)
+    ;; ISO646-SE2, Swedish ASCII, except ` and @ are left alone.
+    (let ((i (char->integer c)))
+      (if (<= 97 i 126)
+          (integer->char (+ (- i 97) 65))
+          c)))
 
-  ;; You should take care that the network you're on actually uses
-  ;; ISO646-SE2 before you use this.
-  (define (swe-ascii-string-ci=? x y)
-    (and (= (string-length x) (string-length y))
-         (let lp ((i 0))
-           (cond ((= i (string-length x))
-                  #t)
-                 ((not (swe-ascii-char-ci=? (string-ref x i)
-                                            (string-ref y i)))
-                  #f)
-                 (else
-                  (lp (+ i 1)))))))
+  (define (char-strict-rfc1459-upcase c)
+    (let ((i (char->integer c)))
+      (if (<= 97 i 125)
+          (integer->char (+ (- i 97) 65))
+          c)))
+
+  (define (string-upcase-irc str mapping)
+    (case mapping
+      ((rfc1459)
+       (string-map char-rfc1459-upcase str))
+      ((ascii)
+       (string-map char-ascii-upcase str))
+      ((strict-rfc1459)
+       (string-map char-strict-rfc1459-upcase str))
+      (else
+       (string-upcase str))))
+
+  (define (char-ascii-downcase c)
+    (let ((i (char->integer c)))
+      (if (<= 65 i 90)
+          (integer->char (+ (- i 65) 97))
+          c)))
+
+  (define (char-rfc1459-downcase c)
+    (let ((i (char->integer c)))
+      (if (<= 65 i 94)
+          (integer->char (+ (- i 65) 97))
+          c)))
+
+  (define (char-strict-rfc1459-downcase c)
+    (let ((i (char->integer c)))
+      (if (<= 65 i 93)
+          (integer->char (+ (- i 65) 97))
+          c)))
+
+  (define (string-downcase-irc str mapping)
+    (case mapping
+      ((rfc1459)
+       (string-map char-rfc1459-downcase str))
+      ((ascii)
+       (string-map char-ascii-downcase str))
+      ((strict-rfc1459)
+       (string-map char-strict-rfc1459-downcase str))
+      (else
+       (string-downcase str))))
+
+  (define string-irc=?
+    (case-lambda
+      ((x y mapping)
+       (string=? (string-downcase-irc x mapping)
+                 (string-downcase-irc y mapping)))
+      ((x y)
+       (string-irc=? x y 'rfc1459))))
+
+  ;; http://www.irc.org/tech_docs/005.html
+
+  ;; (parse-isupport '("CHANLIMIT=#&:100" "CHANNELLEN=50" "EXCEPTS=e" "INVEX=I"
+  ;;                   "CHANMODES=eIb,k,l,imnpst" "KNOCK" "AWAYLEN=160" "ELIST=CMNTU"
+  ;;                   "SAFELIST" "are supported by this server"))
+  ;; =>
+  ;; '((CHANLIMIT . ((#\# . 100) (#\& . 100))) (CHANNELLEN . 50)
+  ;;   (EXCEPTS . #\e) (INVEX . #\I)
+  ;;   (CHANMODES . ("eIb" "k" "l" "imnpst")) (KNOCK . #t)
+  ;;   (AWAYLEN . 160) (ELIST . (#\C #\M #\N #\T #\U))
+  ;;   (SAFELIST . #t))
+
+  ;; (parse-isupport '("CALLERID" "CASEMAPPING=rfc1459" "DEAF=D" "KICKLEN=160" "MODES=4"
+  ;;                   "NICKLEN=15" "PREFIX=(ohv)@%+" "STATUSMSG=@%+" "TOPICLEN=350"
+  ;;                   "NETWORK=foo" "MAXLIST=beI:200" "MAXTARGETS=4" "CHANTYPES=#&"
+  ;;                   "are supported by this server"))
+  ;; =>
+  ;; '((CALLERID . #t) (CASEMAPPING . rfc1459) (DEAF . #\D)
+  ;;   (KICKLEN . 160) (MODES . 4) (NICKLEN . 15)
+  ;;   (PREFIX . ((#\o . #\@) (#\h . #\%) (#\v . #\+)))
+  ;;   (STATUSMSG . (#\@ #\% #\+)) (TOPICLEN . 350) (NETWORK . "foo")
+  ;;   (MAXLIST . ((#\b . 200) (#\e . 200) (#\I . 200)))
+  ;;   (MAXTARGETS . 4) (CHANTYPES . (#\# #\&)))
+  (define (parse-isupport args)
+    (define (mode-ref str def)
+      (if (= (string-length str) 1) (string-ref str 0) def))
+    (map (lambda (pv)
+           (let ((pv (string-split pv #\= 1)))
+             (let ((parameter (string->symbol (car pv))))
+               (cons parameter
+                     (case parameter
+                       ((CASEMAPPING) (string->symbol (cadr pv)))
+                       ((MODES
+                         MAXCHANNELS NICKLEN MAXBANS TOPICLEN
+                         KICKLEN CHANNELLEN SILENCE AWAYLEN
+                         MAXTARGETS WATCH)
+                        (string->number (cadr pv)))
+                       ((INVEX) (mode-ref (cadr pv) #\I))
+                       ((EXCEPTS) (mode-ref (cadr pv) #\e))
+                       ((DEAF) (mode-ref (cadr pv) #\D))
+                       ((CHANMODES) (string-split (cadr pv) #\,))
+                       ((CHANTYPES ELIST STATUSMSG) (string->list (cadr pv)))
+                       ((CHANLIMIT MAXLIST)
+                        (append-map (lambda (x)
+                                      (let ((chars:number (string-split x #\: 1)))
+                                        (map cons* (string->list (car chars:number))
+                                             (make-list (string-length (car chars:number))
+                                                        (string->number
+                                                         (cadr chars:number) 10)))))
+                                    (string-split (cadr pv) #\,)))
+                       ((PREFIX)
+                        (let ((m/s (string-split (cadr pv) #\) 1 1)))
+                          (map cons* (string->list (car m/s))
+                               (string->list (cadr m/s)))))
+                       (else
+                        (if (null? (cdr pv)) #t (cadr pv))))))))
+         (drop-right args 1)))
+
+  ;; http://www.irc.org/tech_docs/draft-brocklesby-irc-isupport-03.txt
+  (define (isupport-defaults)
+    (parse-isupport
+     '("CASEMAPPING=rfc1459" "CHANNELLEN=200" "CHANTYPES=#&"
+       "MODES=3" "NICKLEN=9" "PREFIX=(ov)@+" "are the defaults")))
 
   ;; TODO: wildcard expression matcher
 
   ;; TODO: assistance with conforming to the maximum message length
 
+;;; Client-To-Client Protocol
+
+  ;; Btw, nobody seems to support the full feature set of CTCP. A
+  ;; common limitation is to only permit one CTCP per message.
+
+  ;; http://www.irchelp.org/irchelp/rfc/ctcpspec.html
+
+  (define (ctcp-message? msg)
+    (and (>= (string-length msg) 2)
+         (char=? #\x01 (string-ref msg 0))
+         (char=? #\x01 (string-ref msg (- (string-length msg) 1)))))
+
+  ;; TODO: CTCP parsing and formatting
+
+
+
   )
-
-
-
