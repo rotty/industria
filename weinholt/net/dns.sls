@@ -43,7 +43,7 @@
 
 ;; RFC 5452 DNS Resilience against Forged Answers
 
-(library (weinholt net dns (0 0 20090816))
+(library (weinholt net dns (0 0 20090827))
   (export print-dns-message
           make-normal-query
           put-dns-message
@@ -92,6 +92,7 @@
           (srfi :27 random-bits)
           (weinholt struct pack)
           (weinholt text base64)
+          (weinholt text strings)
           (only (ikarus) udp-connect
                 tcp-connect))
 
@@ -307,24 +308,6 @@
     ;; type is unknown, rdata is a bytevector and not a list. A and
     ;; AAAA records are lists with a single bytevector.
     (fields name type class ttl rdata))
-
-  (define string-split
-    (case-lambda
-      ((str c max start end)
-       (cond ((zero? max)
-              (list (substring str start end)))
-             ((string-index str c start end) =>
-              (lambda (i)
-                (cons (substring str start i)
-                      (string-split str c (- max 1) (+ i 1) end))))
-             (else
-              (list (substring str start end)))))
-      ((str c max start)
-       (string-split str c max start (string-length str)))
-      ((str c max)
-       (string-split str c max 0 (string-length str)))
-      ((str c)
-       (string-split str c -1 0 (string-length str)))))
 
   (define (name->labels name)
     ;; TODO: punycode. TODO: labels can actually contain dots, escaped
