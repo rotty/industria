@@ -1,0 +1,106 @@
+#!/usr/bin/env scheme-script
+;; -*- mode: scheme; coding: utf-8 -*-
+;; Print the checksum/hash of a file
+;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;;
+;; This program is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+;;
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+;;
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#!r6rs
+
+(import (weinholt crypto sha-1)
+        (weinholt crypto md5)
+        (weinholt crypto crc)
+        (only (srfi :13 strings) string-join string-pad)
+        (srfi :26 cut)
+        (rnrs))
+
+(define (checksum-port/hash make-state update! finish! ->string)
+  (lambda (port)
+    (let ((buflen #x100000))
+      (let ((state (make-state))
+            (data (make-bytevector buflen)))
+        (let lp ()
+          (let ((bytes-read (get-bytevector-n! port data 0 buflen)))
+            (unless (eof-object? bytes-read)
+              (update! state data 0 bytes-read)
+              (lp))))
+        (finish! state)
+        (->string state)))))
+
+(define (checksum-port/crc name init finish update self-test width)
+  (when (eq? 'failure (self-test))
+    (display name)
+    (display " self test failed!\n" (current-error-port))
+    (exit 1))
+  (lambda (port)
+    (let ((buflen #x100000))
+      (let ((data (make-bytevector buflen)))
+        (let lp ((state (init)))
+          (let ((bytes-read (get-bytevector-n! port data 0 buflen)))
+            (if (eof-object? bytes-read)
+                (string-pad (number->string (finish state) 16)
+                            (/ (width) 4) #\0)
+                (lp (update state data 0 bytes-read)))))))))
+
+(define algorithms
+  (let-syntax ((import-crc
+                (lambda (x)
+                  (define (symcat name suffix)
+                    (datum->syntax name (string->symbol (string-append
+                                                         (symbol->string (syntax->datum name))
+                                                         suffix))))
+                  (syntax-case x ()
+                    ((_ name) #`(let ()
+                                  (define-crc name)
+                                  (cons (symbol->string 'name)
+                                        (lambda ()
+                                          (checksum-port/crc 'name
+                                                             #,(symcat #'name "-init")
+                                                             #,(symcat #'name "-finish")
+                                                             #,(symcat #'name "-update")
+                                                             #,(symcat #'name "-self-test")
+                                                             #,(symcat #'name "-width"))))))))))
+    `(("sha-1" . ,(lambda () (checksum-port/hash make-sha-1 sha-1-update! sha-1-finish! sha-1->string)))
+      ("md5" . ,(lambda () (checksum-port/hash make-md5 md5-update! md5-finish! md5->string)))
+      ,(import-crc crc-32)
+      ,(import-crc crc-16)
+      ,(import-crc crc-16/ccitt)
+      ,(import-crc crc-32c)
+      ,(import-crc crc-24)
+      ,(import-crc crc-64))))
+
+(unless (> (length (command-line)) 1)
+  (display (string-append
+            "Usage: checksum.sps algorithm filename ...\n\
+\n\
+The algorithm can be one of: "
+            (string-join (map car algorithms) ", ")
+            "\n")
+           (current-error-port))
+  (exit 1))
+
+(let ((csum (cond ((assp (cut string-ci=? <> (cadr (command-line)))
+                         algorithms)
+                   => (lambda (a) ((cdr a))))
+                  (else
+                   (display "No such algorithm has been defined: "
+                            (current-error-port))
+                   (display (cadr (command-line)) (current-error-port))
+                   (newline (current-error-port))
+                   (exit 1)))))
+  (do ((files (cddr (command-line)) (cdr files)))
+      ((null? files))
+    (display (call-with-port (open-file-input-port (car files)) csum))
+    (display "  ")
+    (display (caddr (command-line)))
+    (newline)))

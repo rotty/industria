@@ -68,11 +68,10 @@ See the security note below.
 ** (weinholt disassembler x86)
 Disassembler for the Intel x86 architecture. Supports most modern
 instructions encodings as of 2008, including the VEX prefix used by
-Intel AVX and the DREX encoding used by AMD SSE5. Supports 16-bit,
-32-bit and 64-bit modes. The API consists of `get-instruction', which
-reads the next instruction on a port using the given bit-mode and
-returns the instruction as a list. See the source code for
-documentation.
+Intel AVX. Supports 16-bit, 32-bit and 64-bit modes. The API consists
+of `get-instruction', which reads the next instruction on a port using
+the given bit-mode and returns the instruction as a list. See the
+source code for documentation.
 
 ** (weinholt disassembler x86-opcodes)
 An opcode table for the Intel x86 that includes all SSE instructions
@@ -107,6 +106,11 @@ The programs/ directory contains small utilities that use the
 libraries. These scripts are implemented in the way recommended by
 R6RS non-normative appendix D.
 
+** checksum
+Compute the hash or CRC of a file. Give it an algorithm and filenames
+and off it goes. It also demonstrates the superior slowness of the
+hashing libraries.
+
 ** fcdisasm
 The Full-Color Disassembler, which disassembles x86 code and colors
 the bytes in the hexdump. This makes it easy to see how many bytes all
@@ -117,11 +121,6 @@ The Minimum-Effort IRC bot. The script contains the configuration. It
 doesn't do anything other than joining channels and being rude in
 private messages. Shows how the (weinholt net irc) library can be
 used. It requires tcp-connect and uses printf from (ikarus).
-
-** sha1sum
-Compute the SHA-1 hash function of a file. Give it a filename and off
-it goes. It also demonstrates the superior slowness of this SHA-1
-library, as compared with the stock sha1sum program.
 
 ** x86-demo
 A demonstration of the (weinholt assembler x86) library. The program

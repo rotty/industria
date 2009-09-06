@@ -37,6 +37,9 @@
 (define-crc crc-24)
 (check (crc-24-self-test) => 'success)
 
+(define-crc crc-64)
+(check (crc-64-self-test) => 'success)
+
 ;; Tests the other procedures
 
 (check (crc-32c-finish

@@ -38,6 +38,8 @@
 ;;     returns a new state which includes the CRC on the given bytes
 ;; (crc-32-finish state)
 ;;     returns the final CRC
+;; (crc-32-width)
+;;     returns the bit-width of the CRC, e.g. 32 for CRC-32
 ;; (crc-32-self-test)
 ;;     returns 'sucess, 'failure, or 'no-self-test
 
@@ -80,7 +82,10 @@
 ;; (1 0 20090816) - Initial version. Includes crc-32, crc-16,
 ;; crc-16/ccitt, crc-32c, and crc-24.
 
-(library (weinholt crypto crc (1 0 20090816))
+;; (1 0 20090906) - Added crc-64 and the -width procedure. The -update
+;; procedure uses fixnums if (> (fixnum-width) (crc-width)).
+
+(library (weinholt crypto crc (1 1 20090906))
   (export define-crc)
   (import (rnrs)
           (for (only (srfi :1 lists) iota) expand))
@@ -134,12 +139,14 @@
             #'(define-crc name 16 #x1021 #xffff #f #f 0 #x29B1))
            ((crc-32c)
             ;; CRC-32C specified in e.g. RFC4960 or RFC3385. Used by SCTP
-            ;; and iSCSI. Find more errors than CRC-32.
+            ;; and iSCSI. Finds more errors than CRC-32.
             #'(define-crc name 32 #x1EDC6F41 #xFFFFFFFF #t #t #xFFFFFFFF #xE3069283))
            ;; OpenPGP, see RFC2440.
            ((crc-24)
             #'(define-crc name (24 23 18 17 14 11 10 7 6 5 4 3 1 0)
                           #xB704CE #f #f 0 #x21CF02))
+           ((crc-64)
+            #'(define-crc name (64 4 3 1 0) 0 #t #t 0 #x46A5A9388A5BEFFE))
            (else
             (syntax-violation #f "this CRC is not pre-defined" #'name))))
 
@@ -147,7 +154,8 @@
          (with-syntax ((polynomial (decode-coefficients (syntax->datum #'(coeffs ...)))))
            #'(define-crc name width polynomial . rest)))
         ((_ name width polynomial init ref-in ref-out xor-out check)
-         (and (identifier? #'name) (>= (syntax->datum #'width) 8))
+         (and (identifier? #'name) (>= (syntax->datum #'width) 8)
+              (zero? (mod (syntax->datum #'width) 8)))
          ;; TODO: test different widths. Sub-byte widths need a
          ;; different API.
          (let* ((width* (syntax->datum #'width))
@@ -155,15 +163,19 @@
                 (init* (syntax->datum #'init))
                 (ref-in* (syntax->datum #'ref-in))
                 (ref-out* (syntax->datum #'ref-out)))
-           (with-syntax ((mask (- (bitwise-arithmetic-shift-left 1 width*) 1))
-                         (init (if ref-in* (bitwise-reverse-bit-field init* 0 width*) init*))
+           (with-syntax ((mask (- (bitwise-arithmetic-shift-left 1 (- width* 8)) 1))
+                         (init (if ref-in*
+                                   (bitwise-reverse-bit-field init* 0 width*)
+                                   init*))
                          (table (list->vector
-                                 (map (lambda (i) (calc-table i width* ref-in* polynomial*))
+                                 (map (lambda (i)
+                                        (calc-table i width* ref-in* polynomial*))
                                       (iota 256))))
                          (crc-init (symcat #'name "-init"))
                          (crc-finish (symcat #'name "-finish"))
                          (crc-update (symcat #'name "-update"))
-                         (crc-self-test (symcat #'name "-self-test")))
+                         (crc-self-test (symcat #'name "-self-test"))
+                         (crc-width (symcat #'name "-width")))
              #`(begin
                  (define (name bv)
                    (crc-finish (crc-update (crc-init) bv)))
@@ -174,6 +186,7 @@
                        (if (= (name (string->utf8 "123456789")) check)
                            'success 'failure)
                        'no-self-test))
+                 (define (crc-width) width)
                  (define t 'table)
                  (define crc-update
                    (case-lambda
@@ -182,22 +195,40 @@
                      ((r* bv start)
                       (crc-update r* bv start (bytevector-length bv)))
                      ((r* bv start end)
-                      (do ((i start (+ i 1))
-                           (r r*
-                              ;; TODO: implement the other ref-in ref-out combinations?
-                              #,(cond ((and ref-in* ref-out*)
-                                       ;; TODO: fixnums
-                                       #'(bitwise-xor (bitwise-arithmetic-shift-right r 8)
-                                                      (vector-ref
-                                                       t (bitwise-and (bitwise-xor r (bytevector-u8-ref bv i))
-                                                                      #xff))))
-                                      ((and (not ref-in*) (not ref-out*))
-                                       #'(bitwise-xor (bitwise-and mask (bitwise-arithmetic-shift-left r 8))
-                                                      (vector-ref
-                                                       t (bitwise-xor
-                                                          (bytevector-u8-ref bv i)
-                                                          (bitwise-and
-                                                           (bitwise-arithmetic-shift-right r (- width 8))
-                                                           #xff)))))
-                                      (else (syntax-violation #f "unimplemented reflection" x)))))
-                          ((= i end) r)))))))))))))
+                      (if (> (fixnum-width) width)
+                          (do ((i start (+ i 1))
+                               (r r*
+                                  ;; TODO: implement the other ref-in ref-out combinations?
+                                  #,(cond ((and ref-in* ref-out*)
+                                           #'(fxxor (fxarithmetic-shift-right r 8)
+                                                    (vector-ref
+                                                     t (fxxor (fxand #xff r)
+                                                              (bytevector-u8-ref bv i)))))
+                                          ((and (not ref-in*) (not ref-out*))
+                                           #'(fxxor (fxarithmetic-shift-left (fxand mask r) 8)
+                                                    (vector-ref
+                                                     t (fxxor
+                                                        (bytevector-u8-ref bv i)
+                                                        (fxand
+                                                         (fxarithmetic-shift-right r (- width 8))
+                                                         #xff)))))
+                                          (else (syntax-violation #f "unimplemented reflection" x)))))
+                              ((= i end) r))
+                          (do ((i start (+ i 1))
+                               (r r*
+                                  ;; TODO: implement the other ref-in ref-out combinations?
+                                  #,(cond ((and ref-in* ref-out*)
+                                           #'(bitwise-xor (bitwise-arithmetic-shift-right r 8)
+                                                          (vector-ref
+                                                           t (bitwise-xor (bitwise-and r #xff)
+                                                                          (bytevector-u8-ref bv i)))))
+                                          ((and (not ref-in*) (not ref-out*))
+                                           #'(bitwise-xor (bitwise-arithmetic-shift-left (bitwise-and mask r) 8)
+                                                          (vector-ref
+                                                           t (bitwise-xor
+                                                              (bytevector-u8-ref bv i)
+                                                              (bitwise-and
+                                                               (bitwise-arithmetic-shift-right r (- width 8))
+                                                               #xff)))))
+                                          (else (syntax-violation #f "unimplemented reflection" x)))))
+                              ((= i end) r))))))))))))))
