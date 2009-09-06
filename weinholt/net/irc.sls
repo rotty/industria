@@ -43,13 +43,13 @@
 ;; want to transmit maximum size messages, you must take the prefix
 ;; into consideration.
 
-;; Should follow RFC 2812 and RFC 2813.
+;; Should follow RFC 2810-2813.
 
 ;; Good IRC bot netiquette: never do anything in response to a NOTICE,
 ;; and send all your replies as NOTICEs. IRC bots can get into wars
 ;; with each other if they send PRIVMSGs.
 
-(library (weinholt net irc (2 0 20090827))
+(library (weinholt net irc (2 0 20090906))
   (export irc-format-condition? irc-parse-condition?
           parse-message parse-message-bytevector
           format-message-raw format-message-and-verify
@@ -353,14 +353,14 @@
                   (apply format-message-raw p codec prefix cmd parameters))))
           (t (make-transcoder codec)))
       (call-with-values
-          (lambda ()
-            (guard (con
-                    ((irc-parse-condition? con)
-                     (format-error 'format-message-and-verify
-                                   (condition-message con)
-                                   prefix cmd parameters)))
-               (parse-message-bytevector bv 0 (min (bytevector-u8-index bv (char->integer #\return))
-                                                   (bytevector-u8-index bv (char->integer #\linefeed))))))
+        (lambda ()
+          (guard (con
+                  ((irc-parse-condition? con)
+                   (format-error 'format-message-and-verify
+                                 (condition-message con)
+                                 prefix cmd parameters)))
+            (parse-message-bytevector bv 0 (min (bytevector-u8-index bv (char->integer #\return))
+                                                (bytevector-u8-index bv (char->integer #\linefeed))))))
         (lambda (prefix* cmd* parameters*)
           (let ((parameters (map (lambda (x) (parameter->bytevector x t)) parameters)))
             (if (equal? (list prefix* cmd* parameters*)
@@ -520,49 +520,65 @@
   ;;   (MAXLIST . ((#\b . 200) (#\e . 200) (#\I . 200)))
   ;;   (MAXTARGETS . 4) (CHANTYPES . (#\# #\&)))
   (define (parse-isupport args)
-    (define (mode-ref str def)
-      (if (= (string-length str) 1) (string-ref str 0) def))
-    (map (lambda (pv)
-           (let ((pv (string-split pv #\= 1)))
-             (let ((parameter (string->symbol (car pv))))
-               (cons parameter
-                     (case parameter
-                       ((CASEMAPPING) (string->symbol (cadr pv)))
-                       ((MODES
-                         MAXCHANNELS NICKLEN MAXBANS TOPICLEN
-                         KICKLEN CHANNELLEN SILENCE AWAYLEN
-                         MAXTARGETS WATCH)
-                        (string->number (cadr pv)))
-                       ((INVEX) (mode-ref (cadr pv) #\I))
-                       ((EXCEPTS) (mode-ref (cadr pv) #\e))
-                       ((DEAF) (mode-ref (cadr pv) #\D))
-                       ((CHANMODES) (string-split (cadr pv) #\,))
-                       ((CHANTYPES ELIST STATUSMSG) (string->list (cadr pv)))
-                       ((CHANLIMIT MAXLIST)
-                        (append-map (lambda (x)
-                                      (let ((chars:number (string-split x #\: 1)))
-                                        (map cons* (string->list (car chars:number))
-                                             (make-list (string-length (car chars:number))
-                                                        (string->number
-                                                         (cadr chars:number) 10)))))
-                                    (string-split (cadr pv) #\,)))
-                       ((PREFIX)
-                        (let ((m/s (string-split (cadr pv) #\) 1 1)))
-                          (map cons* (string->list (car m/s))
-                               (string->list (cadr m/s)))))
-                       (else
-                        (if (null? (cdr pv)) #t (cadr pv))))))))
-         (drop-right args 1)))
+    (define (mode-ref arg def)
+      (if (null? (cdr arg)) def (string-ref (cadr arg) 0)))
+    (define (parse pv)
+      (let ((pv (string-split pv #\= 1)))
+        (let ((parameter (string->symbol (car pv))))
+          (cons parameter
+                (case parameter
+                  ((CASEMAPPING) (string->symbol (cadr pv)))
+                  ((MODES
+                    MAXCHANNELS NICKLEN MAXBANS TOPICLEN
+                    KICKLEN CHANNELLEN SILENCE AWAYLEN
+                    MAXTARGETS WATCH
+                    MONITOR)            ;ratbox
+                   (if (null? (cdr pv)) +inf.0 (string->number (cadr pv))))
+                  ((INVEX) (mode-ref pv #\I))
+                  ((EXCEPTS) (mode-ref pv #\e))
+                  ((DEAF) (mode-ref pv #\D))
+                  ((CALLERID) (mode-ref pv #\g))
+                  ((CHANMODES)
+                   (append-map (lambda (modes type)
+                                 (map cons* (string->list modes)
+                                      (make-list (string-length modes) type)))
+                               (string-split (cadr pv) #\,)
+                               '(address ;takes a nick or address
+                                 always  ;always has a parameter
+                                 only   ;only has a parameter when set
+                                 never))) ;never has a parameter
+                  ((CHANTYPES ELIST STATUSMSG) (string->list (cadr pv)))
+                  ((CHANLIMIT MAXLIST)
+                   (append-map (lambda (x)
+                                 (let ((chars:number (string-split x #\: 1)))
+                                   (map cons* (string->list (car chars:number))
+                                        (make-list (string-length
+                                                    (car chars:number))
+                                                   (string->number
+                                                    (cadr chars:number) 10)))))
+                               (string-split (cadr pv) #\,)))
+                  ((PREFIX)
+                   (let ((m/s (string-split (cadr pv) #\) 1 1)))
+                     (map cons* (string->list (car m/s))
+                          (string->list (cadr m/s)))))
+                  (else
+                   ;; Don't rely on the format of these ones
+                   (if (null? (cdr pv)) #t (cadr pv))))))))
+    (map parse (drop-right args 1)))
 
   ;; http://www.irc.org/tech_docs/draft-brocklesby-irc-isupport-03.txt
   (define (isupport-defaults)
     (parse-isupport
      '("CASEMAPPING=rfc1459" "CHANNELLEN=200" "CHANTYPES=#&"
-       "MODES=3" "NICKLEN=9" "PREFIX=(ov)@+" "are the defaults")))
+       "MODES=3" "NICKLEN=9" "PREFIX=(ov)@+"
+       "CHANMODES=beIqd,k,lfJ,imnpst"   ;nicked from irssi
+       "are the defaults")))
 
   ;; TODO: wildcard expression matcher
 
   ;; TODO: assistance with conforming to the maximum message length
+
+  ;; TODO: parse channel modes according to CHANMODES and PREFIX
 
 ;;; Client-To-Client Protocol
 

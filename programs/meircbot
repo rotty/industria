@@ -19,7 +19,9 @@
 
 (import (weinholt net irc)
         (weinholt net tcp)
+        (xitomatl AS-match)
         (only (srfi :13 strings) string-join)
+        (srfi :26 cut)
         (rnrs))
 
 
@@ -72,8 +74,24 @@
             (else
              (lp (cons b l)))))))
 
-(define (its-me? nick)
-  (and nick (string-irc=? nick *nickname* (assq 'CASEMAPPING *isupport*))))
+(define (address=? x y)
+  (string-irc=? x y (assq 'CASEMAPPING *isupport*)))
+
+(define (its-me? prefix)
+  (and (string? prefix)
+       (address=? (if (extended-prefix? prefix)
+                      (prefix-nick prefix)
+                      prefix)
+                  *nickname*)))
+
+(define (find-channel channel)
+  (cond ((memp (lambda (c)
+                 (if (pair? c)
+                     (address=? channel (car c))
+                     (address=? channel c)))
+               *channels*)
+         => car)
+        (else #f)))
 
 ;;; Main program
 
@@ -91,68 +109,79 @@
   (apply format-message-with-whitewash *server-out* *outgoing-codec* #f cmd args)
   (flush-output-port *server-out*))
 
-(define (handle-message prefix nick-src cmd args)
-  (log-msg '<= prefix cmd args)
-  (case cmd
-    ((PING)
-     (fmt 'PONG (car args)))
+(define (join-channel c)
+  (if (pair? c)
+      (fmt 'JOIN (car c) (cdr c))
+      (fmt 'JOIN c)))
 
-    ((PRIVMSG)
-     (when (and nick-src (= (length args) 2))
-       (cond ((its-me? (car args))
-              ;; Private message
-              (let ((msg (cadr args)))
-                (if (ctcp-message? msg)
-                    (fmt 'NOTICE nick-src "I don't support CTCP!")
-                    (fmt 'NOTICE nick-src "Whaddaya want?")))
-              #f)
-             ((exists (lambda (c) (string-ci=? c (car args)))
-                      *joined-channels*)
-              ;; Public message to a channel
-              #f))))
+(define handle-message
+  (match-lambda
+    ((_ 'PING server)
+     (fmt 'PONG server))
 
-    ((433)
+    ((src 'PRIVMSG (? its-me? tgt) (? ctcp-message? msg))
+     ;; Private CTCP message
+     (fmt 'NOTICE (prefix-nick src) "I don't support CTCP!"))
+
+    ((src 'PRIVMSG (? its-me? tgt) msg)
+     ;; Private message
+     (fmt 'NOTICE (prefix-nick src) "Whaddaya want?"))
+
+    ((_ 433 . _)
      ;; ERR_NICKNAMEINUSE
      (set! *nicknames* (cdr *nicknames*))
      (when (null? *nicknames*)
-       (display "All nicknames are taken, giving up!\n")
+       (print "All nicknames are taken, giving up!")
        (exit 1))
      (set! *nickname* (car *nicknames*))
      (fmt 'NICK *nickname*))
 
-    ((NICK)
-     (when (its-me? nick-src)
-       ;; The server changed our nick
-       (set! *nickname* (car args))))
+    (((? its-me? src) 'NICK new)
+     ;; The server changed our nick
+     (set! *nickname* new))
 
-    ((JOIN)
-     (when (its-me? nick-src)
-       ;; The server joined us to a channel
-       (set! *joined-channels*
-             (cons (car args)
-                   *joined-channels*))
-       (print "Currently joined to " (string-join *joined-channels* ", "))))
+    (((? its-me? src) 'JOIN channel)
+     ;; The server joined us to a channel
+     (set! *joined-channels*
+           (cons channel *joined-channels*))
+     (fmt 'MODE channel)                ;ask for the modes
+     (print "Currently joined to " (string-join *joined-channels* ", ")))
 
-    ((PART)
-     (when (its-me? nick-src)
-       ;; The server parted us from a channel
-       (set! *joined-channels*
-             (remp (lambda (x) (string-ci=? x (car args)))
-                   *joined-channels*))
-       (print "Currently joined to " (string-join *joined-channels* ", "))))
+    (((? its-me? src) 'PART channel)
+     ;; The server parted us from a channel
+     (set! *joined-channels*
+           (remp (cut address=? <> channel) *joined-channels*))
+     (print "Currently joined to " (string-join *joined-channels* ", ")))
 
-    ((001)
+    ((src 'KICK channel (? its-me? who) reason)
+     (set! *joined-channels*
+           (remp (cut address=? <> channel) *joined-channels*))
+     (print "Currently joined to " (string-join *joined-channels* ", ")))
+
+    ((_ 001 tgt msg)
      ;; RPL_WELCOME
-     (for-each (lambda (c)
-                 (if (pair? c)
-                     (fmt 'JOIN (car c) (cdr c))
-                     (fmt 'JOIN c)))
-               *channels*))
+     (for-each join-channel *channels*))
 
-    ((005)
+    ((_ 005 tgt . isupport)
      ;; RPL_BOUNCE in the RFCs, but in practice, RPL_ISUPPORT.
-     (set! *isupport* (append (parse-isupport (cdr args))
-                              *isupport*)))))
+     (set! *isupport* (append (parse-isupport isupport)
+                              *isupport*)))
+
+    ((_ 'INVITE (? its-me? me) channel)
+     (cond ((find-channel channel) =>
+            (lambda (c)
+              (print "Honoring invite to " channel)
+              (join-channel c)))
+           (else
+            (print "Ignoring invite to " channel))))
+
+    ((_ 473 (? its-me? me) channel reason)
+     ;; ERR_INVITEONLYCHAN
+     (when (assq 'KNOCK *isupport*)
+       (cond ((find-channel channel) =>
+              (lambda (c) (fmt 'KNOCK channel))))))
+
+    (_ #f)))
 
 
 ;; main loop
@@ -168,8 +197,10 @@
              (guard (exn
                      (else
                       (write exn) (newline)
-                      (print "The exception above was raised while parsing this line: " line)))
-               (let-values (((prefix cmd parameters) (parse-message-bytevector line)))
-                 (handle-message prefix (and (extended-prefix? prefix) (prefix-nick prefix))
-                                 cmd (map transcode-incoming parameters))))
+                      (print "The exception above was raised while parsing this line: "
+                             line)))
+               (let*-values (((prefix cmd parameters) (parse-message-bytevector line))
+                             ((args) (map transcode-incoming parameters)))
+                 (log-msg '<= prefix cmd args)
+                 (handle-message (cons prefix (cons cmd args)))))
              (lp))))))
