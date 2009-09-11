@@ -31,6 +31,13 @@ complete and might generate bad code. It does not yet do any jump size
 optimization or produce relocatable object files. But it can be used
 to generate Multiboot images and programs/x86-demo shows this.
 
+** (weinholt crypto aes)
+This is an implementation of the Rijndael cipher as parameterized by
+the Advanced Encryption Standard (AES), FIPS 197. It uses clever
+lookup tables and is probably as fast as any R6RS implementation of
+AES can be (without using an FFI). See the library source for more
+information.
+
 ** (weinholt crypto crc)
 This library exports the define-crc syntax which generates tables and
 procedures for calculating CRCs. Some pre-defined CRCs are available,
