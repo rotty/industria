@@ -39,7 +39,9 @@
 
 ;; (clear-aes-schedule! key-schedule)
 ;;     Clears the AES key schedule value so that it no longer contains
-;;     cryptographic material.
+;;     cryptographic material. Please note that there is no guarantee
+;;     that the key material will actually be gone from memory. It
+;;     might remain in temporary numbers or other values.
 
 ;;; Examples
 
@@ -117,7 +119,7 @@
 ;; }
 ;; http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.58.2363
 
-(library (weinholt crypto aes (1 0 20090911))
+(library (weinholt crypto aes (1 0 20090913))
   (export expand-aes-key aes-encrypt!
           reverse-aes-schedule aes-decrypt!
           clear-aes-schedule!)
@@ -382,7 +384,7 @@
 
   (define (reverse-aes-schedule key)
     ;; Reverse the key schedule, then do InvMixColumns
-    (do ((ret (list->vector
+    (do ((ret (list->vector             ;XXX: spills key material as garbage
                (concatenate (reverse (uncat (vector->list key) 4)))))
          (i 4 (+ i 1)))
         ((= i (- (vector-length ret) 4))
