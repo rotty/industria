@@ -49,7 +49,7 @@
 ;; and send all your replies as NOTICEs. IRC bots can get into wars
 ;; with each other if they send PRIVMSGs.
 
-(library (weinholt net irc (2 0 20090906))
+(library (weinholt net irc (2 0 20090913))
   (export irc-format-condition? irc-parse-condition?
           parse-message parse-message-bytevector
           format-message-raw format-message-and-verify
@@ -159,10 +159,11 @@
          (define (args-done args)
            (let* ((args (reverse args))
                   (cmd (car args)))
-             (when (> (length (cdr args)) 15)
-               (parse-error 'parse-message
-                            "Too many parameters"
-                            prefix cmd args))
+             ;; Ignore this error, because e.g. Dancer ircd sends more parameters in ISUPPORT.
+             ;; (when (> (length (cdr args)) 15)
+             ;;   (parse-error 'parse-message
+             ;;                "Too many parameters"
+             ;;                prefix cmd args))
              (values prefix
                      (cond ((char-numeric? (string-ref cmd 0))
                             (unless (and (= (string-length cmd) 3)
@@ -216,10 +217,10 @@
          (define (args-done args)
            (let* ((args (reverse args))
                   (cmd (ascii->string (car args))))
-             (when (> (length (cdr args)) 15)
-               (parse-error 'parse-message-binary
-                            "Too many parameters"
-                            prefix cmd args))
+             ;; (when (> (length (cdr args)) 15)
+             ;;   (parse-error 'parse-message-binary
+             ;;                "Too many parameters"
+             ;;                prefix cmd args))
              (values (if (bytevector? prefix) (ascii->string prefix) prefix)
                      (cond ((char-numeric? (string-ref cmd 0))
                             (unless (and (= (string-length cmd) 3)
