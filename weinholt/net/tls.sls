@@ -36,7 +36,7 @@
 ;; all messages have their checksums calculated with something like
 ;; SHA-1 and then encrypted with the cipher.
 
-(library (weinholt net tls (0 0 20090821))
+(library (weinholt net tls (0 0 20090901))
   (export make-tls-wrapper
           flush-tls-output
           put-tls-record get-tls-record
@@ -124,7 +124,7 @@
          (sum 0 (+ sum (bytevector-length (car l)))))
         ((null? l) sum)))
 
-  (define (bytevector-append x)
+  (define (bytevector-concatenate x)
     (let ((length (bytevectors-length x)))
       (do ((bv (make-bytevector length))
            (x x (cdr x))
@@ -146,7 +146,7 @@
           '()
           (let ((a (hash->bytevector (hmac secret prev))))
             (cons prev (gen-A (fx+ i 1) max a)))))
-    (bytevector-append
+    (bytevector-concatenate
      (map (lambda (a) (hash->bytevector (apply hmac secret a seeds)))
           (gen-A 0
                  (div (+ length (- hash-length 1)) hash-length)
@@ -277,7 +277,7 @@
                                  blocks len)
 
                (tls-conn-seq-write-set! conn (+ (tls-conn-seq-write conn) 1))
-               (let ((plaintext (bytevector-append data)))
+               (let ((plaintext (bytevector-concatenate data)))
                  (bytevector-copy! plaintext 0
                                    blocks 0
                                    (bytevector-length plaintext)))
