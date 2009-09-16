@@ -17,30 +17,21 @@
 
 ;; The MD5 Message-Digest Algorithm. RFC 1321
 
-(library (weinholt crypto md5 (1 0 20090821))
+(library (weinholt crypto md5 (1 0 20090916))
   (export make-md5 md5-update! md5-finish! md5-clear!
           md5 md5-copy md5-finish
           md5-copy-hash! md5->bytevector md5->string
           hmac-md5)
-  (import (except (rnrs) bitwise-rotate-bit-field)
-          (only (srfi :43 vectors) vector-copy))
+  (import (only (srfi :1 lists) iota)
+          (except (rnrs) bitwise-rotate-bit-field))
 
   (define (print . x) (for-each display x) (newline))
+  (define (vector-copy x) (vector-map (lambda (i) i) x))
 
-  (define (bitwise-rotate-bit-field ei1 ei2 ei3 ei4)
-    (let* ((n     ei1)
-           (start ei2)
-           (end   ei3)
-           (count ei4)
-           (width (- end start)))
-      (if (positive? width)
-          (let* ((count (mod count width))
-                 (field0 (bitwise-bit-field n start end))
-                 (field1 (bitwise-arithmetic-shift-left field0 count))
-                 (field2 (bitwise-arithmetic-shift-right field0 (- width count)))
-                 (field (bitwise-ior field1 field2)))
-            (bitwise-copy-bit-field n start end field))
-          n)))
+  (define (rol32 n count)
+    (let ((field1 (bitwise-and #xffffffff (bitwise-arithmetic-shift-left n count)))
+          (field2 (bitwise-arithmetic-shift-right n (- 32 count))))
+      (bitwise-ior field1 field2)))
 
   (define-record-type md5state
     (fields (immutable H)               ;Hash
@@ -52,7 +43,7 @@
   (define (make-md5)
     (let ((H (list->vector initial-hash))
           (W (make-bytevector (* 4 16)))
-          (m (make-bytevector (* 4 16))))
+          (m (make-bytevector (+ 8 (* 4 16)))))
       (make-md5state H W m 0 0)))
 
   (define (md5-copy state)
@@ -87,11 +78,15 @@
           (else
            (bitwise-xor y (bitwise-ior (bitwise-not z) x)))))
 
-  (define (g t)
-    (cond ((<= 0 t 15)  t)
-          ((<= 16 t 31) (mod (+ (* 5 t) 1) 16))
-          ((<= 32 t 47) (mod (+ (* 3 t) 5) 16))
-          (else         (mod (* 7 t) 16))))
+  (define g
+    (let ((v (list->vector
+              (map (lambda (t)
+                     (cond ((<= 0 t 15)  t)
+                           ((<= 16 t 31) (mod (+ (* 5 t) 1) 16))
+                           ((<= 32 t 47) (mod (+ (* 3 t) 5) 16))
+                           (else         (mod (* 7 t) 16))))
+                   (iota 64)))))
+      (lambda (t) (vector-ref v t))))
 
   (define r
     '#(7 12 17 22  7 12 17 22  7 12 17 22  7 12 17 22
@@ -138,12 +133,13 @@
              (lp D
                  (bitwise-and #xffffffff
                               (+ B
-                                 (bitwise-rotate-bit-field
-                                  (+ A
-                                     (f t B C D)
-                                     (bytevector-u32-native-ref W (* 4 (g t)))
-                                     (vector-ref k t))
-                                  0 32
+                                 (rol32
+                                  (bitwise-and
+                                   #xffffffff
+                                   (+ A
+                                      (f t B C D)
+                                      (bytevector-u32-native-ref W (* 4 (g t)))
+                                      (vector-ref k t)))
                                   (vector-ref r t))))
                  B
                  C

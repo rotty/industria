@@ -22,31 +22,21 @@
 ;; TODO: give an error if more than 2^64 bits are processed?
 ;; TODO: Optimize. Should be simple enough with the help of a profiler.
 
-(library (weinholt crypto sha-1 (1 0 20090821))
+(library (weinholt crypto sha-1 (1 0 20090916))
   (export make-sha-1 sha-1-update! sha-1-finish! sha-1-clear!
           sha-1 sha-1-copy sha-1-finish
           sha-1-transform!              ;for interested parties only
           sha-1-copy-hash! sha-1->bytevector sha-1->string
           hmac-sha-1)
-  (import (except (rnrs) bitwise-rotate-bit-field)
-          (only (srfi :43 vectors) vector-copy))
+  (import (except (rnrs) bitwise-rotate-bit-field))
 
   (define (print . x) (for-each display x) (newline))
+  (define (vector-copy x) (vector-map (lambda (i) i) x))
 
-  (define (bitwise-rotate-bit-field ei1 ei2 ei3 ei4)
-    (let* ((n     ei1)
-           (start ei2)
-           (end   ei3)
-           (count ei4)
-           (width (- end start)))
-      (if (positive? width)
-          (let* ((count (mod count width))
-                 (field0 (bitwise-bit-field n start end))
-                 (field1 (bitwise-arithmetic-shift-left field0 count))
-                 (field2 (bitwise-arithmetic-shift-right field0 (- width count)))
-                 (field (bitwise-ior field1 field2)))
-            (bitwise-copy-bit-field n start end field))
-          n)))
+  (define (rol32 n count)
+    (let ((field1 (bitwise-and #xffffffff (bitwise-arithmetic-shift-left n count)))
+          (field2 (bitwise-arithmetic-shift-right n (- 32 count))))
+      (bitwise-ior field1 field2)))
 
   (define-record-type sha1state
     (fields (immutable H)               ;Hash
@@ -119,12 +109,12 @@
     ;; Initialize W[16..79]
     (do ((t (* 4 16) (+ t 4)))
         ((= t (* 4 80)))
-      (bytevector-u32-native-set! W t (bitwise-rotate-bit-field
+      (bytevector-u32-native-set! W t (rol32
                                        (bitwise-xor (bytevector-u32-native-ref W (- t (* 4 3)))
                                                     (bytevector-u32-native-ref W (- t (* 4 8)))
                                                     (bytevector-u32-native-ref W (- t (* 4 14)))
                                                     (bytevector-u32-native-ref W (- t (* 4 16))))
-                                       0 32 1)))
+                                       1)))
     ;; Do the hokey pokey
     (let lp ((A (vector-ref H 0))
              (B (vector-ref H 1))
@@ -140,13 +130,13 @@
              (vector-set! H 4 (bitwise-and #xffffffff (+ E (vector-ref H 4)))))
             (else
              (lp (bitwise-and #xffffffff
-                              (+ (bitwise-rotate-bit-field A 0 32 5)
+                              (+ (rol32 A 5)
                                  (f t B C D)
                                  E
                                  (bytevector-u32-native-ref W (* 4 t))
                                  (K t)))
                  A
-                 (bitwise-rotate-bit-field B 0 32 30)
+                 (rol32 B 30)
                  C
                  D
                  (+ t 1))))))
@@ -252,7 +242,7 @@
 ;;; HMAC-SHA-1. RFC 2104.
 
   ;; TODO: an API with make, update!, finish!, finish, clear!, copy, etc
-  
+
   (define (hmac-sha-1 secret . data)
     ;; RFC 2104.
     (if (> (bytevector-length secret) 64)
