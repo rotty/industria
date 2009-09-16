@@ -22,7 +22,7 @@
 ;; Keys can be between 8 and 448 bits. The key length does not affect
 ;; performance.
 
-(library (weinholt crypto blowfish (0 0 20090913))
+(library (weinholt crypto blowfish (0 0 20090914))
   (export expand-blowfish-key blowfish-encrypt!
           reverse-blowfish-schedule blowfish-decrypt!
           clear-blowfish-schedule!)
@@ -36,8 +36,10 @@
           (only (srfi :43 vectors) vector-copy vector-reverse-copy))
 
   (define (blowfish! source source-index target target-index schedule)
+    (assert (pair? schedule))
     (let ((P (car schedule))
           (S (cdr schedule)))
+      (assert (and (vector? P) (vector? S)))
       (let lp ((xl (bytevector-u32-ref source source-index (endianness big)))
                (xr (bytevector-u32-ref source (+ source-index 4) (endianness big)))
                (i 0))

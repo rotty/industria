@@ -18,12 +18,14 @@
 #!r6rs
 
 (import (weinholt net irc)
+        (weinholt net irc fish)
+        (weinholt crypto blowfish)
         (weinholt net tcp)
         (xitomatl AS-match)
         (only (srfi :13 strings) string-join)
         (srfi :26 cut)
+        (srfi :39 parameters)
         (rnrs))
-
 
 ;;; Configuration default
 
@@ -40,9 +42,14 @@
 (define *server-hostname* "localhost")
 (define *server-port* "6667")
 
+(define *in-fish* (make-parameter #f))
+(define *fish-keys* `(("#test" . ,(make-fish-key "test"))))
+
 ;; Incoming messages will be transcoded with utf-8 and if that fails,
 ;; fall back on latin-1.
 (define *outgoing-codec* (utf-8-codec))
+(define (transcode-outgoing str)
+  (string->bytevector str (make-transcoder *outgoing-codec*)))
 (define transcode-incoming
   (let ((t1 (make-transcoder (utf-8-codec)
                              (eol-style none)
@@ -93,6 +100,15 @@
          => car)
         (else #f)))
 
+(define (fish-key address)
+  (cond ((assp (lambda (s) (address=? s address))
+               *fish-keys*) => cdr)
+        (else #f)))
+
+(define (looks-fishy? msg)
+  ;; Don't match FiSH messages inside FiSH messages
+  (and (not (*in-fish*)) (fish-message? msg)))
+
 ;;; Main program
 
 (define *server-out* #f)
@@ -119,13 +135,47 @@
     ((_ 'PING server)
      (fmt 'PONG server))
 
+    ((src 'PRIVMSG tgt (? looks-fishy? msg))
+     ;; FiSH encrypted message
+     (cond ((fish-key (if (its-me? tgt) (prefix-nick src) tgt)) =>
+            (lambda (key)
+              (parameterize ((*in-fish* #t))
+                (let ((msg (transcode-incoming (fish-decrypt-message msg key))))
+                  ;; TODO: check if the decrypted message is still pseudo-random...
+                  (log-msg "<*(((><" src 'PRIVMSG (list tgt msg))
+                  (handle-message (list src 'PRIVMSG tgt msg))))))
+           (else
+            ;; There's no key for the channel or source
+            (when (its-me? tgt)
+              (fmt 'NOTICE (prefix-nick src) "Let's do a key exchange! You go first!")))))
+
     ((src 'PRIVMSG (? its-me? tgt) (? ctcp-message? msg))
      ;; Private CTCP message
      (fmt 'NOTICE (prefix-nick src) "I don't support CTCP!"))
 
     ((src 'PRIVMSG (? its-me? tgt) msg)
      ;; Private message
-     (fmt 'NOTICE (prefix-nick src) "Whaddaya want?"))
+     (fmt 'NOTICE (prefix-nick src)
+          (if (*in-fish*)
+              (let ((msg (string-append "This is you: " (string-upcase msg)
+                                        " BLUB BLUB BLUB...")))
+                (log-msg "><)))*>" #f 'NOTICE (list (prefix-nick src) msg))
+                (fish-encrypt-message (transcode-outgoing msg)
+                                      (fish-key (prefix-nick src))))
+              (string-append "Here's what you look like: " msg))))
+
+    ((src 'NOTICE (? its-me? tgt) (? fish-key-init? msg))
+     ;; Replying to a NOTICE is not a good idea, but that's how the
+     ;; FiSH protocol works.
+     (let-values (((key reply) (fish-generate-key msg)))
+       (print "Exchanged FiSH keys with " src)
+       (set! *fish-keys* (cons (cons (prefix-nick src) key)
+                               *fish-keys*))
+       (fmt 'NOTICE (prefix-nick src) reply)
+       (fmt 'NOTICE (prefix-nick src)
+            (fish-encrypt-message (transcode-outgoing
+                                   "Can you hear me know? ... What about now?")
+                                  (fish-key (prefix-nick src))))))
 
     ((_ 433 . _)
      ;; ERR_NICKNAMEINUSE
