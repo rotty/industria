@@ -24,7 +24,7 @@
 
 ;; But look at RFC 2313, it's easier to read...
 
-(library (weinholt crypto rsa (0 0 20090821))
+(library (weinholt crypto rsa (0 0 20090914))
   (export rsa-public-key?
           rsa-public-key<-bytevector
           rsa-public-key-length
@@ -35,6 +35,7 @@
           rsa-pkcs1-decrypt-digest)
   (import (rnrs)
           (srfi :27 random-bits)
+          (weinholt crypto math)
           (prefix (weinholt struct der (0 0)) der:))
 
   (define random-nonzero-byte
@@ -100,31 +101,6 @@
     (apply make-rsa-public-key (der:translate (der:decode bv)
                                               (RSAPublicKey))))
   
-  (define (invmod a b)
-    ;; Extended Euclidian algorithm. Used to find the inverse of a
-    ;; modulo b.
-    (do ((a a (mod b a))
-         (b b a)
-         (x0 0 x1)
-         (x1 1 (+ (* (- (div b a)) x1) x0)))
-        ((zero? (mod b a))
-         x1)))
-
-  (define (expt-mod base exponent modulus)
-    ;; Faster version of (mod (expt base exponent) modulus).
-    (let lp ((base (if (negative? exponent)
-                       (invmod (mod base modulus) modulus)
-                       (mod base modulus)))
-             (exponent (abs exponent))
-             (result 1))
-      (if (zero? exponent)
-          result
-          (lp (mod (* base base) modulus)
-              (bitwise-arithmetic-shift-right exponent 1)
-              (if (bitwise-bit-set? exponent 0)
-                  (mod (* result base) modulus)
-                  result)))))
-
   (define (rsa-encrypt plaintext key)
     (if (rsa-public-key? key)
         (expt-mod plaintext
