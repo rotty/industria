@@ -18,6 +18,7 @@
 #!r6rs
 
 (import (weinholt crypto sha-1)
+        (weinholt crypto sha-2)
         (weinholt crypto md5)
         (weinholt crypto crc)
         (only (srfi :13 strings) string-join string-pad)
@@ -70,8 +71,12 @@
                                                              #,(symcat #'name "-update")
                                                              #,(symcat #'name "-self-test")
                                                              #,(symcat #'name "-width"))))))))))
-    `(("sha-1" . ,(lambda () (checksum-port/hash make-sha-1 sha-1-update! sha-1-finish! sha-1->string)))
-      ("md5" . ,(lambda () (checksum-port/hash make-md5 md5-update! md5-finish! md5->string)))
+    `(("md5" . ,(lambda () (checksum-port/hash make-md5 md5-update! md5-finish! md5->string)))
+      ("sha-1" . ,(lambda () (checksum-port/hash make-sha-1 sha-1-update! sha-1-finish! sha-1->string)))
+      ("sha-224" . ,(lambda () (checksum-port/hash make-sha-224 sha-224-update! sha-224-finish! sha-224->string)))
+      ("sha-256" . ,(lambda () (checksum-port/hash make-sha-256 sha-256-update! sha-256-finish! sha-256->string)))
+      ("sha-384" . ,(lambda () (checksum-port/hash make-sha-384 sha-384-update! sha-384-finish! sha-384->string)))
+      ("sha-512" . ,(lambda () (checksum-port/hash make-sha-512 sha-512-update! sha-512-finish! sha-512->string)))
       ,(import-crc crc-32)
       ,(import-crc crc-16)
       ,(import-crc crc-16/ccitt)
