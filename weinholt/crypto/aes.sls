@@ -119,10 +119,11 @@
 ;; }
 ;; http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.58.2363
 
-(library (weinholt crypto aes (1 0 20090913))
+(library (weinholt crypto aes (1 0 20090918))
   (export expand-aes-key aes-encrypt!
           reverse-aes-schedule aes-decrypt!
-          clear-aes-schedule!)
+          clear-aes-schedule!
+          aes-ctr!)
   (import (for (weinholt crypto aes private) expand)
           (for (only (srfi :1 lists) iota) expand)
           (only (srfi :1 lists) split-at concatenate)
@@ -471,4 +472,27 @@
   (define (clear-aes-schedule! sched)
     (vector-fill! sched 0))
 
+;;; CTR mode
+
+  (define (aes-ctr! source source-start target target-start len sched ctr)
+    (do ((block (make-bytevector 16))
+         ;; XXX: ctr should wrap at 2^128-1. Will it *ever* wrap? Stay
+         ;; tuned to find out!
+         (ctr ctr (+ ctr 1))
+         (s source-start (+ s 16))
+         (t target-start (+ t 16)))
+        ((>= s (+ source-start len))
+         ctr)
+      (bytevector-uint-set! block 0 ctr (endianness big) 16)
+      (aes-encrypt! block 0 block 0 sched)
+      (do ((end (min (+ s 16) (+ source-start len)))
+           (i 0 (+ i 1))
+           (s s (+ s 1))
+           (t t (+ t 1)))
+          ((= s end))
+        (bytevector-u8-set! target t (fxxor (bytevector-u8-ref block i)
+                                            (bytevector-u8-ref source s))))))
+
+
+  
   )
