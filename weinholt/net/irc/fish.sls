@@ -26,15 +26,15 @@
 
 ;; TODO: initiating key exchange
 
-(library (weinholt net irc fish (0 0 20090918))
+(library (weinholt net irc fish (0 0 20090919))
   (export fish-message? fish-decrypt-message fish-encrypt-message
           fish-key-init? fish-generate-key make-fish-key)
   (import (rnrs)
           (only (srfi :1 lists) iota)
           (only (srfi :13 strings) string-index string-prefix?)
-          (srfi :27 random-bits)
           (weinholt bytevectors)
           (weinholt crypto blowfish)
+          (weinholt crypto entropy)
           (weinholt crypto sha-2)
           (weinholt crypto math)
           (weinholt struct pack)
@@ -145,21 +145,6 @@ out+to+TMG+for+helping+to+generate+this+cool+sophie+germain+prime+number++++\
     (cond ((string-prefix? "DH1080_INIT " msg)
            (substring msg 12 (string-length msg)))
           (else #f)))
-
-  (define make-random-bytevector        ;also present in net/tls
-    (let* ((s (make-random-source))
-           (make-int (random-source-make-integers s))
-           (urandom (and (file-exists? "/dev/urandom")
-                         (open-file-input-port "/dev/urandom"))))
-      (lambda (len)
-        (unless urandom
-          (random-source-randomize! s))
-        (do ((bv (make-bytevector len))
-             (i 0 (fx+ i 1)))
-            ((fx=? i len) bv)
-          (if urandom
-              (bytevector-u8-set! bv i (get-u8 urandom))
-              (bytevector-u8-set! bv i (make-int 255)))))))
 
   (define (make-secret tries)
     (unless (< tries 1000)
