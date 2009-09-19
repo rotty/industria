@@ -49,7 +49,7 @@
 ;; and send all your replies as NOTICEs. IRC bots can get into wars
 ;; with each other if they send PRIVMSGs.
 
-(library (weinholt net irc (2 0 20090913))
+(library (weinholt net irc (2 0 20090918))
   (export irc-format-condition? irc-parse-condition?
           parse-message parse-message-bytevector
           format-message-raw format-message-and-verify
@@ -60,6 +60,7 @@
   (import (rnrs)
           (only (srfi :1 lists) make-list drop-right append-map)
           (only (srfi :13 strings) string-index string-map)
+          (weinholt bytevectors)
           (weinholt text strings))
 
   (define-condition-type &irc-format &condition
@@ -83,27 +84,6 @@
             (make-irc-format-condition))))
 
 ;;; Helpers
-
-  (define bytevector-u8-index
-    (case-lambda
-      ((bv c start end)
-       (let lp ((i start))
-         (cond ((= end i)
-                #f)
-               ((= (bytevector-u8-ref bv i) c)
-                i)
-               (else
-                (lp (+ i 1))))))
-      ((bv c start)
-       (bytevector-u8-index bv c start (bytevector-length bv)))
-      ((bv c)
-       (bytevector-u8-index bv c 0 (bytevector-length bv)))))
-
-  (define (subbytevector bv start end)
-    (let ((ret (make-bytevector (- end start))))
-      (bytevector-copy! bv start
-                        ret 0 (- end start))
-      ret))
 
   (define (ascii->string bv)
     (list->string (map (lambda (b) (integer->char (fxand #x7f b)))

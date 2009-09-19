@@ -26,18 +26,19 @@
 
 ;; TODO: initiating key exchange
 
-(library (weinholt net irc fish (0 0 20090916))
+(library (weinholt net irc fish (0 0 20090918))
   (export fish-message? fish-decrypt-message fish-encrypt-message
           fish-key-init? fish-generate-key make-fish-key)
   (import (rnrs)
           (only (srfi :1 lists) iota)
           (only (srfi :13 strings) string-index string-prefix?)
           (srfi :27 random-bits)
-          (weinholt text base64)
-          (weinholt struct pack)
+          (weinholt bytevectors)
           (weinholt crypto blowfish)
           (weinholt crypto sha-2)
-          (weinholt crypto math))
+          (weinholt crypto math)
+          (weinholt struct pack)
+          (weinholt text base64))
 
   (define alphabet "./0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
@@ -117,14 +118,6 @@
   
 ;;; Diffie-Hellman key exchange
 
-  (define (bv->uint bv)
-    (bytevector-uint-ref bv 0 (endianness big) (bytevector-length bv)))
-
-  (define (uint->bv int)
-    (let ((ret (make-bytevector (div (bitwise-and -8 (+ 7 (bitwise-length int))) 8) #xFF)))
-      (bytevector-uint-set! ret 0 int (endianness big) (bytevector-length ret))
-      ret))
-
   (define (dh1080-base64-decode str)
     (let ((padding (- (bitwise-and -4 (+ (string-length str) 3))
                       (string-length str))))
@@ -142,9 +135,10 @@
           str)))
 
   ;; Serious business
-  (define n (bv->uint (dh1080-base64-decode "++ECLiPSE+is+proud+to+present+\
-latest+FiSH+release+featuring+even+more+security+for+you+++shouts+go+out+to+\
-TMG+for+helping+to+generate+this+cool+sophie+germain+prime+number++++/C32L")))
+  (define n (bytevector->uint (dh1080-base64-decode "++ECLiPSE+is+proud+to+\
+present+latest+FiSH+release+featuring+even+more+security+for+you+++shouts+go+\
+out+to+TMG+for+helping+to+generate+this+cool+sophie+germain+prime+number++++\
+/C32L")))
   (define g 2)
 
   (define (fish-key-init? msg)
@@ -170,7 +164,7 @@ TMG+for+helping+to+generate+this+cool+sophie+germain+prime+number++++/C32L")))
   (define (make-secret tries)
     (unless (< tries 1000)
       (error 'make-secret "unable to make a secret"))
-    (let* ((y (bv->uint (make-random-bytevector 1080/8)))
+    (let* ((y (bytevector->uint (make-random-bytevector 1080/8)))
            (Y (expt-mod g y n)))
       (if (and (<= (expt 2 512) Y (- n 2))
                (= 1 (expt-mod Y (/ (- n 1) 2) n)))
@@ -179,12 +173,12 @@ TMG+for+helping+to+generate+this+cool+sophie+germain+prime+number++++/C32L")))
 
   ;; Returns a DH1080_FINISH message and a key.
   (define (fish-generate-key init)
-    (let ((X (bv->uint (dh1080-base64-decode (fish-key-init? init)))))
+    (let ((X (bytevector->uint (dh1080-base64-decode (fish-key-init? init)))))
       (unless (<= 1 X (- n 2))
         (error 'fish-key-generate "bad public number sent" X))
       (let-values (((y Y) (make-secret 0)))
         (let ((k (expt-mod X y n)))
           (values (make-fish-key (dh1080-base64-encode
-                                  (sha-256->bytevector (sha-256 (uint->bv k)))))
+                                  (sha-256->bytevector (sha-256 (uint->bytevector k)))))
                   (string-append "DH1080_FINISH "
-                                 (dh1080-base64-encode (uint->bv Y)))))))))
+                                 (dh1080-base64-encode (uint->bytevector Y)))))))))

@@ -20,32 +20,14 @@
 ;; RFC3492 - Punycode: A Bootstring encoding of Unicode for
 ;; Internationalized Domain Names in Applications (IDNA)
 
-(library (weinholt text punycode (0 0 20090829))
+(library (weinholt text punycode (0 0 20090918))
   (export punycode->string string->punycode)
   (import (rnrs)
           (only (srfi :1 lists) split-at)
-          (srfi :26 cut))
+          (srfi :26 cut)
+          (weinholt bytevectors))
 
   (define (print . x) (for-each display x) (newline))
-
-  (define bytevector-u8-index-right
-    (case-lambda
-      ((bv c start end)
-       (assert (<= 0 c 255))
-       (let lp ((i (- end 1)))
-         (cond ((= start i) #f)
-               ((= (bytevector-u8-ref bv i) c) i)
-               (else (lp (- i 1))))))
-      ((bv c start)
-       (bytevector-u8-index-right bv c start (bytevector-length bv)))
-      ((bv c)
-       (bytevector-u8-index-right bv c 0 (bytevector-length bv)))))
-
-  (define (subbytevector bv start end)
-    (let ((ret (make-bytevector (- end start))))
-      (bytevector-copy! bv start
-                        ret 0 (- end start))
-      ret))
 
   (define base 36)
   (define tmin 1)
