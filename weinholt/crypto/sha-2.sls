@@ -22,23 +22,28 @@
 ;; TODO: give an error if more than 2^64 / 2^128 bits are processed?
 ;; TODO: Optimize. Should be simple enough with the help of a profiler.
 
-(library (weinholt crypto sha-2 (0 0 20090916))
-  (export make-sha-256 sha-256-update! sha-256-finish! sha-256-clear!
-          sha-256 sha-256-copy sha-256-finish
-          sha-256-copy-hash! sha-256->bytevector sha-256->string
-
-          make-sha-224 sha-224-update! sha-224-finish! sha-224-clear!
+(library (weinholt crypto sha-2 (0 0 20090918))
+  (export make-sha-224 sha-224-update! sha-224-finish! sha-224-clear!
           sha-224 sha-224-copy sha-224-finish
           sha-224-copy-hash! sha-224->bytevector sha-224->string
+          hmac-sha-224
+
+          make-sha-256 sha-256-update! sha-256-finish! sha-256-clear!
+          sha-256 sha-256-copy sha-256-finish
+          sha-256-copy-hash! sha-256->bytevector sha-256->string
+          hmac-sha-256
 
           make-sha-384 sha-384-update! sha-384-finish! sha-384-clear!
           sha-384 sha-384-copy sha-384-finish
           sha-384-copy-hash! sha-384->bytevector sha-384->string
+          hmac-sha-384
 
           make-sha-512 sha-512-update! sha-512-finish! sha-512-clear!
           sha-512 sha-512-copy sha-512-finish
-          sha-512-copy-hash! sha-512->bytevector sha-512->string)
-  (import (rnrs))
+          sha-512-copy-hash! sha-512->bytevector sha-512->string
+          hmac-sha-512)
+  (import (rnrs)
+          (weinholt crypto hmac))
 
   (define (vector-copy x) (vector-map (lambda (i) i) x))
 
@@ -94,7 +99,7 @@
          (i 0 (+ i 1)))
         ((null? init))
       (vector-set! (sha-state-H state) i (car init)))
-    (bytevector-fill! (sha-state-W state) 0)
+    (vector-fill! (sha-state-W state) #f)
     (bytevector-fill! (sha-state-m state) 0)
     (sha-state-pending-set! state 0)
     (sha-state-processed-set! state 0))
@@ -513,8 +518,16 @@
   (define sha-384->string (sha-2->string sha-384->bytevector))
   (define sha-512->string (sha-2->string sha-512->bytevector))
 
+  (define hmac-sha-224
+    (make-hmac 64 make-sha-224 sha-224->bytevector make-sha-224 sha-224-update! sha-224-finish! sha-224-clear!))
 
+  (define hmac-sha-256
+    (make-hmac 64 make-sha-256 sha-256->bytevector make-sha-256 sha-256-update! sha-256-finish! sha-256-clear!))
 
+  (define hmac-sha-384
+    (make-hmac 64 make-sha-384 sha-384->bytevector make-sha-384 sha-384-update! sha-384-finish! sha-384-clear!))
 
+  (define hmac-sha-512
+    (make-hmac 64 make-sha-512 sha-512->bytevector make-sha-512 sha-512-update! sha-512-finish! sha-512-clear!))
 
   )
