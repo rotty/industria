@@ -17,12 +17,13 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!r6rs
 
-(import (weinholt net irc)
+(import (weinholt crypto dsa)
+        (weinholt net irc)
         (weinholt net irc fish)
-        (weinholt crypto blowfish)
+        (weinholt net otr)
         (weinholt net tcp)
         (xitomatl AS-match)
-        (only (srfi :13 strings) string-join)
+        (only (srfi :13 strings) string-join string-trim-right)
         (srfi :26 cut)
         (srfi :39 parameters)
         (rnrs))
@@ -44,6 +45,16 @@
 
 (define *in-fish* (make-parameter #f))
 (define *fish-keys* `(("#test" . ,(make-fish-key "test"))))
+
+;; Generating a private DSA key with OpenSSL:
+;; openssl dsaparam 1024 | openssl gendsa /dev/stdin > otr.pem
+;; Generating a private DSA key with GnuTLS:
+;; certtool --dsa --bits 1024 -p > otr.pem
+(define *in-otr* (make-parameter #f))
+(define *otr-key*
+  (and (file-exists? "otr.pem")
+       (dsa-private-key-from-pem-file "otr.pem")))
+(define *otr-states* '())
 
 ;; Incoming messages will be transcoded with utf-8 and if that fails,
 ;; fall back on latin-1.
@@ -109,6 +120,12 @@
   ;; Don't match FiSH messages inside FiSH messages
   (and (not (*in-fish*)) (fish-message? msg)))
 
+(define (for-otr? msg)
+  ;; Only accept Off-the-Record messages if the DSA key was loaded and
+  ;; the message was not inside a decrypted OTR message.
+  (and *otr-key*
+       (not (*in-otr*)) (otr-message? msg)))
+
 ;;; Main program
 
 (define *server-out* #f)
@@ -122,13 +139,21 @@
 
 (define (fmt cmd . args)
   (log-msg '=> #f cmd args)
-  (apply format-message-with-whitewash *server-out* *outgoing-codec* #f cmd args)
-  (flush-output-port *server-out*))
+  (apply format-message-with-whitewash *server-out* *outgoing-codec* #f cmd args))
 
 (define (join-channel c)
   (if (pair? c)
       (fmt 'JOIN (car c) (cdr c))
       (fmt 'JOIN c)))
+
+(define (get-otr-state src)
+  (cond ((assp (cut address=? <> src) *otr-states*) => cdr)
+        (else
+         (print "Making a new OTR state for " src)
+         ;; TODO: find the real MSS (which depends on our mask), not 450.
+         (let ((state (make-otr-state *otr-key* 450)))
+           (set! *otr-states* (cons (cons src state) *otr-states*))
+           state))))
 
 (define handle-message
   (match-lambda
@@ -146,23 +171,59 @@
                   (handle-message (list src 'PRIVMSG tgt msg))))))
            (else
             ;; There's no key for the channel or source
-            (when (its-me? tgt)
-              (fmt 'NOTICE (prefix-nick src) "Let's do a key exchange! You go first!")))))
+            (if (its-me? tgt)
+                (fmt 'NOTICE (prefix-nick src) "Let's do a key exchange! You go first!")
+                (print "I don't have the key... give me the key")))))
 
     ((src 'PRIVMSG (? its-me? tgt) (? ctcp-message? msg))
      ;; Private CTCP message
      (fmt 'NOTICE (prefix-nick src) "I don't support CTCP!"))
 
+    ((src 'PRIVMSG (? its-me? tgt) (? for-otr? msg))
+     ;; Off-the-record
+     (let* ((state (get-otr-state src))
+            (result (otr-update! state msg)))
+       ;; TODO: might be too much for the server's flood protection....
+       (parameterize ((*in-otr* #t))
+         (for-each (match-lambda
+                    (('outgoing . line)
+                     (fmt 'PRIVMSG (prefix-nick src) line))
+                    (('encrypted . msg)
+                     (log-msg "OTR <=" src 'PRIVMSG (list tgt msg))
+                     (handle-message (list src 'PRIVMSG tgt msg)))
+                    (('session-established . _)
+                     (print "OTR session established.")
+                     (print "Their fingerprint: "
+                            (otr-hash-public-key (otr-state-their-dsa-key state)))
+                     (print "Our fingerprint: "
+                            (otr-hash-public-key (dsa-private->public
+                                                  (otr-state-our-dsa-key state))))
+                     (print "Secure Session ID: "
+                            (otr-format-session-id (otr-state-secure-session-id state))))
+                    (x
+                     (print "Unhandled OTR result: " x)))
+                   result))))
+
     ((src 'PRIVMSG (? its-me? tgt) msg)
      ;; Private message
-     (fmt 'NOTICE (prefix-nick src)
-          (if (*in-fish*)
+     (let ((msg (string-trim-right msg)))
+       (cond ((*in-otr*)
+              (let ((outmsg (string-append "From you via OTR: '" msg "'")))
+                (log-msg "OTR =>" src 'PRIVMSG (list tgt outmsg))
+                (for-each (lambda (line)
+                            (fmt 'PRIVMSG (prefix-nick src) (cdr line)))
+                          (otr-send-encrypted! (get-otr-state src) outmsg))))
+             ((*in-fish*)
               (let ((msg (string-append "This is you: " (string-upcase msg)
                                         " BLUB BLUB BLUB...")))
                 (log-msg "><)))*>" #f 'NOTICE (list (prefix-nick src) msg))
-                (fish-encrypt-message (transcode-outgoing msg)
-                                      (fish-key (prefix-nick src))))
-              (string-append "Here's what you look like: " msg))))
+                (fmt 'NOTICE (prefix-nick src)
+                     (fish-encrypt-message (transcode-outgoing msg)
+                                           (fish-key (prefix-nick src))))))
+             (else
+              (fmt 'NOTICE (prefix-nick src)
+                   (string-append "Here's a rude impression of you: "
+                                  (string-upcase msg) "!!"))))))
 
     ((src 'NOTICE (? its-me? tgt) (? fish-key-init? msg))
      ;; Replying to a NOTICE is not a good idea, but that's how the
@@ -210,6 +271,7 @@
 
     ((_ 001 tgt msg)
      ;; RPL_WELCOME
+     ;; (fmt 'OPER "foo" "foo")
      (for-each join-channel *channels*))
 
     ((_ 005 tgt . isupport)
@@ -240,6 +302,7 @@
   (fmt 'NICK *nickname*)
   (fmt 'USER *username* 0 "*" *realname*)
   (let lp ()
+    (flush-output-port *server-out*)
     (let ((line (binary-get-line in)))
       (cond ((eof-object? line)
              (print "The server hung up on me!"))
