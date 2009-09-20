@@ -17,12 +17,21 @@
 #!r6rs
 
 (library (weinholt bytevectors (0 0 20090919))
-  (export subbytevector
+  (export bytevector-append
+          subbytevector
           bytevector-u8-index
           bytevector-u8-index-right
           bytevector->uint
           uint->bytevector)
   (import (rnrs))
+
+  (define (bytevector-append . bvs)
+    ;; TODO: is the other version faster?
+    (call-with-bytevector-output-port
+      (lambda (p)
+        (for-each (lambda (bv)
+                    (put-bytevector p bv))
+                  bvs))))
 
   (define (subbytevector bv start end)
     (let ((ret (make-bytevector (- end start))))
