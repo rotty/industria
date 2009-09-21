@@ -18,7 +18,7 @@
 ;; There is a proper way of doing TCP in Chez, and this is not it.
 ;; This is the embarrassing way. But it's useful for testing.
 
-(library (weinholt net tcp (0 0 20090920))
+(library (weinholt net tcp (0 0 20090921))
   (export tcp-connect)
   (import (chezscheme))
 
@@ -26,6 +26,7 @@
     (putenv "_CHEZHOST_" host)
     (putenv "_CHEZSERVICE_" service)
     ;; Talk with netcat...
-    (let-values (((o i e pid) (open-process-ports "nc $_CHEZHOST_ $_CHEZSERVICE_")))
+    (let-values (((o i e pid)
+                  (open-process-ports "nc \"$_CHEZHOST_\" \"$_CHEZSERVICE_\"")))
       (close-port e)
       (values i o))))
