@@ -16,7 +16,7 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!r6rs
 
-(library (weinholt bytevectors (0 0 20090919))
+(library (weinholt bytevectors (0 0 20090924))
   (export bytevector-append
           subbytevector
           bytevector-u8-index
@@ -58,8 +58,9 @@
     (case-lambda
       ((bv c start end)
        (assert (<= 0 c 255))
+       (assert (<= 0 start end (bytevector-length bv)))
        (let lp ((i (- end 1)))
-         (cond ((= start i) #f)
+         (cond ((< i start) #f)
                ((= (bytevector-u8-ref bv i) c) i)
                (else (lp (- i 1))))))
       ((bv c start)
