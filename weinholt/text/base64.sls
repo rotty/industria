@@ -17,7 +17,10 @@
 
 ;; RFC 4648 Base-N Encodings
 
-(library (weinholt text base64 (1 0 20090821))
+;; TODO: read headers in the delimited format. It's probably RFC822
+;; headers and Privacy Enhanced Mail etc.
+
+(library (weinholt text base64 (1 0 20090927))
   (export base64-encode
           base64-decode
           base64-alphabet
@@ -129,7 +132,7 @@
     (if (eof-object? (lookahead-char port))
         (eof-object)
         (f (get-line port))))
-  
+
   ;; Reads the common -----BEGIN/END type----- delimited format from
   ;; the given port. Returns two values: a string with the type and a
   ;; bytevector containing the base64 decoded data. The second value
