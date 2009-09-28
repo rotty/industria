@@ -19,7 +19,7 @@
 
 ;; http://www.cypherpunks.ca/otr/Protocol-v2-3.1.0.html
 
-;; TODO: S-M-P.
+;; TODO: other half of S-M-P.
 ;; TODO: fix the state transitions (most are probably missing)
 ;; TODO: better interface for the outgoing messages etc
 ;; TODO: Petite Chez has trouble with the AKE (bad sigs).
@@ -28,11 +28,15 @@
 ;; using our own DSA key?
 ;; TODO: reveal old MAC keys. Forget old D-H keys.
 ;; TODO: finishing sessions.
+;; TODO: clean up the messages that the user gets
+;; TODO: drop the ! on some of the exported procedures?
 
-(library (weinholt net otr (0 0 20090924))
+(library (weinholt net otr (0 0 20090928))
   (export otr-message?
           otr-update!
           otr-send-encrypted!
+          otr-authenticate!
+          otr-empty-queue!
           make-otr-state
           otr-state-their-dsa-key
           otr-state-our-dsa-key
@@ -40,7 +44,7 @@
           otr-hash-public-key
           otr-format-session-id)
   (import (rnrs)
-          (only (srfi :1 lists) iota)
+          (only (srfi :1 lists) iota map-in-order)
           (only (srfi :13 strings) string-contains string-join
                 string-index string-index-right string-pad)
           (srfi :26 cut)
@@ -77,6 +81,8 @@
           (make-secret g n bits (+ tries 1)))))
 
   (define (get-bytevector p n)
+    (when (> n 65536)
+      (error 'get-bytevector "unlikely read size" n))
     (let ((ret (get-bytevector-n p n)))
       (unless (eqv? (bytevector-length ret) n)
         (error 'get-bytevector "short read" n (bytevector-length ret)))
@@ -89,7 +95,8 @@
     (let* ((len (div (bitwise-and -8 (+ 7 (bitwise-length int))) 8))
            (ret (make-bytevector (+ 4 len))))
       (bytevector-u32-set! ret 0 len (endianness big))
-      (bytevector-uint-set! ret 4 int (endianness big) len)
+      (unless (zero? len)
+        (bytevector-uint-set! ret 4 int (endianness big) len))
       ret))
 
   (define (dsa-public-key->bytevector key)
@@ -204,7 +211,8 @@
 
   (define v2-tag "\x20;\x20;\x09;\x09;\x20;\x20;\x09;\x20;")
 
-  ;; Diffie-Hellman modulus and generator
+  ;; Diffie-Hellman modulus and generator. Diffie-Hellman Group 5 from
+  ;; RFC 3526.
   (define n
     (string->number
      "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1\
@@ -235,9 +243,19 @@
   ;; Key types
   (define key-type-dsa #x0000)
 
-  ;; TLV types
+  ;; TLV types (tag-length-value)
   (define tlv-null #x0000)
-  (define tlv-finish #x0001)
+  (define tlv-disconnect #x0001)
+  (define tlv-smp-1 #x0002)
+  (define tlv-smp-2 #x0003)
+  (define tlv-smp-3 #x0004)
+  (define tlv-smp-4 #x0005)
+  (define tlv-smp-abort #x0006)
+  (define tlv-smp-1q #x0007)
+
+  (define (smp-tlv? i)
+    (memv (car i) (list tlv-smp-1 tlv-smp-2 tlv-smp-3 tlv-smp-4
+                        tlv-smp-abort tlv-smp-1q)))
 
   (define-record-type otr-state
     (fields (immutable our-dsa-key)
@@ -261,7 +279,9 @@
             (mutable our-pubkeys)
             ;; Last used top half of the AES counter
             (mutable their-ctr)
-            (mutable our-ctr))
+            (mutable our-ctr)
+            ;; SMP state
+            (mutable smp))
     (protocol
      (lambda (p)
        (lambda (dsa-key mss)
@@ -278,7 +298,16 @@
             '()
             plaintext-state #f
             '() '() 0 '()
-            0 0)))))
+            0 0
+            #f)))))
+
+  (define-record-type smp-state
+    (fields (mutable next)
+            (mutable values))
+    (protocol
+     (lambda (p)
+       (lambda ()
+         (p 'expect1 '())))))
 
   ;; (define-enumeration policy
   ;;   (allow-v1 allow-v2 require-encryption send-whitespace-tag
@@ -293,7 +322,8 @@
     (otr-state-secure-session-id-set! state ssid)
     (otr-state-their-ctr-set! state 0)
     (otr-state-our-ctr-set! state 0)
-    (otr-state-our-latest-acked-set! state our-keyid))
+    (otr-state-our-latest-acked-set! state our-keyid)
+    (otr-state-smp-set! state (make-smp-state)))
 
   (define (forget-session! state)
     (otr-state-our-keys-set! state '())
@@ -303,7 +333,8 @@
     (otr-state-secure-session-id-set! state 0)
     (otr-state-their-ctr-set! state 0)
     (otr-state-our-ctr-set! state 0)
-    (otr-state-our-latest-acked-set! state 0))
+    (otr-state-our-latest-acked-set! state 0)
+    (otr-state-smp-set! state #f))
 
   (define (otr-message? msg)
     (cond ((string-contains msg "?OTR"))
@@ -333,8 +364,7 @@
                 (lp (cons (substring outmsg 0 mss) pieces)
                     (substring outmsg mss (string-length outmsg))))))))
 
-  (define (otr-hash-public-key pubkey)
-    ;; Returns the SHA-1 hash of a key, formatted for the user.
+  (define (hash-public-key pubkey)
     (let ((pub (dsa-public-key->bytevector pubkey))
           (m (make-sha-1)))
       (sha-1-update! m pub
@@ -343,11 +373,15 @@
                          0)
                      (bytevector-length pub))
       (sha-1-finish! m)
-      (string-upcase
-       (string-join (map (lambda (i) (string-pad (number->string i 16) 8 #\0))
-                         (bytevector->uint-list (sha-1->bytevector m)
-                                                (endianness big) 4))
-                    " "))))
+      (sha-1->bytevector m)))
+
+  (define (otr-hash-public-key pubkey)
+    ;; Returns the SHA-1 hash of a key, formatted for the user.
+    (string-upcase
+     (string-join (map (lambda (i) (string-pad (number->string i 16) 8 #\0))
+                       (bytevector->uint-list (hash-public-key pubkey)
+                                              (endianness big) 4))
+                  " ")))
 
   (define (otr-format-session-id id)
     ;; Formats a secure session ID for the user.
@@ -379,7 +413,7 @@
      (append (otr-state-queue (*state*))
              (list (cons type data)))))
 
-  (define (empty-queue! state)
+  (define (otr-empty-queue! state)
     (let ((queue (otr-state-queue state)))
       (otr-state-queue-set! state '())
       queue))
@@ -403,6 +437,198 @@
                    ;; TODO: what whould be appropriate here?
                    (queue-data 'local-error con)))
             ((otr-state-k (*state*)) p))))))
+
+;;; Socialist Milllionaire's Protocol
+
+  ;; The state transitions are much simpler here so continuations are
+  ;; not used. All messages have been decrypted and MACed etc, so only
+  ;; the correspondent can pass us SMP messages.
+
+  (define smp-version 1)
+
+  ;; Subtraction and multiplication for the zero-knowledge proofs is
+  ;; done modulo this number, which is called q in Alexander and
+  ;; Goldberg's paper.
+  (define order (/ (- n 1) 2))
+
+  (define (smp-secret user-input we-start)
+    (let ((m (make-sha-256))
+          (their (hash-public-key (otr-state-their-dsa-key (*state*))))
+          (our (hash-public-key (dsa-private->public
+                                 (otr-state-our-dsa-key (*state*))))))
+      (sha-256-update! m (make-bytevector 1 smp-version))
+      (sha-256-update! m (if we-start our their))
+      (sha-256-update! m (if we-start their our))
+      (sha-256-update! m (pack "!Q" (otr-state-secure-session-id (*state*))))
+      (sha-256-update! m user-input)
+      (sha-256-finish! m)
+      (bytevector->uint (sha-256->bytevector m))))
+
+  (define (smp-hash version . ints)
+    (bytevector->uint
+     (sha-256->bytevector (apply sha-256 (make-bytevector 1 version)
+                                 (map uint->mpi ints)))))
+
+  (define (send-smp type . ints)
+    (print "Sending SMP values: " ints)
+    (otr-send-encrypted! (*state*) "" (tlv-encode type (apply bytevector-append
+                                                              (pack "!L" (length ints))
+                                                              (map uint->mpi ints)))))
+
+  (define (smp-goto next)
+    (smp-state-next-set! (otr-state-smp (*state*)) next))
+
+  (define (save-smp-values . x)
+    (print "New SMP values: " x)
+    (smp-state-values-set! (otr-state-smp (*state*))
+                           (append x (smp-state-values
+                                      (otr-state-smp (*state*))))))
+
+  (define (get-smp-value id)
+    (cond ((memq id (smp-state-values
+                     (otr-state-smp (*state*))))
+           => cadr)
+          (else (error 'get-smp-value "undefined value" id))))
+
+  (define (random-exponent)
+    ;; "Pick random exponents" in the spec. Everything else is done
+    ;; modulo `n', so presumably this should also be 1536 bits.
+    (bytevector->uint (make-random-bytevector 1536/8)))
+
+  ;; This takes one TLV from the correspondent and carefully crafts a
+  ;; witty reply.
+  (define (handle-smp tlv)
+    (define (abort)
+      (print "Aborting SMP.")
+      (otr-state-smp-set! (*state*) (make-smp-state))
+      (unless (= (car tlv) tlv-smp-abort)
+        (otr-send-encrypted! (*state*) "" (tlv-encode tlv-smp-abort #vu8()))))
+    (define (get-ints)
+      (let ((p (open-bytevector-input-port (cdr tlv))))
+        (apply values (map-in-order
+                       (lambda (i)
+                         (bytevector->uint (get-bytevector p (get-unpack p "!L"))))
+                       (iota (get-unpack p "!L"))))))
+    (guard (exn
+            (else
+             (print "SMP error: " exn)
+             (abort)))
+      (let ((smp (otr-state-smp (*state*)))
+            (type (car tlv)))
+        (print "SMP " type " ")
+
+        (case (smp-state-next smp)
+          ((expect1)
+           (if (or (= type tlv-smp-1)
+                   (= type tlv-smp-1q))
+               (let-values (((g2a c2 D2 g3a c3 D3) (get-ints)))
+                 (for-each print (list 'g2a g2a 'c2 c2 'D2 D2 'g3a g3a 'c3 c3 'D3 D3))
+                 ;; TODO: sanity checks on the incoming values
+                 ;; Verify zero-knowledge proofs:
+                 (unless (= c2 (smp-hash 1 (mod (* (expt-mod g D2 n) (expt-mod g2a c2 n)) n)))
+                   (error 'smp-expect1 "c2 is bad"))
+                 (unless (= c3 (smp-hash 2 (mod (* (expt-mod g D3 n) (expt-mod g3a c3 n)) n)))
+                   (error 'smp-expect1 "c3 is bad"))
+                 (save-smp-values 'g2a g2a 'g3a g3a)
+                 ;; Wait for the local secret. TODO: get the secret
+                 ;; from 1q messages.
+                 (queue-data 'authentication 'expecting-secret)
+                 (smp-goto 'expecting-secret))
+               (abort)))
+          ((expect2)
+           (if (= type tlv-smp-2)
+               (print 'smp2)
+               (abort)))
+          ((expect3)
+           (if (= type tlv-smp-3)
+               (let-values (((Pa Qa cP D5 D6 Ra cR D7) (get-ints)))
+                 ;; TODO: sanity checks on the incoming values
+                 (unless (= cP (smp-hash 6 (mod (* (expt-mod (get-smp-value 'g3) D5 n)
+                                                   (expt-mod Pa cP n))
+                                                n)
+                                         (mod (* (expt-mod g D5 n)
+                                                 (expt-mod (get-smp-value 'g2) D6 n)
+                                                 (expt-mod Qa cP n))
+                                              n)))
+                   (error 'smp-expect3 "cP is bad"))
+                 (let ((Pa/Pb (mod (* Pa (expt-mod (get-smp-value 'Pb) -1 n)) n))
+                       (Qa/Qb (mod (* Qa (expt-mod (get-smp-value 'Qb) -1 n)) n))
+                       (b3 (get-smp-value 'b3)))
+                   (unless (= cR (smp-hash 7 (mod (* (expt-mod g D7 n)
+                                                     (expt-mod (get-smp-value 'g3a) cR n))
+                                                  n)
+                                           (mod (* (expt-mod Qa/Qb D7 n)
+                                                   (expt-mod Ra cR n))
+                                                n)))
+                     (error 'smp-expect3 "cR is bad"))
+                   (let ((Rab (expt-mod Ra b3 n)))
+                     ;; Tell the caller if authentication worked or not:
+                     (let* ((r7 (random-exponent))
+                            (Rb (expt-mod Qa/Qb b3 n))
+                            (cR (smp-hash 8 (expt-mod g r7 n)
+                                          (expt-mod Qa/Qb r7 n)))
+                            (D7 (mod (- r7 (* b3 cR)) order)))
+                       (send-smp tlv-smp-4 Rb cR D7)
+                       (queue-data 'authentication (= Pa/Pb Rab))
+                       (smp-goto 'expect1)))))
+
+               (abort)))
+          ((expect4)
+           (if (= type tlv-smp-4)
+               (print 'smp4)
+               (abort)))
+          (else (abort))))))
+
+  ;; This procedure is used to continue or initiate an SMP
+  ;; authentication with the correspondent.
+  (define (otr-authenticate! state secret . question)
+    ;; The secret is called 'y' or 'x' in the protocol spec
+    (parameterize ((*state* state))
+      (let ((smp (otr-state-smp state))
+            (y (smp-secret secret #f)))
+        (case (smp-state-next smp)
+          ((expecting-secret)
+           (print "constructing an smp-2 message")
+           (let ((b2 (random-exponent))
+                 (b3 (random-exponent))
+                 (r2 (random-exponent))
+                 (r3 (random-exponent))
+                 (r4 (random-exponent))
+                 (r5 (random-exponent))
+                 (r6 (random-exponent)))
+             (let* ((g2b (expt-mod g b2 n))
+                    (g3b (expt-mod g b3 n))
+                    ;; Zero-knowledge proofs:
+                    (c2 (smp-hash 3 (expt-mod g r2 n)))
+                    (D2 (mod (- r2 (* b2 c2)) order))
+                    (c3 (smp-hash 4 (expt-mod g r3 n)))
+                    (D3 (mod (- r3 (* b3 c3)) order)))
+               (let ((g2 (expt-mod (get-smp-value 'g2a) b2 n))
+                     (g3 (expt-mod (get-smp-value 'g3a) b3 n)))
+                 (let ((Pb (expt-mod g3 r4 n))
+                       (Qb (mod (* (expt-mod g r4 n)
+                                   (expt-mod g2 y n))
+                                n)))
+                   ;; More zero-knowledge proofs:
+                   (let* ((cP (smp-hash 5 (expt-mod g3 r5 n)
+                                        (mod (* (expt-mod g r5 n)
+                                                (expt-mod g2 r6 n))
+                                             n)))
+                          (D5 (mod (- r5 (* r4 cP)) order))
+                          (D6 (mod (- r6 (* y cP)) order)))
+                     (save-smp-values 'g2 g2 'g3 g3 'b3 b3 'Pb Pb 'Qb Qb)
+                     (send-smp tlv-smp-2 g2b c2 D2 g3b c3 D3 Pb Qb cP D5 D6)
+                     (smp-goto 'expect3)))))))
+          ((expect1)
+           (print "would construct an smp-1 message, if I had it in me")
+           ;; TODO: construct the initial message
+           )
+          (else
+           ;; TODO:
+           #f)
+          )))
+
+
 
 ;;; Everything below here deals with decoding and encoding messages
 
@@ -637,13 +863,14 @@
                             ;; know here if a reply to this encrypted
                             ;; message will be generated anyway.
                             (let ((tlvs (tlv-decode tlvpart)))
-                              (cond ((assv tlv-finish tlvs) =>
+                              (cond ((assv tlv-disconnect tlvs) =>
                                      (lambda (_)
                                        (forget-session! (*state*))
                                        (queue-data 'session-finished 'by-them)
                                        (plaintext-state (recv))))
                                     (else
-                                     (print "TLVs: " tlvs)))))))
+                                     (print "TLVs: " tlvs)
+                                     (for-each handle-smp (filter smp-tlv? tlvs))))))))
                        (else
                         (unless (bytevector=? msg #vu8())
                           (queue-data 'encrypted (utf8->string msg))))))))
@@ -654,7 +881,7 @@
 
   ;; Alice's part of the data exchange phase. Used to send an
   ;; encrypted message to the correspondent.
-  (define (otr-send-encrypted! state msg)
+  (define (otr-send-encrypted! state msg . tlvs)
     (define (make-next-key! state)
       (let ((latest-id (caar (otr-state-our-keys state))))
         (when (= (otr-state-our-latest-acked state) latest-id)
@@ -669,14 +896,16 @@
     ;; This will go in the encrypted message part
     (define (encode-message msg tlvs)
       (let ((msg (string->utf8 msg)))
-        (bytevector-append (cond ((bytevector-u8-index-right msg 0) =>
-                                  (lambda (i) (subbytevector msg 0 i)))
-                                 (else msg))
-                           #vu8(0)
-                           ;; Slightly random padding
-                           (tlv-encode tlv-null (make-bytevector
-                                                 (random-integer 7)
-                                                 0)))))
+        (apply bytevector-append
+               (cond ((bytevector-u8-index-right msg 0) =>
+                      (lambda (i) (subbytevector msg 0 i)))
+                     (else msg))
+               #vu8(0)
+               ;; Slightly random padding
+               (tlv-encode tlv-null (make-bytevector
+                                     (random-integer 7)
+                                     0))
+               tlvs)))
     (parameterize ((*state* state))
       (make-next-key! state)
       (otr-state-our-ctr-set! state (+ 1 (otr-state-our-ctr state)))
@@ -685,7 +914,7 @@
             (Y (assv (otr-state-our-latest-acked state) (otr-state-our-pubkeys state)))
             (y (assv (otr-state-our-latest-acked state) (otr-state-our-keys state)))
             (ctr (otr-state-our-ctr state))
-            (msg (encode-message msg '())))
+            (msg (encode-message msg tlvs)))
         (let* ((secbytes (uint->mpi (expt-mod (cdr X) (cdr y) n)))
                (sendbyte (if (> (cdr Y) (cdr X)) 1 2))
                ;;(recvbyte (if (> (cdr Y) (cdr X)) 2 1))
@@ -707,10 +936,7 @@
                                      (sha-1->bytevector
                                       (hmac-sha-1 mackey data))
                                      (pack "!L" (bytevector-length old-keys))
-                                     old-keys))
-
-            ;; TODO: This is not a good interface
-            (empty-queue! state))))))
+                                     old-keys)))))))
 
 
   ;; Updates the OTR state with the given message and returns a list
@@ -737,8 +963,7 @@
                        (base64-decode (substring msg (+ i (string-length "?OTR:"))
                                                  (string-index-right msg #\.))))))
                (cond ((= (get-unpack p "!S") otr-version)
-                      (return state p)
-                      (empty-queue! state))
+                      (return state p))
                      (else '())))))
           ((string-contains msg "?OTR Error:") =>
            (lambda (i)
@@ -753,15 +978,13 @@
              (cond ((string-contains msg v2-tag (+ i (string-length whitespace-prefix)))
                     ;; They offer OTRv2
                     (otr-state-k-set! state start-ake)
-                    (return state #f)
-                    (empty-queue! state))
+                    (return state #f))
                    (else
                     '()))))             ;offer not taken
           ((or (string-contains msg "?OTR?")
                (string-contains msg "?OTRv"))
            ;; TODO: handle the other combinations of versions
            (otr-state-k-set! state start-ake)
-           (return state #f)
-           (empty-queue! state))
+           (return state #f))
 
           (else '()))))

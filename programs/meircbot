@@ -181,28 +181,41 @@
 
     ((src 'PRIVMSG (? its-me? tgt) (? for-otr? msg))
      ;; Off-the-record
-     (let* ((state (get-otr-state src))
-            (result (otr-update! state msg)))
-       ;; TODO: might be too much for the server's flood protection....
-       (parameterize ((*in-otr* #t))
-         (for-each (match-lambda
-                    (('outgoing . line)
-                     (fmt 'PRIVMSG (prefix-nick src) line))
-                    (('encrypted . msg)
-                     (log-msg "OTR <=" src 'PRIVMSG (list tgt msg))
-                     (handle-message (list src 'PRIVMSG tgt msg)))
-                    (('session-established . _)
-                     (print "OTR session established.")
-                     (print "Their fingerprint: "
-                            (otr-hash-public-key (otr-state-their-dsa-key state)))
-                     (print "Our fingerprint: "
-                            (otr-hash-public-key (dsa-private->public
-                                                  (otr-state-our-dsa-key state))))
-                     (print "Secure Session ID: "
-                            (otr-format-session-id (otr-state-secure-session-id state))))
-                    (x
-                     (print "Unhandled OTR result: " x)))
-                   result))))
+     (let ((state (get-otr-state src)))
+       (otr-update! state msg)
+       ;; TODO: is too much for the server's flood protection.
+       (parameterize ((*in-otr* state))
+         (let lp ()
+           (let ((queue (otr-empty-queue! state)))
+             (unless (null? queue)
+               (for-each
+                (match-lambda
+                 (('outgoing . line)
+                  (fmt 'PRIVMSG (prefix-nick src) line))
+                 (('encrypted . msg)
+                  (log-msg "OTR <=" src 'PRIVMSG (list tgt msg))
+                  (handle-message (list src 'PRIVMSG tgt msg)))
+                 (('session-established . _)
+                  (print "OTR session established.")
+                  (print "Their fingerprint: "
+                         (otr-hash-public-key (otr-state-their-dsa-key state)))
+                  (print "Our fingerprint: "
+                         (otr-hash-public-key (dsa-private->public
+                                               (otr-state-our-dsa-key state))))
+                  (print "Secure Session ID: "
+                         (otr-format-session-id (otr-state-secure-session-id state))))
+                 (('authentication . 'expecting-secret)
+                  (print "What's this? Secret code? Poems!")
+                  ;; XXX: this is what forces us to loop...
+                  (otr-authenticate! state (string->utf8 "password")))
+                 (('authentication . #t)
+                  (otr-send-encrypted! state "Congratulations! You know how to type 'password'!"))
+                 (('authentication . #f)
+                  (otr-send-encrypted! state "The password is: password."))
+                 (x
+                  (print "Unhandled OTR result: " x)))
+                queue)
+               (lp)))))))
 
     ((src 'PRIVMSG (? its-me? tgt) msg)
      ;; Private message
@@ -210,9 +223,11 @@
        (cond ((*in-otr*)
               (let ((outmsg (string-append "From you via OTR: '" msg "'")))
                 (log-msg "OTR =>" src 'PRIVMSG (list tgt outmsg))
-                (for-each (lambda (line)
-                            (fmt 'PRIVMSG (prefix-nick src) (cdr line)))
-                          (otr-send-encrypted! (get-otr-state src) outmsg))))
+                (otr-send-encrypted! (*in-otr*) outmsg)
+                (for-each (match-lambda
+                           (('outgoing . line)
+                            (fmt 'PRIVMSG (prefix-nick src) line)))
+                          (otr-empty-queue! (*in-otr*)))))
              ((*in-fish*)
               (let ((msg (string-append "This is you: " (string-upcase msg)
                                         " BLUB BLUB BLUB...")))
