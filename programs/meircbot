@@ -150,8 +150,8 @@
   (cond ((assp (cut address=? <> src) *otr-states*) => cdr)
         (else
          (print "Making a new OTR state for " src)
-         ;; TODO: find the real MSS (which depends on our mask), not 450.
-         (let ((state (make-otr-state *otr-key* 450)))
+         ;; TODO: find the real MSS (which depends on our mask), not 417.
+         (let ((state (make-otr-state *otr-key* 417)))
            (set! *otr-states* (cons (cons src state) *otr-states*))
            state))))
 
@@ -222,8 +222,14 @@
      (let ((msg (string-trim-right msg)))
        (cond ((*in-otr*)
               (let ((outmsg (string-append "From you via OTR: '" msg "'")))
-                (log-msg "OTR =>" src 'PRIVMSG (list tgt outmsg))
-                (otr-send-encrypted! (*in-otr*) outmsg)
+                (cond ((string=? msg "auth")
+                       ;; Start an authentication request, just for testing
+                       ;; the feature.
+                       (log-msg "OTR auth =>" src 'PRIVMSG (list tgt #f))
+                       (otr-authenticate! (*in-otr*) (string->utf8 "password")))
+                      (else
+                       (log-msg "OTR =>" src 'PRIVMSG (list tgt outmsg))
+                       (otr-send-encrypted! (*in-otr*) outmsg)))
                 (for-each (match-lambda
                            (('outgoing . line)
                             (fmt 'PRIVMSG (prefix-nick src) line)))
