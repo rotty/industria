@@ -1,4 +1,3 @@
-#!r6rs
 ;; -*- mode: scheme; coding: utf-8 -*-
 ;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
 ;;
@@ -14,6 +13,7 @@
 ;;
 ;; You should have received a copy of the GNU General Public License
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#!r6rs
 
 ;; Off-the-Record Messaging Protocol version 2
 
@@ -32,7 +32,7 @@
 ;; TODO: drop the ! on some of the exported procedures?
 ;; TODO: let the library user decide what errors to send
 
-(library (weinholt net otr (0 0 20090929))
+(library (weinholt net otr (0 0 20091001))
   (export otr-message?
           otr-update!
           otr-send-encrypted!
@@ -45,9 +45,11 @@
           otr-hash-public-key
           otr-format-session-id)
   (import (rnrs)
-          (only (srfi :1 lists) iota map-in-order)
+          (only (srfi :1 lists) iota map-in-order
+                alist-delete)
           (only (srfi :13 strings) string-contains string-join
-                string-index string-index-right string-pad)
+                string-index string-index-right string-pad
+                string-trim-right)
           (srfi :26 cut)
           (srfi :27 random-bits)
           (srfi :39 parameters)
@@ -64,9 +66,14 @@
 
 ;;; Helpers
 
-  (define (print . x)
-    ;; (for-each display x) (newline)
-    (values))
+  (define-syntax print
+    (syntax-rules ()
+      ((_ . args)
+       (begin
+         (for-each display (list . args))
+         (newline)))
+      ((_ . args) (values))))
+
   (define (hex x)
     (string-append "#x" (number->string x 16)))
 
@@ -89,8 +96,10 @@
         (error 'get-bytevector "short read" n (bytevector-length ret)))
       ret))
 
+  ;; OTR's multiple precision integer format.
   (define (mpi->uint bv)
-    (bytevector-uint-ref bv 4 (endianness big) (bytevector-u32-ref bv 0 (endianness big))))
+    (bytevector-uint-ref bv 4 (endianness big)
+                         (bytevector-u32-ref bv 0 (endianness big))))
 
   (define (uint->mpi int)
     (let* ((len (div (bitwise-and -8 (+ 7 (bitwise-length int))) 8))
@@ -123,7 +132,7 @@
     (let ((keytype (get-unpack p "!S")))
       (if (= keytype key-type-dsa)
           (get-public-dsa-key p)
-          (error 'auth-state-awaiting-reveal-sig "Bad keytype"))))
+          (error 'auth-state-awaiting-reveal-sig "Bad keytype" keytype))))
 
   (define (sign-public-key key secret keyid Y X)
     ;; Signs the public part of the private key and returns pub[B],
@@ -305,7 +314,7 @@
             '()
             plaintext-state #f
             '() '() 0 '()
-            0 0
+            '() 0
             #f)))))
 
   (define-record-type smp-state
@@ -327,7 +336,7 @@
     (otr-state-their-pubkeys-set! state (list (cons their-keyid X)))
     (otr-state-their-dsa-key-set! state their-dsa-key)
     (otr-state-secure-session-id-set! state ssid)
-    (otr-state-their-ctr-set! state 0)
+    (otr-state-their-ctr-set! state '())
     (otr-state-our-ctr-set! state 0)
     (otr-state-our-latest-acked-set! state our-keyid)
     (otr-state-smp-set! state (make-smp-state)))
@@ -338,19 +347,25 @@
     (otr-state-their-pubkeys-set! state '())
     (otr-state-their-dsa-key-set! state #f)
     (otr-state-secure-session-id-set! state 0)
-    (otr-state-their-ctr-set! state 0)
+    (otr-state-their-ctr-set! state '())
     (otr-state-our-ctr-set! state 0)
     (otr-state-our-latest-acked-set! state 0)
     (otr-state-smp-set! state #f))
 
-  (define (otr-message? msg)
-    (cond ((string-contains msg "?OTR"))
-          ((string-contains msg whitespace-prefix) =>
-           ;; Tagged plaintext
-           (lambda (i)
-             ;; They offer OTRv2?
-             (string-contains msg v2-tag (+ i (string-length whitespace-prefix)))))
-          (else #f)))
+  ;; Verify that an incoming counter value is larger than the previous
+  ;; value used for these key ids.
+  (define (verify-ctr state ctr skeyid rkeyid)
+    (print (list 'their-ctr (otr-state-their-ctr state)))
+    (cond ((assoc (cons skeyid rkeyid) (otr-state-their-ctr state))
+           => (lambda (c) (> ctr (cdr c))))
+          (else #t)))
+
+  ;; Associate a new counter value with these key ids.
+  (define (store-ctr! state ctr skeyid rkeyid)
+    (otr-state-their-ctr-set! state
+                              (cons (cons (cons skeyid rkeyid) ctr)
+                                    (alist-delete (cons skeyid rkeyid)
+                                                  (otr-state-their-ctr state)))))
 
   (define (fragment outmsg mss)
     ;; Splits an outgoing message into pieces that fit in the maximum
@@ -882,23 +897,19 @@
       (cond ((= type msg-data)
              (let*-values (((flags skeyid rkeyid) (get-unpack p "!uCLL"))
                            ((next-key) (get-bytevector p (get-unpack p "!L")))
-                           ((ctr) (bitwise-arithmetic-shift-left (get-unpack p "!Q") 64))
+                           ((ctr) (get-unpack p "!Q"))
                            ((msg) (get-bytevector p (get-unpack p "!L")))
                            ((pos) (port-position p))
                            ((mac) (get-bytevector p 160/8))
                            ((old-keys) (get-bytevector p (get-unpack p "!L"))))
-               (print "Revealed MAC keys: " old-keys)
-               ;;(assert (port-eof? p))
                ;; TODO: handle flag-ignore-unreadable
+               (assert (port-eof? p))
                (assert (and (not (zero? ctr))))
-               ;; TODO: manage their CTR
-               #;
-               (unless (> ctr (otr-state-their-ctr (*state*)))
-                 (send-error "You transmitted an unreadable encrypted message (CTR).")
+               (unless (verify-ctr (*state*) ctr skeyid rkeyid)
+                 (send-error "You transmitted an unreadable encrypted message.")
                  (error 'msg-state-encrypted "Bad CTR"))
                (print (list 'flags flags 'skeyid skeyid 'rkeyid rkeyid
-                            'ctr (number->string ctr 16)
-                            'old-keys old-keys))
+                            'ctr (hex ctr) 'old-keys old-keys))
                (let* ((X (cdr (assv skeyid (otr-state-their-pubkeys (*state*)))))
                       (Y (cdr (assv rkeyid (otr-state-our-pubkeys (*state*)))))
                       (y (cdr (assv rkeyid (otr-state-our-keys (*state*)))))
@@ -907,28 +918,29 @@
                       (recvbyte (if (> Y X) 2 1))
                       (enckey (subbytevector (h1 recvbyte secbytes) 0 16))
                       (mackey (sha-1->bytevector (sha-1 enckey))))
-                 (print "X: " (hex X))
-                 (print "y: " (hex y))
+                 (print "MAC key: " (list skeyid rkeyid mackey))
 
                  (set-port-position! p 0)
                  (unless (bytevector=? mac (sha-1->bytevector
                                             (hmac-sha-1 mackey (get-bytevector p pos))))
-                   (send-error "You transmitted an unreadable encrypted message (MAC).")
+                   (send-error "You transmitted an unreadable encrypted message.")
                    (error 'msg-state-encrypted "Bad MAC"))
-                 (otr-state-their-ctr-set! (*state*) ctr)
+
+                 (store-ctr! (*state*) ctr skeyid rkeyid)
                  (otr-state-our-latest-acked-set! (*state*) rkeyid)
                  (unless (assv (+ skeyid 1) (otr-state-their-pubkeys (*state*)))
                    ;; Add their next key
                    (print "Added key: " (+ skeyid 1) " "
                           (hex (bytevector->uint next-key)))
-                   (otr-state-their-pubkeys-set! (*state*)
-                                                 (cons (cons (+ skeyid 1)
-                                                             (bytevector->uint next-key))
-                                                       (otr-state-their-pubkeys (*state*))))
+                   (otr-state-their-pubkeys-set!
+                    (*state*) (cons (cons (+ skeyid 1)
+                                          (bytevector->uint next-key))
+                                    (otr-state-their-pubkeys (*state*))))
                    (print "Their keys: " (otr-state-their-pubkeys (*state*))))
                  ;; Decrypt the message
                  (aes-ctr! msg 0 msg 0 (bytevector-length msg)
-                           (expand-aes-key enckey) ctr)
+                           (expand-aes-key enckey)
+                           (bitwise-arithmetic-shift-left ctr 64))
                  (cond ((bytevector-u8-index msg 0) =>
                         (lambda (nulpos)
                           (let ((msgpart (subbytevector msg 0 nulpos))
@@ -1014,9 +1026,19 @@
                                      (pack "!L" (bytevector-length old-keys))
                                      old-keys)))))))
 
-  ;; Updates the OTR state with the given message and returns a list
-  ;; of strings to send to the correspondent, incoming encrypted
-  ;; messages, etc.
+  ;; Is this a message intended for OTR? Such messages should be given
+  ;; to otr-update!.
+  (define (otr-message? msg)
+    (cond ((string-contains msg "?OTR"))
+          ((string-contains msg whitespace-prefix) =>
+           ;; Tagged plaintext
+           (lambda (i)
+             ;; They offer OTRv2?
+             (string-contains msg v2-tag (+ i (string-length whitespace-prefix)))))
+          (else #f)))
+
+  ;; Updates the OTR state with the given message. The caller
+  ;; retrieves the result with otr-empty-queue!.
   (define (otr-update! state msg)
     (cond ((string-contains msg "?OTR,") =>
            ;; Fragmented message
@@ -1046,10 +1068,11 @@
              (queue-data 'remote-error
                          (substring msg (+ i (string-length "?OTR Error:"))
                                     (string-length msg)))))
-          ;; TODO: strip the tag and pass through the plaintext
           ((string-contains msg whitespace-prefix) =>
            ;; Tagged plaintext
            (lambda (i)
+             (parameterize ((*state* state))
+               (queue-data 'unencrypted (string-trim-right msg)))
              (cond ((string-contains msg v2-tag (+ i (string-length whitespace-prefix)))
                     ;; They offer OTRv2
                     (otr-state-k-set! state start-ake)
