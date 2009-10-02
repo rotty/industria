@@ -19,8 +19,6 @@
 
 ;; http://www.cypherpunks.ca/otr/Protocol-v2-3.1.0.html
 
-;; TODO: reveal old MAC keys. Forget old D-H keys. Very important.
-
 ;; TODO: fix the state transitions (most are probably missing)
 ;; TODO: better interface for the outgoing messages etc
 ;; TODO: Petite Chez has trouble with the AKE (bad sigs).
@@ -32,7 +30,7 @@
 ;; TODO: drop the ! on some of the exported procedures?
 ;; TODO: let the library user decide what errors to send
 
-(library (weinholt net otr (0 0 20091001))
+(library (weinholt net otr (0 0 20091002))
   (export otr-message?
           otr-update!
           otr-send-encrypted!
@@ -46,7 +44,7 @@
           otr-format-session-id)
   (import (rnrs)
           (only (srfi :1 lists) iota map-in-order
-                alist-delete)
+                alist-delete take)
           (only (srfi :13 strings) string-contains string-join
                 string-index string-index-right string-pad
                 string-trim-right)
@@ -68,6 +66,7 @@
 
   (define-syntax print
     (syntax-rules ()
+      #;
       ((_ . args)
        (begin
          (for-each display (list . args))
@@ -293,6 +292,8 @@
             (mutable their-pubkeys)
             (mutable our-latest-acked)
             (mutable our-pubkeys)
+            ;; MAC keys
+            (mutable mackeys)
             ;; Last used top half of the AES counter
             (mutable their-ctr)
             (mutable our-ctr)
@@ -314,6 +315,7 @@
             '()
             plaintext-state #f
             '() '() 0 '()
+            '()
             '() 0
             #f)))))
 
@@ -366,6 +368,37 @@
                               (cons (cons (cons skeyid rkeyid) ctr)
                                     (alist-delete (cons skeyid rkeyid)
                                                   (otr-state-their-ctr state)))))
+
+  ;; Remove counter values that are no longer needed.
+  (define (remove-old-ctrs! state)
+    (otr-state-their-ctr-set!
+     state
+     (filter (lambda (c)
+               (or (assv (caar c) (otr-state-their-pubkeys (*state*)))
+                   (assv (cdar c) (otr-state-our-pubkeys (*state*)))))
+             (otr-state-their-ctr state))))
+
+  ;; Remember the MAC key associated with these key ids.
+  (define (store-mackey! state mackey their-keyid our-keyid)
+    (let ((k (cons their-keyid our-keyid)))
+      (unless (assoc k (otr-state-mackeys state))
+        (print "Remembering MAC key: " (list their-keyid our-keyid mackey))
+        (otr-state-mackeys-set! state
+                                (cons (cons k mackey)
+                                      (otr-state-mackeys state))))))
+
+  ;; Remove and return MAC keys that can not possibly be used any
+  ;; more.
+  (define (remove-old-mackeys! state)
+    (let-values (((remembered forgotten)
+                  (partition
+                   (lambda (k)
+                     (or (assv (caar k) (otr-state-their-pubkeys (*state*)))
+                         (assv (cdar k) (otr-state-our-pubkeys (*state*)))))
+                   (otr-state-mackeys state))))
+      (otr-state-mackeys-set! state remembered)
+      (map cdr forgotten)))
+
 
   (define (fragment outmsg mss)
     ;; Splits an outgoing message into pieces that fit in the maximum
@@ -901,7 +934,10 @@
                            ((msg) (get-bytevector p (get-unpack p "!L")))
                            ((pos) (port-position p))
                            ((mac) (get-bytevector p 160/8))
-                           ((old-keys) (get-bytevector p (get-unpack p "!L"))))
+                           ((old-keys)
+                            (let ((len (get-unpack p "!L")))
+                              (map-in-order (lambda (_) (get-bytevector-n p 20))
+                                            (iota (div len 20))))))
                ;; TODO: handle flag-ignore-unreadable
                (assert (port-eof? p))
                (assert (and (not (zero? ctr))))
@@ -918,7 +954,6 @@
                       (recvbyte (if (> Y X) 2 1))
                       (enckey (subbytevector (h1 recvbyte secbytes) 0 16))
                       (mackey (sha-1->bytevector (sha-1 enckey))))
-                 (print "MAC key: " (list skeyid rkeyid mackey))
 
                  (set-port-position! p 0)
                  (unless (bytevector=? mac (sha-1->bytevector
@@ -926,17 +961,30 @@
                    (send-error "You transmitted an unreadable encrypted message.")
                    (error 'msg-state-encrypted "Bad MAC"))
 
+                 (store-mackey! (*state*) mackey skeyid rkeyid)
                  (store-ctr! (*state*) ctr skeyid rkeyid)
-                 (otr-state-our-latest-acked-set! (*state*) rkeyid)
+                 (unless (= (otr-state-our-latest-acked (*state*)) rkeyid)
+                   ;; The correspondent used a new key that we just
+                   ;; sent him, so it's ok to reset our counter. It's
+                   ;; also ok to forget our previous D-H key.
+                   (otr-state-our-ctr-set! (*state*) 0)
+                   (otr-state-our-latest-acked-set! (*state*) rkeyid)
+                   (otr-state-our-keys-set! (*state*) (take (otr-state-our-keys (*state*)) 1))
+                   (otr-state-our-pubkeys-set! (*state*) (take (otr-state-our-pubkeys (*state*)) 1)))
+                 (for-each (lambda (k)
+                             (queue-data 'they-revealed k))
+                           old-keys)
+                 
                  (unless (assv (+ skeyid 1) (otr-state-their-pubkeys (*state*)))
                    ;; Add their next key
                    (print "Added key: " (+ skeyid 1) " "
                           (hex (bytevector->uint next-key)))
                    (otr-state-their-pubkeys-set!
-                    (*state*) (cons (cons (+ skeyid 1)
-                                          (bytevector->uint next-key))
-                                    (otr-state-their-pubkeys (*state*))))
+                    (*state*) (take (cons (cons (+ skeyid 1) (bytevector->uint next-key))
+                                          (otr-state-their-pubkeys (*state*)))
+                                    2))
                    (print "Their keys: " (otr-state-their-pubkeys (*state*))))
+                 (remove-old-ctrs! (*state*))
                  ;; Decrypt the message
                  (aes-ctr! msg 0 msg 0 (bytevector-length msg)
                            (expand-aes-key enckey)
@@ -960,13 +1008,15 @@
                                        (plaintext-state (recv))))
                                     (else
                                      (print "TLVs: " tlvs)
-                                     (for-each handle-smp (filter smp-tlv? tlvs))))))))
+                                     (for-each handle-smp (filter smp-tlv? tlvs))
+                                     (msg-state-encrypted (recv))))))))
                        (else
                         (unless (bytevector=? msg #vu8())
-                          (queue-data 'encrypted (utf8->string msg))))))))
+                          (queue-data 'encrypted (utf8->string msg)))
+                        (msg-state-encrypted (recv)))))))
             (else
-             (send-error "That was unexpected of you.")))
-      (msg-state-encrypted (recv))))
+             (send-error "That was unexpected of you.") ;XXX:
+             (msg-state-encrypted (recv))))))
 
   ;; Alice's part of the data exchange phase. Used to send an
   ;; encrypted message to the correspondent.
@@ -978,10 +1028,12 @@
           (let-values (((y Y) (make-secret g n dh-length 100)))
             ;; (print "Next public key: " (+ latest-id 1) " -- " (hex Y))
             ;; (print "Next private key: " (+ latest-id 1) " -- " (hex y))
-            (otr-state-our-keys-set! state (cons (cons (+ latest-id 1) y)
-                                                 (otr-state-our-keys state)))
-            (otr-state-our-pubkeys-set! state (cons (cons (+ latest-id 1) Y)
-                                                    (otr-state-our-pubkeys state)))))))
+            (otr-state-our-keys-set! state (take (cons (cons (+ latest-id 1) y)
+                                                       (otr-state-our-keys state))
+                                                 2))
+            (otr-state-our-pubkeys-set! state (take (cons (cons (+ latest-id 1) Y)
+                                                          (otr-state-our-pubkeys state))
+                                                    2))))))
     ;; This will go in the encrypted message part
     (define (encode-message msg tlvs)
       (let ((msg (string->utf8 msg)))
@@ -1009,22 +1061,25 @@
                ;;(recvbyte (if (> (cdr Y) (cdr X)) 2 1))
                (enckey (subbytevector (h1 sendbyte secbytes) 0 16))
                (mackey (sha-1->bytevector (sha-1 enckey)))
-               ;; TODO: put in old MAC keys here
-               (old-keys #vu8()))
+               (old-keys (remove-old-mackeys! (*state*))))
           ;; Encrypt the message
           (aes-ctr! msg 0 msg 0 (bytevector-length msg) (expand-aes-key enckey)
                     (bitwise-arithmetic-shift-left ctr 64))
+          (print "Revealing MAC keys: " old-keys)
+          ;; XXX: should read those security papers before doing this:
+          ;; (store-mackey! (*state*) mackey (car X) (car Y))
+          (print "Sending with MAC key: " mackey)
           (let ((data (bytevector-append
                        (pack "!SC" otr-version msg-data)
                        (pack "!uCLL" 0 (car Y) (car X))
                        (uint->mpi (cdr next-Y))
                        (pack "!Q" ctr)
                        (pack "!L" (bytevector-length msg)) msg)))
-            (send (bytevector-append data
-                                     (sha-1->bytevector
-                                      (hmac-sha-1 mackey data))
-                                     (pack "!L" (bytevector-length old-keys))
-                                     old-keys)))))))
+            (send (apply bytevector-append
+                         data
+                         (sha-1->bytevector (hmac-sha-1 mackey data))
+                         (pack "!L" (apply + (map bytevector-length old-keys)))
+                         old-keys)))))))
 
   ;; Is this a message intended for OTR? Such messages should be given
   ;; to otr-update!.
@@ -1065,9 +1120,10 @@
            (lambda (i)
              ;; TODO: initiate AKE depending on policy
              (otr-state-k-set! state auth-state-none)
-             (queue-data 'remote-error
-                         (substring msg (+ i (string-length "?OTR Error:"))
-                                    (string-length msg)))))
+             (parameterize ((*state* state))
+               (queue-data 'remote-error
+                           (substring msg (+ i (string-length "?OTR Error:"))
+                                      (string-length msg))))))
           ((string-contains msg whitespace-prefix) =>
            ;; Tagged plaintext
            (lambda (i)
