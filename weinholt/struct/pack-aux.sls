@@ -18,13 +18,9 @@
 ;; Auxiliary library for (weinholt struct). Please don't use this
 ;; library directly.
 
-(library (weinholt struct pack-aux (1 0 20090825))
-    (export format-size roundb add)
-    (import (rnrs))
-
-  ;; (define (roundb x n)
-  ;;   (bitwise-and (+ x (- n 1))
-  ;;                (- n)))
+(library (weinholt struct pack-aux (1 0 20091003))
+  (export format-size roundb add)
+  (import (for (rnrs) (meta -1)))
 
   (define (add augend addend)
     (if (integer? augend)

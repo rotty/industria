@@ -148,10 +148,11 @@
 ;; syntax can handle non-constant offsets. Removed another unnecessary
 ;; size check in pack!. Added documentation and examples.
 
-(library (weinholt struct pack (1 4 20090826))
+(library (weinholt struct pack (1 4 20091003))
   (export format-size pack pack! unpack get-unpack)
   (import (rnrs)
-          (prefix (weinholt struct pack-aux (1 0)) aux:))
+          (for (prefix (weinholt struct pack-aux (1 0)) aux:)
+               expand run))
 
   (define-syntax unpack*
     (lambda (x)
