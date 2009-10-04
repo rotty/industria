@@ -59,8 +59,7 @@ http://srfi.schemers.org/srfi-103/srfi-103.html
 For MzScheme it is not enough to change an environment variable. Run
 something like this and ignore all the errors:
 
- find weinholt/ -name '*.sls' -and -not \
-   -regex '.*\(chezscheme\|ikarus\|ypsilon\).sls$' \
+ find weinholt/ -regex '[^.]*\(\.mzscheme\)?.sls' \
    -exec plt-r6rs --install {} \;
 
 This installs the libraries in ~/.plt-scheme/.
@@ -74,6 +73,9 @@ script removes one barrier to the distribution of Scheme scripts."
 You will need to work around this barrier yourself. Simply comment out
 the shebang line in each program you want to run and run it with the
 plt-r6rs program.
+
+MzScheme has its own SRFI libraries, so you will probably not need the
+ones from the Scheme Libraries Team.
 
 * AVAILABLE LIBRARIES
 ** (weinholt assembler x86)
