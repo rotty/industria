@@ -30,7 +30,7 @@
 ;; TODO: drop the ! on some of the exported procedures?
 ;; TODO: let the library user decide what errors to send
 
-(library (weinholt net otr (0 0 20091002))
+(library (weinholt net otr (0 0 20091004))
   (export otr-message?
           otr-update!
           otr-send-encrypted!
@@ -303,10 +303,9 @@
      (lambda (p)
        (lambda (dsa-key mss)
          (assert (dsa-private-key? dsa-key))
-         ;; It is not documented in the specification, but the DSA
-         ;; keys have to have a 160-bit q-parameter, or the reference
-         ;; implementation will reject the signatures. A 1024-bit DSA
-         ;; key will probably be OK.
+         ;; The DSA keys have to have a 160-bit q-parameter, or the
+         ;; reference implementation will reject the signatures. A
+         ;; 1024-bit DSA key will probably be OK.
          (assert (= 160/8 (bytevector-length
                            (uint->bytevector
                             (dsa-private-key-q dsa-key)))))
@@ -550,8 +549,7 @@
           (else (error 'get-smp-value "undefined value" id))))
 
   (define (random-exponent)
-    ;; "Pick random exponents" in the spec. Everything else is done
-    ;; modulo `n', so presumably this should also be 1536 bits.
+    ;; "Pick random exponents" in the spec.
     (bytevector->uint (make-random-bytevector 1536/8)))
 
   (define (random-value)
@@ -1139,4 +1137,8 @@
            ;; TODO: handle the other combinations of versions
            (otr-state-k-set! state start-ake)
            (return state #f))
-          (else #f))))
+          (else
+           ;; We might end up here if the corresponent used OTR
+           ;; fragmentation, but did not send a whitespace tag.
+           (parameterize ((*state* state))
+             (queue-data 'unencrypted msg))))))
