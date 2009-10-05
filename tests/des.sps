@@ -35,20 +35,6 @@
 
 (check (rivest) => '#vu8(#x1B #x1A #x2D #xDB #x4C #x64 #x24 #x38))
 
-(check (crypt "foodbard" "..") => "..o6avrdNBOA6")
-
-(check (crypt "test" "..") => "..9sjyf8zL76k")
-
-(check (crypt "X" "..") => "..XhpOnw6KMZg")
-
-(check (crypt "foobar" "Ax") => "AxTdjVtckZ0Rs")
-
-(check (crypt "ZZZZ" "zz") => "zz/CBDeUpwD26")
-
-(check (crypt "" "..") => "..X8NBuQ4l6uQ")
-
-(check (crypt "" "ZZ") => "ZZvIHp4MBMwSE")
-
 
 (define (test-tdea plaintext k1 k2 k3)
   ;; Returns the ciphertext and the deciphered ciphertext, which

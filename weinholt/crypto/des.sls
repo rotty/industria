@@ -25,8 +25,8 @@
 ;; use the One True order (lowest bit is bit zero). Or maybe I'm just
 ;; doing it wrong... :)
 
-(library (weinholt crypto des (1 0 20090821))
-  (export des-key-bad-parity? des! permute-key crypt
+(library (weinholt crypto des (1 0 20091005))
+  (export des-key-bad-parity? des! permute-key des-crypt
           tdea-permute-key tdea-encipher! tdea-decipher!
           tdea-cbc-encipher!
           tdea-cbc-decipher!)
@@ -297,7 +297,7 @@
   (define (make-list len init)
     (vector->list (make-vector len init)))
 
-  (define (crypt password salt)
+  (define (des-crypt password salt)
     (let* ((password-shifted (map (lambda (x) (fxarithmetic-shift-left (fxand x #x7f) 1))
                                   (bytevector->u8-list (string->utf8 password))))
            (keys (permute-key
