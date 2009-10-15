@@ -22,7 +22,7 @@
 ;; TODO: is this a fine way to generate entropy? The host's srfi-27
 ;; might be predictable and it might be initialized predictably.
 
-(library (weinholt crypto entropy (0 0 20090919))
+(library (weinholt crypto entropy (0 0 20091015))
   (export make-random-bytevector)
   (import (rnrs)
           (srfi :27 random-bits))
@@ -31,7 +31,9 @@
     (let* ((s (make-random-source))
            (make-int (random-source-make-integers s))
            (urandom (and (file-exists? "/dev/urandom")
-                         (open-file-input-port "/dev/urandom"))))
+                         (open-file-input-port "/dev/urandom"
+                                               (file-options)
+                                               (buffer-mode none)))))
       (lambda (len)
         (unless urandom
           (random-source-randomize! s))
