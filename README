@@ -6,7 +6,7 @@ place for me to put the Scheme code I write.
 
 Here's the project website:
 
-https://code.launchpad.net/~weinholt/scheme-libraries/industria
+<https://code.launchpad.net/~weinholt/scheme-libraries/industria>
 
 * LICENSING
 If nothing else is mentioned, the code is:
@@ -32,7 +32,7 @@ Short version: extend your Scheme library search path to include the
 industria directory.
 
 You will also need a few SRFI libraries which can be found here:
-https://code.launchpad.net/~scheme-libraries-team/scheme-libraries/srfi
+<https://code.launchpad.net/~scheme-libraries-team/scheme-libraries/srfi>
 
 I regularly test the code with Ikarus, Ypsilon and Petite Chez. Other
 R6RS implementations might work.
@@ -53,7 +53,7 @@ directory into your existing search path.
 SRFI-103 is attempting to standardize the environment variable, among
 other things:
 
-http://srfi.schemers.org/srfi-103/srfi-103.html
+<http://srfi.schemers.org/srfi-103/srfi-103.html>
 
 ** Special instructions for MzScheme
 For MzScheme it is not enough to change an environment variable. Run
