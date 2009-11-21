@@ -30,7 +30,7 @@
 ;; TODO: drop the ! on some of the exported procedures?
 ;; TODO: let the library user decide what errors to send
 
-(library (weinholt net otr (0 0 20091004))
+(library (weinholt net otr (0 0 20091121))
   (export otr-message?
           otr-update!
           otr-send-encrypted!
@@ -306,9 +306,7 @@
          ;; The DSA keys have to have a 160-bit q-parameter, or the
          ;; reference implementation will reject the signatures. A
          ;; 1024-bit DSA key will probably be OK.
-         (assert (= 160/8 (bytevector-length
-                           (uint->bytevector
-                            (dsa-private-key-q dsa-key)))))
+         (assert (= 160 (bitwise-length (dsa-private-key-q dsa-key))))
          (p dsa-key #f 0 mss
             0 0 '()
             '()
