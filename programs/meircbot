@@ -1,7 +1,7 @@
 #!/usr/bin/env scheme-script
 ;; -*- mode: scheme; coding: utf-8 -*-
 ;; The Minimum-Effort IRC bot
-;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -42,6 +42,10 @@
 
 (define *server-hostname* "localhost")
 (define *server-port* "6667")
+
+;; Maximum line size of a PRIVMSG passed via the server to server
+;; protocol, but without the target's nick. Conservative default.
+(define *max-linesize* 417)
 
 (define *in-fish* (make-parameter #f))
 (define *fish-keys* `(("#test" . ,(make-fish-key "test"))))
@@ -126,6 +130,16 @@
   (and *otr-key*
        (not (*in-otr*)) (otr-message? msg)))
 
+(define (get-otr-state src)
+  (cond ((assp (cut address=? <> src) *otr-states*) => cdr)
+        (else
+         (print "Making a new OTR state for " src)
+         (let ((state (make-otr-state *otr-key* (- *max-linesize*
+                                                   (string-length
+                                                    (prefix-nick src))))))
+           (set! *otr-states* (cons (cons src state) *otr-states*))
+           state))))
+
 ;;; Main program
 
 (define *server-out* #f)
@@ -145,15 +159,6 @@
   (if (pair? c)
       (fmt 'JOIN (car c) (cdr c))
       (fmt 'JOIN c)))
-
-(define (get-otr-state src)
-  (cond ((assp (cut address=? <> src) *otr-states*) => cdr)
-        (else
-         (print "Making a new OTR state for " src)
-         ;; TODO: find the real MSS (which depends on our mask), not 417.
-         (let ((state (make-otr-state *otr-key* 417)))
-           (set! *otr-states* (cons (cons src state) *otr-states*))
-           state))))
 
 (define handle-message
   (match-lambda
@@ -213,7 +218,9 @@
                  (('authentication . #f)
                   (otr-send-encrypted! state "The password is: password."))
                  (x
-                  (print "Unhandled OTR result: " x)))
+                  (print "Unhandled OTR result:")
+                  (write x)
+                  (newline)))
                 queue)
                (lp)))))))
 
@@ -227,6 +234,12 @@
                        ;; the feature.
                        (log-msg "OTR auth =>" src 'PRIVMSG (list tgt #f))
                        (otr-authenticate! (*in-otr*) (string->utf8 "password")))
+                      ((string=? msg "silencio"))
+                      ((string=? msg "duo")
+                       (otr-send-encrypted! (*in-otr*) "Unus")
+                       (otr-send-encrypted! (*in-otr*) "Duo")
+                       (log-msg "OTR =>" src 'PRIVMSG (list tgt "Unus"))
+                       (log-msg "OTR =>" src 'PRIVMSG (list tgt "Duo")))
                       (else
                        (log-msg "OTR =>" src 'PRIVMSG (list tgt outmsg))
                        (otr-send-encrypted! (*in-otr*) outmsg)))
@@ -259,6 +272,19 @@
                                    "Can you hear me know? ... What about now?")
                                   (fish-key (prefix-nick src))))))
 
+    (((? its-me? src) 'NOTICE (? its-me? tgt) "Max line size detection")
+     ;; This is done just to get our prefix length (src). There might
+     ;; be a better way to do it.
+     (set! *max-linesize* (- 512           ;total line size
+                             (+ (string-length ":")
+                                (string-length src)
+                                (string-length " PRIVMSG ")
+                                #;(string-length tgt)
+                                (string-length " :")
+                                #;(string-length msg)
+                                (string-length "\r\n"))))
+     (print "Maximum line size found to be " *max-linesize*))
+
     ((_ 433 . _)
      ;; ERR_NICKNAMEINUSE
      (set! *nicknames* (cdr *nicknames*))
@@ -270,7 +296,8 @@
 
     (((? its-me? src) 'NICK new)
      ;; The server changed our nick
-     (set! *nickname* new))
+     (set! *nickname* new)
+     (fmt 'NOTICE *nickname* "Max line size detection"))
 
     (((? its-me? src) 'JOIN channel)
      ;; The server joined us to a channel
@@ -292,7 +319,8 @@
 
     ((_ 001 tgt msg)
      ;; RPL_WELCOME
-     ;; (fmt 'OPER "foo" "foo")
+     (fmt 'OPER "foo" "foo")
+     (fmt 'NOTICE *nickname* "Max line size detection")
      (for-each join-channel *channels*))
 
     ((_ 005 tgt . isupport)
