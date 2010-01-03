@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -39,11 +39,17 @@
 ;; XXX: The fact that TTLs are s32 means that there's a gotcha when
 ;; encoding large extended rcodes.
 
-;; UDP messages can be at most 512 bytes
+;; UDP messages can be at most 512 bytes. EDNS0 can extend this to
+;; 65536, but this library uses 4096, which is pretty standard and
+;; avoids the higher reassembly overhead of large datagrams.
 
 ;; RFC 5452 DNS Resilience against Forged Answers
 
-(library (weinholt net dns (0 0 20090827))
+;; This is of interest: http://www.nlnetlabs.nl/downloads/nsd/differences.pdf
+
+;; http://www.ietf.org/dyn/wg/charter/dnsext-charter.html
+
+(library (weinholt net dns (0 0 20100101))
   (export print-dns-message
           make-normal-query
           put-dns-message
@@ -59,6 +65,8 @@
           make-question question?
           question-qname question-qtype question-qclass
           question=?
+
+          falsified-reply?
 
           rrtypes classes opcodes rcodes
 
@@ -92,11 +100,10 @@
           (srfi :27 random-bits)
           (weinholt struct pack)
           (weinholt text base64)
-          (weinholt text strings)
-          (only (ikarus) udp-connect
-                tcp-connect))
+          (weinholt text strings))
 
   (define (print . x) (for-each display x) (newline))
+  (define (compose f g) (lambda (x) (f (g x))))
 
   (define rand
     (let ((s (make-random-source)))
@@ -104,6 +111,8 @@
       (random-source-make-integers s)))
 
   (define ash fxarithmetic-shift-left)
+
+;;; Constants and types
 
   (define (integer->rrtype x)
     (cond ((assv x rrtypes) => cdr)
@@ -286,20 +295,20 @@
   (define (question=? x y)
     (and (= (question-qclass x) (question-qclass y))
          (= (question-qtype x) (question-qtype y))
-         (string=? (question-qname x) (question-qname y))))
+         (equal? (question-qname x) (question-qname y))))
 
-  (define (question-ci=? x y)
-    (and (= (question-qclass x) (question-qclass y))
-         (= (question-qtype x) (question-qtype y))
-         (string=? (question-qname x) (question-qname y))))
+  ;; (define (question-ci=? x y)
+  ;;   (and (= (question-qclass x) (question-qclass y))
+  ;;        (= (question-qtype x) (question-qtype y))
+  ;;        (equal? (question-qname x) (question-qname y))))
 
-  (define question-ci-hash
-    (let ((mix-it-up (rand #x1000000)))
-      (lambda (q)
-        (+ (abs (string-ci-hash (question-qname q)))
-           (question-qtype q)
-           (question-qclass q)
-           mix-it-up))))
+  ;; (define question-ci-hash
+  ;;   (let ((mix-it-up (rand #x1000000)))
+  ;;     (lambda (q)
+  ;;       (+ (abs (string-ci-hash (question-qname q)))
+  ;;          (question-qtype q)
+  ;;          (question-qclass q)
+  ;;          mix-it-up))))
 
   (define-record-type resource
     ;; The contents of rdata depends on the type and the class. It's a
@@ -309,53 +318,27 @@
     ;; AAAA records are lists with a single bytevector.
     (fields name type class ttl rdata))
 
-  (define (name->labels name)
-    ;; TODO: punycode. TODO: labels can actually contain dots, escaped
-    ;; with \.
-    (cond ((string=? name ".")
-           '(#vu8()))
-          ((or (string-contains name "..")
-               (string-prefix? "." name)
-               (> (string-length name) 255))
-           (error 'name->labels "invalid name" name))
-          (else
-           (let ((labels (map string->utf8 (string-split name #\.))))
-             (unless (for-all (lambda (l) (<= 0 (bytevector-length l) 63))
-                              labels)
-               (error 'name->labels "overlong label in name" name))
-             labels))))
-
-  (define (labels->name labels)
-    (if (equal? labels '(#vu8()))
-        "."
-        (string-join (map utf8->string labels) ".")))
-
-  (define (canonicalize-name name)
-    ;; Add the trailing dot if it's missing, decode punycode, etc
-    (let ((labels (name->labels name)))
-      (if (member #vu8() labels)
-          (labels->name labels)
-          (labels->name (append labels '(#vu8()))))))
-
   (define (randomize-case name)
     ;; draft-wijngaards-dnsext-resolver-side-mitigation-01
     (string-map (lambda (c) ((if (zero? (rand 2)) char-upcase char-downcase) c))
                 name))
 
+;;; DNS message encoding
+
   (define (put-dns-message port msg)
     ;; TODO: resource encoding, compression.
     (define (put-labels x)
-      ;; TODO: check that there's only one end label
       (for-each (lambda (label)
-                  (assert (<= 0 (bytevector-length label) 63))
+                  (assert (< 0 (bytevector-length label) 64))
                   (put-u8 port (bytevector-length label))
                   (put-bytevector port label))
-                x))
+                x)
+      (put-u8 port 0))
     (define (put-question x)
-      (put-labels (name->labels (question-qname x)))
+      (put-labels (question-qname x))
       (put-bytevector port (pack "!SS" (question-qtype x) (question-qclass x))))
     (define (put-resource x)
-      (put-labels (name->labels (resource-name x)))
+      (put-labels (resource-name x))
       (put-bytevector port (pack "!SSLS" (resource-type x) (resource-class x)
                                  (resource-ttl x) (bytevector-length (resource-rdata x))))
       ;; FIXME: handle the various types...
@@ -391,7 +374,8 @@
              (acclen 0)
              (used-offsets '())
              (end #f)) ;the end offset of the label (does not follow pointers)
-      (when (> start (bytevector-length bv)) (error 'get-message "invalid pointer in a name" start))
+      (when (> start (bytevector-length bv))
+        (error 'get-message "invalid pointer in a name" start))
       ;; Detect pointer loops. If I was much too clever for anyone's
       ;; good I might have translated these into circular lists
       ;; instead, and even supported them in put-dns-message. Who
@@ -400,7 +384,7 @@
       (let* ((len (bytevector-u8-ref bv start))
              (tag (fxbit-field len 6 8)))
         (cond ((zero? len)
-               (values (labels->name (reverse (cons #vu8() ret))) (or end (+ start 1))))
+               (values (reverse ret) (or end (+ start 1))))
               ((zero? tag)              ;normal label
                (when (> (+ acclen len 1) 255) (error 'get-message "overlong name" acclen))
                (lp (+ start 1 len)
@@ -433,18 +417,19 @@
           (unless (and (< len 32) (< len count))
             (error 'parse-type-bitmap "invalid length in type bitmap"))
           (append
-           (append-map (lambda (base i)
-                         (let ((byte (bytevector-u8-ref bv i)))
-                           (filter (lambda (type)
-                                     ;; Remove Q, Meta etc
-                                     (and type (not (pseudo-rr? type))))
-                                   (map (lambda (b)
-                                          (and (fxbit-set? byte b)
-                                               (fxior (fxarithmetic-shift-left block 8)
-                                                      (+ base (- 7 b))))) ;network bit order!
-                                        (iota 8 7 -1))))) ;reverse
-                       (iota len 0 8)
-                       (iota len (+ start 2)))
+           (append-map
+            (lambda (base i)
+              (let ((byte (bytevector-u8-ref bv i)))
+                (filter (lambda (type)
+                          ;; Remove Q, Meta etc
+                          (and type (not (pseudo-rr? type))))
+                        (map (lambda (b)
+                               (and (fxbit-set? byte b)
+                                    (fxior (fxarithmetic-shift-left block 8)
+                                           (+ base (- 7 b))))) ;network bit order!
+                             (iota 8 7 -1))))) ;reverse
+            (iota len 0 8)
+            (iota len (+ start 2)))
            (parse-type-bitmap bv (+ start 2 len) (- count 2 len))))))
 
   (define (parse-character-strings bv start count)
@@ -507,8 +492,8 @@
           (else
            (bytevector-copy* bv start count))))
 
-  ;; This procedure a complete DNS message ,without any framing, and
-  ;; returns a dns-message record.
+  ;; This procedure takes a complete DNS message, without any framing,
+  ;; and returns a dns-message record.
   (define (parse-dns-message bv)
     (define (questions start)
       (let*-values (((qname end) (parse-labels bv start))
@@ -571,36 +556,53 @@
       ((254) 'PRIVATEOID)
       (else x)))
 
+  (define (labels->string x)
+    (string-join (map utf8->string x) "." 'suffix))
+
   (define (print-resource r)
     ;; TODO: escape characters in labels...
     (define (printl x)
-      (display (car x))
-      (for-each (lambda (x) (display #\space) (display x)) (cdr x))
+      (define (disp x)
+        (cond ((list? x)
+               (display (labels->string x)))
+              (else
+               (display x))))
+      (disp (car x))
+      (for-each (lambda (x)
+                  (display #\space)
+                  (disp x))
+                (cdr x))
       (newline))
     (let* ((class (integer->class (resource-class r)))
            (type (integer->rrtype (resource-type r)))
            (rdata (resource-rdata r)))
       (for-each display
-                (list (resource-name r) "\t" (resource-ttl r) "\t" class "\t" type "\t"))
+                (list (labels->string (resource-name r)) "\t" (resource-ttl r)
+                      "\t" class "\t" type "\t"))
       (cond ((and (eq? class 'IN) (eq? type 'A)
                   (= 4 (bytevector-length (car rdata))))
              ;; This doesn't actually have to be 4 bytes. But because
              ;; everyone just assumed it did, they had to make a new
              ;; type for IPv6.
-             (print (string-join (map number->string (bytevector->u8-list (car rdata))) ".")))
+             (print (string-join (map number->string (bytevector->u8-list
+                                                      (car rdata)))
+                                 ".")))
             ((and (eq? class 'IN) (eq? type 'AAAA)
                   (= 16 (bytevector-length (car rdata))))
              (print (string-join (map (lambda (x) (number->string x 16))
-                                      (bytevector->uint-list (car rdata) (endianness big) 2))
+                                      (bytevector->uint-list (car rdata)
+                                                             (endianness big) 2))
                                  ":")))
             ((memq type '(SOA NS MX CNAME SRV DNAME))
              (printl rdata))
             ((eq? type 'DS)
-             (print (car rdata) " " (integer->algorithm (cadr rdata)) " " (caddr rdata) " "
-                    (bytevector->hex (cadddr rdata))))
+             (print (car rdata) " " (integer->algorithm (cadr rdata))
+                    " " (caddr rdata)
+                    " " (bytevector->hex (cadddr rdata))))
             ((eq? type 'DNSKEY)
-             (print (car rdata) " " (cadr rdata) " " (integer->algorithm (caddr rdata)) " "
-                    (base64-encode (cadddr rdata)))
+             (print (car rdata) " " (cadr rdata)
+                    " " (integer->algorithm (caddr rdata))
+                    " " (base64-encode (cadddr rdata)))
              (when (fxbit-set? (car rdata) (- 16 1 7)) (print "; Zone-signing key"))
              (when (fxbit-set? (car rdata) (- 16 1 15)) (print "; Secure Entry Point")))
             ((eq? type 'RRSIG)
@@ -610,11 +612,14 @@
                  ((null? rdata))
                (cond ((null? (cdr rdata))
                       (print (base64-encode (car rdata))))
+                     ((list? (car rdata))
+                      (display (labels->string (car rdata)))
+                      (display #\space))
                      (else
                       (display (car rdata))
                       (display #\space)))))
             ((eq? type 'NSEC)
-             (display (car rdata)) (display #\space)
+             (display (labels->string (car rdata))) (display #\space)
              (printl (map integer->rrtype (cdr rdata))))
             ((eq? type 'TXT)
              (do ((rdata rdata (cdr rdata)))
@@ -649,15 +654,13 @@
                    (else
                     ;; Well... looks like we've parsed some rdata, but
                     ;; haven't made a printer for it yet.
-                    (print rdata)
+                    (printl rdata)
                     (print ";;; WARNING! The above line is likely not in the master zone format!")))))))
-
-
 
   (define (print-dns-message x)
     ;; Print a DNS message in the master zone format
     (define (printq q)
-      (print ";" (question-qname q)
+      (print ";" (labels->string (question-qname q))
              "\t\t" (integer->class (question-qclass q))
              "\t" (integer->rrtype (question-qtype q))))
     (define (printo r)
@@ -679,7 +682,8 @@
                   (display name)))
               (list flag-QR flag-AA flag-TC flag-RD flag-RA flag-Z flag-AD flag-CD)
               (list "response" "authoritative-answer" "truncated" "recursion-desired"
-                    "recursion-available" "reserved-flag" "authentic-data" "checking-disabled"))
+                    "recursion-available" "reserved-flag" "authentic-data"
+                    "checking-disabled"))
     (newline)
     (print ";; Question section")
     (for-each printq (dns-message-question x))
@@ -699,64 +703,40 @@
 ;;; Helpers for making messages
 
   (define (make-edns-resource udp-payload-size extended-rcode version flags options)
-    (make-resource "." rr-OPT udp-payload-size
+    (make-resource '() rr-OPT udp-payload-size
                    (bitwise-ior (bitwise-arithmetic-shift-left extended-rcode 24)
                                 (bitwise-arithmetic-shift-left version 16)
                                 (fxand #xffff flags))
                    #vu8()))             ;FIXME: options
 
   (define (make-normal-query qname qtype qclass edns?)
+    ;; qname is a list of labels, e.g. ("slashdot" "org").
     (make-dns-message (rand #x10000)
                       opcode-QUERY rcode-NOERROR
                       (fxior flag-recursion-desired
                              #;flag-checking-disabled) ;DNSSEC?
-                      (list (make-question (randomize-case (canonicalize-name qname)) qtype qclass))
+                      (list (make-question (map (compose string->utf8 randomize-case)
+                                                qname)
+                                           qtype qclass))
                       '() '()
                       (if edns?
-                          (list (make-edns-resource 4096 0 0 edns-flag-dnssec-answer-ok '()))
+                          (list (make-edns-resource 4096 0 0 edns-flag-dnssec-answer-ok
+                                                    '()))
                           '())))
 
-;;; Caching
 
-  ;; (define-record-type cache-key
-  ;;   (fields question))
-
-  ;; (define (cache-key-hash x)
-  ;;   (question-ci-hash (cache-key-question x)))
-
-  ;; (define (cache-key-question=? x y)
-  ;;   (question-ci=? (cache-key-question x) (cache-key-question y)))
-
-  ;; (define-record-type dns-cache
-  ;;   (fields data)
-  ;;   (protocol (lambda (n)
-  ;;               (lambda ()
-  ;;                 (n (make-hashtable cache-key-hash cache-key-question=?))))))
-
-  ;; XXX: should unsigned resources be cached at all? should they be used in the ttl calculation?
-  ;; rfc4035 sec 4.5
-  ;; (define (dns-cache-set! cache question response)
-  ;;   (assert (and (question? question) (dns-message? response)))
-  ;;   (hashtable-set! (dns-cache-data cache)
-  ;;                   (make-cache-key question)
-  ;;                   (cons (+ (time-second (current-time))
-  ;;                            (fold-right min (* 3600 24) ;TODO: what minimum ttl?
-  ;;                                        (append
-  ;;                                         (map resource-ttl (dns-message-answer response))
-  ;;                                         (map resource-ttl (dns-message-authority response))
-  ;;                                         (map resource-ttl
-  ;;                                              (remp (lambda (r)
-  ;;                                                      (pseudo-rr? (resource-type r)))
-  ;;                                                    (dns-message-additional response))))))
-  ;;                         response)))
-
-  ;; (define (dns-cache-ref cache question)
-  ;;   (cond ((hashtable-ref (dns-cache-data cache)
-  ;;                         (make-cache-key question) #f) =>
-  ;;          (lambda (entry)
-  ;;            (and (< (time-second (current-time)) (car entry))
-  ;;                 (cdr entry))))
-  ;;         (else #f)))
+  ;; Try to guess if the reply is false. False messages can appear if
+  ;; an attacker is trying to poison your cache. He'll try to guess
+  ;; which id and port number you used in your query and send a reply
+  ;; before the real server can.
+  (define (falsified-reply? q r)
+    (or (not (= (dns-message-id r) (dns-message-id q)))
+        (not (= (dns-message-opcode r) opcode-QUERY))
+        (not (= (length (dns-message-question r)) 1))
+        (not (question=? (car (dns-message-question q))
+                         (car (dns-message-question r))))
+        (zero? (fxand (dns-message-flagbits r)
+                      flag-response))))
 
 
   )
