@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -36,7 +36,7 @@
 ;; all messages have their checksums calculated with something like
 ;; SHA-1 and then encrypted with the cipher.
 
-(library (weinholt net tls (0 0 20090901))
+(library (weinholt net tls (0 0 20100103))
   (export make-tls-wrapper
           flush-tls-output
           put-tls-record get-tls-record
@@ -51,6 +51,7 @@
           (srfi :19 time)
           (srfi :27 random-bits)
           (weinholt crypto des)
+          (weinholt crypto entropy)
           (weinholt crypto sha-1)
           (weinholt crypto md5)
           (weinholt crypto rsa)
@@ -84,27 +85,6 @@
   (define TLS-RSA-WITH-AES-256-CBC-SHA256 #x003D)
 
   (define (print . x) (for-each display x) (newline))
-
-  ;; This function should return unpredictable random data. It should
-  ;; be initialized from as many different sources as possible (not
-  ;; e.g. just the current time and process ID). If an attacker knows
-  ;; exactly how this is initialized, or uses the client-random-bytes
-  ;; (which are plainly visible on the network) to deduce the inner
-  ;; state of the random source, then all is lost.
-  (define make-random-bytevector
-    (let* ((s (make-random-source))
-           (make-int (random-source-make-integers s))
-           (urandom (and (file-exists? "/dev/urandom")
-                         (open-file-input-port "/dev/urandom"))))
-      (lambda (len)
-        (unless urandom
-          (random-source-randomize! s))
-        (do ((bv (make-bytevector len))
-             (i 0 (fx+ i 1)))
-            ((fx=? i len) bv)
-          (if urandom
-              (bytevector-u8-set! bv i (get-u8 urandom))
-              (bytevector-u8-set! bv i (make-int 255)))))))
 
   (define (bv->string bv)
     (apply string-append
@@ -319,7 +299,7 @@
                               len)
           (let ((mac-data (make-bytevector (+ 8 1 2 2)))
                 (padding (bytevector-u8-ref (buffer-data b) (- (buffer-bottom b) 1))))
-            ;; FIXME: verify the MAC
+            ;; FIXME: verify the MAC even if the padding is crazy
             (print "padding: " padding)
             (buffer-bottom-set! b (- (buffer-bottom b) padding 1)) ;remove padding
 

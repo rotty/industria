@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -22,12 +22,12 @@
 ;; TODO: is this a fine way to generate entropy? The host's srfi-27
 ;; might be predictable and it might be initialized predictably.
 
-(library (weinholt crypto entropy (0 0 20091015))
+(library (weinholt crypto entropy (0 0 20100103))
   (export make-random-bytevector)
   (import (rnrs)
           (srfi :27 random-bits))
 
-  (define make-random-bytevector        ;also present in net/tls
+  (define make-random-bytevector
     (let* ((s (make-random-source))
            (make-int (random-source-make-integers s))
            (urandom (and (file-exists? "/dev/urandom")
