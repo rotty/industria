@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -20,7 +20,7 @@
 ;; TODO: read headers in the delimited format. It's probably RFC822
 ;; headers and Privacy Enhanced Mail etc.
 
-(library (weinholt text base64 (1 0 20090927))
+(library (weinholt text base64 (1 0 20100103))
   (export base64-encode
           base64-decode
           base64-alphabet
@@ -39,6 +39,7 @@
   (define base64url-alphabet
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 
+  ;; TODO: the full interface is bizarre
   (define base64-encode
     (case-lambda
       ;; Simple interface. Returns a string containing the canonical
