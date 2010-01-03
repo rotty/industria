@@ -1,6 +1,6 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
 ;; Bytevector utilities
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -16,7 +16,7 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!r6rs
 
-(library (weinholt bytevectors (0 0 20090924))
+(library (weinholt bytevectors (1 0 20100103))
   (export bytevector-append
           subbytevector
           bytevector-u8-index
@@ -34,10 +34,13 @@
                   bvs))))
 
   (define (subbytevector bv start end)
-    (let ((ret (make-bytevector (- end start))))
-      (bytevector-copy! bv start
-                        ret 0 (- end start))
-      ret))
+    (if (and (zero? start)
+             (= end (bytevector-length bv)))
+        bv
+        (let ((ret (make-bytevector (- end start))))
+          (bytevector-copy! bv start
+                            ret 0 (- end start))
+          ret)))
 
   (define bytevector-u8-index
     (case-lambda
