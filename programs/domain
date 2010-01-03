@@ -1,6 +1,6 @@
 #!/usr/bin/env scheme-script
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -16,15 +16,18 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!r6rs
 
+;; Generally useless program to test the dns library.
+
 (import (rnrs)
-        (only (ikarus) tcp-connect udp-connect)
+        (only (ikarus) udp-connect)
+        (weinholt net tcp)
         (weinholt net dns))
 
 (define (print . x) (for-each display x) (newline))
 
 ;; TODO: accept command line arguments
 
-;; TODO: timeouts and all that
+;;(define udp-connect #f)
 
 (define (query-and-print host service protocol qname qtype qclass)
   (let-values (((i o)
@@ -41,12 +44,7 @@
         (let ((r (case protocol
                    ((tcp) (parse-dns-message/delimited i))
                    ((udp) (parse-dns-message (get-bytevector-some i))))))
-          (cond ((or (not (= (dns-message-id r) (dns-message-id q)))
-                     (not (= (dns-message-opcode r) opcode-QUERY))
-                     (not (= (length (dns-message-question r)) 1))
-                     (not (question=? (car (dns-message-question q))
-                                      (car (dns-message-question r))))
-                     (zero? (fxand (dns-message-flagbits r) flag-response)))
+          (cond ((falsified-reply? q r)
                  (print ";;; FALSIFIED MESSAGE:")
                  (print-dns-message r)
                  (print ";;; FALSIFIED MESSAGE DISCARDED!")
@@ -54,15 +52,16 @@
                 ((= (dns-message-rcode r) rcode-NOERROR)
                  ;; TODO: restore the case from qname
                  (print ";;; Reply:") (print-dns-message r)
-                 #;(dnssec-experiment r))
+                 (close-port i) (close-port o)
+                 r)
                 (else
                  (print ";; Reply with an ERROR:")
                  (print-dns-message r)
-                 (print "\n\n;;; THERE IS AN ERROR!!!!"))))))
-    (close-port i)
-    (close-port o)))
+                 (print "\n\n;;; THERE IS AN ERROR!!!!")
+                 (close-port i) (close-port o))))))))
 
+(query-and-print "localhost" "53" 'udp '("weinholt" "se") rr-SOA class-IN)
 
-(query-and-print "95.80.36.26" "53" 'udp "weinholt.se" rr-SOA class-IN)
+;;(query-and-print "95.80.36.26" "53" 'udp '("weinholt" "se") rr-SOA class-IN)
 
-;; (query-and-print "localhost" "53" 'tcp "weinholt.se" rr-DS class-IN)
+;;(query-and-print "localhost" "53" 'tcp '("weinholt" "se") rr-DS class-IN)
