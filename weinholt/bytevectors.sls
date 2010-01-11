@@ -16,8 +16,10 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!r6rs
 
-(library (weinholt bytevectors (1 0 20100103))
+(library (weinholt bytevectors (1 0 20100111))
   (export bytevector-append
+          bytevectors-length
+          bytevector-concatenate
           subbytevector
           bytevector-u8-index
           bytevector-u8-index-right
@@ -33,14 +35,31 @@
                     (put-bytevector p bv))
                   bvs))))
 
-  (define (subbytevector bv start end)
-    (if (and (zero? start)
-             (= end (bytevector-length bv)))
-        bv
-        (let ((ret (make-bytevector (- end start))))
-          (bytevector-copy! bv start
-                            ret 0 (- end start))
-          ret)))
+  (define (bytevectors-length bvs)
+    (do ((l bvs (cdr l))
+         (sum 0 (+ sum (bytevector-length (car l)))))
+        ((null? l) sum)))
+
+  (define (bytevector-concatenate x)
+    (let ((length (bytevectors-length x)))
+      (do ((bv (make-bytevector length))
+           (x x (cdr x))
+           (n 0 (+ n (bytevector-length (car x)))))
+          ((null? x) bv)
+        (bytevector-copy! (car x) 0 bv n (bytevector-length (car x))))))
+
+  (define subbytevector
+    (case-lambda
+      ((bv start end)
+       (if (and (zero? start)
+                (= end (bytevector-length bv)))
+           bv
+           (let ((ret (make-bytevector (- end start))))
+             (bytevector-copy! bv start
+                               ret 0 (- end start))
+             ret)))
+      ((bv start)
+       (subbytevector bv start (bytevector-length bv)))))
 
   (define bytevector-u8-index
     (case-lambda
