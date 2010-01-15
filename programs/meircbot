@@ -22,6 +22,7 @@
         (weinholt net irc fish)
         (weinholt net otr)
         (weinholt net tcp)
+        (weinholt net tls simple)
         (xitomatl AS-match)
         (only (srfi :13 strings) string-join string-trim-right)
         (srfi :26 cut)
@@ -42,6 +43,7 @@
 
 (define *server-hostname* "localhost")
 (define *server-port* "6667")
+(define *server-tls* #f)
 
 ;; Maximum line size of a PRIVMSG passed via the server to server
 ;; protocol, but without the target's nick. Conservative default.
@@ -346,7 +348,8 @@
 
 
 ;; main loop
-(let-values (((in out) (tcp-connect *server-hostname* *server-port*)))
+(let-values (((in out . x) ((if *server-tls* tls-connect tcp-connect)
+                            *server-hostname* *server-port*)))
   (set! *server-out* out)
   (fmt 'NICK *nickname*)
   (fmt 'USER *username* 0 "*" *realname*)

@@ -36,20 +36,29 @@
 ;; all messages have their checksums calculated with something like
 ;; SHA-1 and then encrypted with the cipher.
 
-(library (weinholt net tls (0 0 20100103))
+;; http://www.ietf.org/dyn/wg/charter/tls-charter.html
+
+;; TODO: go through the implementation pitfalls in the RFC.
+
+;; TODO: handle fragmentation and multiple message in the same record.
+
+(library (weinholt net tls (0 0 20100115))
   (export make-tls-wrapper
           flush-tls-output
           put-tls-record get-tls-record
+          put-tls-alert-record
           put-tls-handshake
           put-tls-handshake-client-hello
           put-tls-handshake-certificate
           put-tls-handshake-client-key-exchange
           put-tls-change-cipher-spec
           put-tls-handshake-finished
-          put-tls-application-data)
+          put-tls-application-data
+          tls-conn-remote-certs)
   (import (rnrs)
           (srfi :19 time)
           (srfi :27 random-bits)
+          (weinholt bytevectors)
           (weinholt crypto des)
           (weinholt crypto entropy)
           (weinholt crypto sha-1)
@@ -67,9 +76,7 @@
   ;; TODO: fix the IV thing and upgrade to 1.1
   ;; TODO: implement tls-prf-sha256 and aes and upgrade to version 1.2
   (define tls-client-version-bytevector
-    (let ((bv (make-bytevector 2)))
-      (bytevector-u16-set! bv 0 TLS-VERSION (endianness big))
-      bv))
+    (pack "!S" TLS-VERSION))
 
   ;; A few cipher suites
   (define TLS-NULL-WITH-NULL-NULL #x0000)
@@ -84,7 +91,14 @@
   (define TLS-RSA-WITH-AES-128-CBC-SHA256 #x003C)
   (define TLS-RSA-WITH-AES-256-CBC-SHA256 #x003D)
 
-  (define (print . x) (for-each display x) (newline))
+  (define-syntax print
+    (syntax-rules ()
+      #;
+      ((_ . args)
+       (begin
+         (for-each display (list . args))
+         (newline)))
+      ((_ . args) (values))))
 
   (define (bv->string bv)
     (apply string-append
@@ -98,19 +112,6 @@
     (let ((ret (make-bytevector len)))
       (bytevector-copy! bv start ret 0 len)
       ret))
-
-  (define (bytevectors-length bvs)
-    (do ((l bvs (cdr l))
-         (sum 0 (+ sum (bytevector-length (car l)))))
-        ((null? l) sum)))
-
-  (define (bytevector-concatenate x)
-    (let ((length (bytevectors-length x)))
-      (do ((bv (make-bytevector length))
-           (x x (cdr x))
-           (n 0 (+ n (bytevector-length (car x)))))
-          ((null? x) bv)
-        (bytevector-copy! (car x) 0 bv n (bytevector-length (car x))))))
 
   (define (u16be-list->bytevector x)
     (uint-list->bytevector x (endianness big) 2))
@@ -137,10 +138,8 @@
     ;; PRF(secret, label, seed) = P_MD5(S1, label + seed) XOR
     ;;                          P_SHA-1(S2, label + seed)
     (let* ((half-length (div (+ (bytevector-length secret) 1) 2))
-           (s1 (bytevector-copy* secret 0 half-length))
-           (s2 (bytevector-copy* secret (- (bytevector-length secret)
-                                           half-length)
-                                 half-length))
+           (s1 (subbytevector secret 0 half-length))
+           (s2 (subbytevector secret half-length))
            (seeds (cons label seeds)))
       (do ((p1 (p-hash md5->bytevector hmac-md5 16 bytes s1 seeds))
            (p2 (p-hash sha-1->bytevector hmac-sha-1 20 bytes s2 seeds))
@@ -158,7 +157,7 @@
             (mutable seq-read)
             (mutable seq-write)
             (mutable version)
-            (mutable server-certs)
+            (mutable remote-certs)
             (mutable server-key)
             (mutable server-random)
             (mutable client-random)
@@ -203,7 +202,7 @@
                      (make-buffer in)
                      out)))
 
-  (define (close-tls-immediately conn)
+  (define (close-tls conn)
     (close-port (tls-conn-out conn))
     (close-port (buffer-port (tls-conn-inbuf conn))))
 
@@ -241,19 +240,16 @@
                     (padding (- (fxand (fx+ blocks-len 7) -8)
                                 blocks-len))
                     (padded-len (+ blocks-len padding))
-                    (blocks (make-bytevector padded-len padding))
-                    (mac-data (make-bytevector (+ 8 1 2 2))))
+                    (blocks (make-bytevector padded-len padding)))
 
                (print "plaintext: " data)
                ;; TODO: if the sequence numbers exceed 2^64-1, renegotiate
-               (bytevector-u64-set! mac-data 0 (tls-conn-seq-write conn) (endianness big))
-               (bytevector-u8-set! mac-data 8 type)
-               (bytevector-u16-set! mac-data 9 (tls-conn-version conn) (endianness big))
-               (bytevector-u16-set! mac-data 11 len (endianness big))
 
                (sha-1-copy-hash! (apply hmac-sha-1
                                         (tls-conn-client-write-mac-secret conn)
-                                        mac-data data)
+                                        (pack "!uQCSS" (tls-conn-seq-write conn)
+                                              type (tls-conn-version conn) len)
+                                        data)
                                  blocks len)
 
                (tls-conn-seq-write-set! conn (+ (tls-conn-seq-write conn) 1))
@@ -267,19 +263,24 @@
                                    (tls-conn-client-write-key conn)
                                    (tls-conn-client-write-IV conn)
                                    0 padded-len)
-               
+
                (print "ciphertext: " blocks)
                (put-u8 out (fxand #xff (bitwise-arithmetic-shift-right padded-len 8)))
                (put-u8 out (fxand #xff padded-len))
                (put-bytevector out blocks))))))
 
   (define (get-tls-record conn)
+    (if (port-eof? (buffer-port (tls-conn-inbuf conn)))
+        (eof-object)
+        (get-tls-record* conn)))
+
+  (define (get-tls-record* conn)
     (let ((b (tls-conn-inbuf conn)))
       (buffer-reset! b)
       (buffer-read! b 5)
-      (print "reading record type: " (read-u8 b 0))
-      (print "reading record version: " (number->string (read-u16 b 1) 16))
-      (print "reading record length: " (read-u16 b 3))
+      (print "record type: " (read-u8 b 0))
+      (print "record version: " (number->string (read-u16 b 1) 16))
+      (print "record length: " (read-u16 b 3))
       ;; FIXME: defragment messages: read the header, set a flag and
       ;; then when coming back, don't reset the buffer. the protocol
       ;; is very clever and application data never needs to be
@@ -287,7 +288,8 @@
       (let ((type (read-u8 b 0))
             (len (read-u16 b 3)))
         (when (>= len (+ (expt 2 14) 2048))
-          (error 'get-tls-record "overlong record from server..."))
+          (error 'get-tls-record "overlong record from server..."
+                 (tls-conn-server-name conn)))
         (buffer-reset! b)
         (buffer-read! b len)
         (when (= (tls-conn-server-cipher conn) TLS-RSA-WITH-3DES-EDE-CBC-SHA)
@@ -297,27 +299,25 @@
                               (tls-conn-server-write-IV conn)
                               (buffer-top b)
                               len)
-          (let ((mac-data (make-bytevector (+ 8 1 2 2)))
-                (padding (bytevector-u8-ref (buffer-data b) (- (buffer-bottom b) 1))))
+          (let ((padding (bytevector-u8-ref (buffer-data b) (- (buffer-bottom b) 1))))
             ;; FIXME: verify the MAC even if the padding is crazy
             (print "padding: " padding)
             (buffer-bottom-set! b (- (buffer-bottom b) padding 1)) ;remove padding
-
-            (bytevector-u64-set! mac-data 0 (tls-conn-seq-read conn) (endianness big))
-            (bytevector-u8-set! mac-data 8 type)
-            (bytevector-u16-set! mac-data 9 (tls-conn-version conn) (endianness big))
-            (bytevector-u16-set! mac-data 11 (- (buffer-length b) 20) (endianness big))
-
-            (unless (bytevector=? (sha-1->bytevector
-                                   (hmac-sha-1
-                                    (tls-conn-server-write-mac-secret conn)
-                                    mac-data
-                                    (bytevector-copy* (buffer-data b) (buffer-top b) (- (buffer-length b) 20))))
-                                  (bytevector-copy* (buffer-data b) (- (buffer-bottom b) 20) 20))
-              (error 'get-tls-record "bad mac"))
-
-            (tls-conn-seq-read-set! conn (+ (tls-conn-seq-read conn) 1))
-            (buffer-bottom-set! b (- (buffer-bottom b) 20)))) ;remove MAC
+            (let ((mac (subbytevector (buffer-data b) (- (buffer-bottom b) 20)
+                                      (buffer-bottom b))))
+              (buffer-bottom-set! b (- (buffer-bottom b) 20)) ;remove MAC
+              (unless (bytevector=? mac
+                                    (sha-1->bytevector
+                                     (hmac-sha-1
+                                      (tls-conn-server-write-mac-secret conn)
+                                      (pack "!uQCSS" (tls-conn-seq-read conn)
+                                            type (tls-conn-version conn)
+                                            (buffer-length b))
+                                      (subbytevector (buffer-data b)
+                                                     (buffer-top b)
+                                                     (buffer-bottom b)))))
+                (error 'get-tls-record "bad mac" (tls-conn-server-name conn)))
+              (tls-conn-seq-read-set! conn (+ (tls-conn-seq-read conn) 1)))))
 
         (cond ((= type TLS-PROTOCOL-ALERT)
                (get-tls-alert-record conn))
@@ -331,7 +331,7 @@
                ;; TODO: send THEM the error
                (error 'get-tls-record "unimplemented record type" type))))))
 
-  
+
 ;;; Alert protocol
 
   ;; TODO: friendly messages for all these alerts
@@ -369,24 +369,26 @@
            (desc* (or (assq description alert-descriptions)
                       (cons description 'unknown-alert-description))))
       (cond ((= level 2)
-             (close-tls-immediately conn)
-             (raise
-               (condition
-                (make-error)
-                (make-i/o-error)
-                (make-i/o-port-error (buffer-port (tls-conn-inbuf conn)))
-                (make-message-condition "TLS alert (fatal, port closed)")
-                (make-irritants-condition (list desc*)))))
+             (close-tls conn)
+             (condition
+              (make-error)
+              (make-i/o-error)
+              (make-i/o-port-error (buffer-port (tls-conn-inbuf conn)))
+              (make-message-condition "TLS alert (fatal, port closed)")
+              (make-irritants-condition (list desc*))))
             ((= level 1)
-             (raise
-               (condition
-                (make-warning)
-                (make-i/o-port-error (buffer-port (tls-conn-inbuf conn)))
-                (make-message-condition "TLS alert (warning)")
-                (make-irritants-condition (list desc*)))))
+             (condition
+              (make-warning)
+              (make-i/o-port-error (buffer-port (tls-conn-inbuf conn)))
+              (make-message-condition "TLS alert (warning)")
+              (make-irritants-condition (list desc*))))
             ;; TODO: other levels give errors...
             )))
 
+  (define (put-tls-alert-record conn level description)
+    (assert (memv level '(1 2)))
+    (put-tls-record conn TLS-PROTOCOL-HANDSHAKE
+                    (list (pack "!CC" level description))))
 
 ;;; Handshake protocol
 
@@ -394,7 +396,7 @@
   (define TLS-HANDSHAKE-CLIENT-HELLO 1)
   (define TLS-HANDSHAKE-SERVER-HELLO 2)
   (define TLS-HANDSHAKE-CERTIFICATE 11)
-  (define TLS-HANDSHAKE-SERVER-KEY-EXCHANGE  12)
+  (define TLS-HANDSHAKE-SERVER-KEY-EXCHANGE 12)
   (define TLS-HANDSHAKE-CERTIFICATE-REQUEST 13)
   (define TLS-HANDSHAKE-SERVER-HELLO-DONE 14)
   (define TLS-HANDSHAKE-CERTIFICATE-VERIFY 15)
@@ -452,16 +454,17 @@
                                           compression-methods))
                (pack "!uS SS CS"
                      (+ (format-size "!uSSCS") (bytevector-length server-name))
-                     0 ;server_name
+                     0 ;server_name. FIXME: don't send IPs, etc
                      (+ (format-size "!uCS") (bytevector-length server-name))
                      0 ;HostName
                      (+ 1 (bytevector-length server-name)))
                server-name)))))
 
-  (define (put-tls-handshake-certificate conn)
-    ;; no certificates to give
+  (define (put-tls-handshake-certificate conn cert)
     (put-tls-handshake conn TLS-HANDSHAKE-CERTIFICATE
-                       (list '#vu8(0 0 0))))
+                       (if cert
+                           '(fehl)
+                           '(#vu8(0 0 0)))))
 
   (define (put-tls-handshake-client-key-exchange conn)
     (let* ((premaster-secret (make-random-bytevector 48))
@@ -500,17 +503,29 @@
 
         (print "key block: " (bv->string key-block))
 
-        (tls-conn-client-write-mac-secret-set! conn (bytevector-copy* key-block 0 hash-size))
-        (tls-conn-server-write-mac-secret-set! conn (bytevector-copy* key-block hash-size hash-size))
+        (tls-conn-client-write-mac-secret-set! conn (bytevector-copy*
+                                                     key-block 0 hash-size))
+        (tls-conn-server-write-mac-secret-set! conn (bytevector-copy*
+                                                     key-block hash-size hash-size))
         (let ((client-write-key (bytevector-copy* key-block (* 2 hash-size) key-size))
-              (server-write-key (bytevector-copy* key-block (+ key-size (* 2 hash-size)) key-size)))
+              (server-write-key (bytevector-copy* key-block
+                                                  (+ key-size (* 2 hash-size)) key-size)))
           (tls-conn-client-write-key-set! conn (tdea-permute-key client-write-key))
           (tls-conn-server-write-key-set! conn (tdea-permute-key server-write-key))
-          (tls-conn-client-write-IV-set! conn (bytevector-copy* key-block (+ (* 2 key-size) (* 2 hash-size)) IV-size))
-          (tls-conn-server-write-IV-set! conn (bytevector-copy* key-block (+ IV-size (* 2 key-size) (* 2 hash-size)) IV-size))
+          (tls-conn-client-write-IV-set! conn (bytevector-copy* key-block
+                                                                (+ (* 2 key-size)
+                                                                   (* 2 hash-size))
+                                                                IV-size))
+          (tls-conn-server-write-IV-set! conn (bytevector-copy* key-block
+                                                                (+ IV-size
+                                                                   (* 2 key-size)
+                                                                   (* 2 hash-size))
+                                                                IV-size))
 
-          (print "client-write-mac-secret: " (bv->string (tls-conn-client-write-mac-secret conn)))
-          (print "server-write-mac-secret: " (bv->string (tls-conn-server-write-mac-secret conn)))
+          (print "client-write-mac-secret: "
+                 (bv->string (tls-conn-client-write-mac-secret conn)))
+          (print "server-write-mac-secret: "
+                 (bv->string (tls-conn-server-write-mac-secret conn)))
           (print "client-write-key: " (bv->string client-write-key))
           (print "server-write-key: " (bv->string server-write-key))
           (print "client-write-IV: " (bv->string (tls-conn-client-write-IV conn)))
@@ -529,8 +544,10 @@
                        (list ((tls-conn-prf conn) 12
                               (tls-conn-master-secret conn)
                               (string->utf8 "client finished")
-                              (list (md5->bytevector (md5-finish (tls-conn-handshakes-md5 conn)))
-                                    (sha-1->bytevector (sha-1-finish (tls-conn-handshakes-sha-1 conn))))))))
+                              (list (md5->bytevector
+                                     (md5-finish (tls-conn-handshakes-md5 conn)))
+                                    (sha-1->bytevector
+                                     (sha-1-finish (tls-conn-handshakes-sha-1 conn))))))))
 
   (define (get-tls-handshake-record conn)
     (let* ((b (tls-conn-inbuf conn))
@@ -584,12 +601,10 @@
                (buffer-seek! b 3)
                (let lp ((certs '()))
                  (cond ((= certs-end (buffer-top b))
-                        (let* ((certs (reverse certs))
-                               (result (verify-certificate-chain certs)))
-                          (print "certificate chain verification: " result)
+                        (let ((certs (reverse certs)))
                           (tls-conn-server-key-set! conn (public-key<-certificate
                                                           (car certs)))
-                          (tls-conn-server-certs-set! conn certs)
+                          (tls-conn-remote-certs-set! conn certs)
                           'handshake-certificate))
                        (else
                         (let* ((cert-len (read-u24 b 0))
@@ -607,7 +622,7 @@
 
             ((= type TLS-HANDSHAKE-CERTIFICATE-REQUEST)
              (hash!)
-             (print "server requests a client certificate! well well well!")
+             (print "server requests a client certificate")
              'handshake-certificate-request)
 
             ((= type TLS-HANDSHAKE-FINISHED)
@@ -620,12 +635,19 @@
                                    ((tls-conn-prf conn) 12
                                     (tls-conn-master-secret conn)
                                     (string->utf8 "server finished")
-                                    (list (md5->bytevector (md5-finish (tls-conn-handshakes-md5 conn)))
-                                          (sha-1->bytevector (sha-1-finish (tls-conn-handshakes-sha-1 conn))))))
+                                    (list (md5->bytevector
+                                           (md5-finish
+                                            (tls-conn-handshakes-md5 conn)))
+                                          (sha-1->bytevector
+                                           (sha-1-finish
+                                            (tls-conn-handshakes-sha-1 conn))))))
                (error 'get-tls-handshake "bad verify_data in HANDSHAKE-FINISHED"))
-             
              (hash!)
              'handshake-finished)
+
+            ((= type TLS-HANDSHAKE-HELLO-REQUEST)
+             (hash!)
+             'hello-request)
 
             ;; TODO:
             (else
@@ -651,14 +673,16 @@
 ;;; Application data protocol
 
   (define (put-tls-application-data conn data)
+    (assert (not (= (tls-conn-server-cipher conn) TLS-NULL-WITH-NULL-NULL)))
     (put-tls-record conn TLS-PROTOCOL-APPLICATION-DATA
                     (list data)))
 
   (define (get-tls-application-data conn)
+    (assert (not (= (tls-conn-server-cipher conn) TLS-NULL-WITH-NULL-NULL)))
     (let* ((b (tls-conn-inbuf conn))
            (appdata (bytevector-copy* (buffer-data b)
                                       (buffer-top b)
                                       (buffer-length b))))
-      (print "Application data: " (utf8->string appdata))
-      
-      'application-data)))
+      (print "Application data: " appdata)
+
+      (list 'application-data appdata))))

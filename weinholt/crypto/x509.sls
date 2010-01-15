@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -85,7 +85,7 @@
 ;;            101 51)))
 
 
-(library (weinholt crypto x509 (0 0 20090821))
+(library (weinholt crypto x509 (0 0 20100115))
   (export certificate<-bytevector
           public-key<-certificate
           decipher-certificate-signature
@@ -169,8 +169,6 @@
                (extensions (explicit context 3 ,(Extensions)) (default '()))))
 
 ;;;
-
-  (define equal-dn? equal?) ;compare distinguished names. FIXME: sec 7.1
 
   (define (symbol<-oid oid)
     (define oids
@@ -283,9 +281,15 @@
 
 ;;; Certificate signatures etc
 
+  (define dn=? equal?) ;compare distinguished names. FIXME: sec 7.1
+  ;; FIXME: This doesn't really work, because the name must be
+  ;; converted to ascii (punycode) first, etc. Or it might be an IP
+  ;; address in a non-canonical form, I suppose.
+  (define common-name=? string-ci=?)
+
   (define (decipher-certificate-signature signed-cert signer-cert)
-    (unless (equal-dn? (tbs-certificate-subject (certificate-tbs-certificate signer-cert))
-                       (tbs-certificate-issuer  (certificate-tbs-certificate signed-cert)))
+    (unless (dn=? (tbs-certificate-subject (certificate-tbs-certificate signer-cert))
+                  (tbs-certificate-issuer  (certificate-tbs-certificate signed-cert)))
       (error 'decipher-certificate-signature
              "issuer on signed certificate does not match subject on signer"
              (tbs-certificate-subject (certificate-tbs-certificate signer-cert))
@@ -300,41 +304,59 @@
              (error 'decipher-certificate-signature
                     "unimplemented crypto?")))))
 
-  (define (verify-certificate-chain l)
+  (define (verify-certificate-chain chain common-name)
     ;; TODO: check subject/issuer, all that jazz. CRLs. Time fields.
     ;; Same signature algorithms. That critical CA extension. List of
     ;; trusted root certificates. Maximum depth.
-    (let ((cert (certificate-tbs-certificate (car l))))
-      (cond ((and (equal-dn? (tbs-certificate-subject cert)
-                             (tbs-certificate-issuer cert))
-                  (null? (cdr l)))
-             (let* ((signature (decipher-certificate-signature (car l) (car l)))
-                    (algo (car signature)))
-               (case (car algo)
-                 ((sha1)
-                  (if (bytevector=? (sha-1->bytevector
-                                     (sha-1 (certificate-tbs-data (car l))))
-                                    (cadr signature))
-                      'self-signed
-                      'bad-signature))
-                 (else
-                  'unimplemented-signing-algorithm))))
+    (define (verify l)
+      (let ((cert (certificate-tbs-certificate (car l))))
+        (cond ((and (dn=? (tbs-certificate-subject cert)
+                          (tbs-certificate-issuer cert))
+                    (null? (cdr l)))
+               (let* ((signature (decipher-certificate-signature (car l) (car l)))
+                      (algo (car signature)))
+                 (case (car algo)
+                   ((sha1)
+                    (if (bytevector=? (sha-1->bytevector
+                                       (sha-1 (certificate-tbs-data (car l))))
+                                      (cadr signature))
+                        'self-signed
+                        'bad-signature))
+                   (else
+                    'unimplemented-signing-algorithm))))
 
-            ((null? (cdr l))
-             ;; TODO: parse e.g. the CAfile /etc/ssl/certs/ca-certificates.crt
-             (print "Would need to find root certificate for:")
-             (write (tbs-certificate-issuer cert))
-             (newline)
-             'no-root-certificate)
-            ((equal-dn? (tbs-certificate-issuer cert)
-                        (tbs-certificate-subject (certificate-tbs-certificate (cadr l))))
-             (let ((signature (decipher-certificate-signature (car l) (cadr l))))
-               ;; TODO: verify the digest. this only proves that there
-               ;; is _a_ signature on the certificate. :)
-               (print "DIGEST: " signature)
-               (verify-certificate-chain (cdr l))))
-            (else
-             'bad-certificate-chain))))
+              ((null? (cdr l))
+               ;; TODO: parse e.g. the CAfile /etc/ssl/certs/ca-certificates.crt
+               (print "Would need to find root certificate for:")
+               (write (tbs-certificate-issuer cert))
+               (newline)
+               'no-root-certificate)
+              ((dn=? (tbs-certificate-issuer cert)
+                     (tbs-certificate-subject (certificate-tbs-certificate (cadr l))))
+               (let ((signature (decipher-certificate-signature (car l) (cadr l))))
+                 ;; TODO: verify the digest. this only proves that there
+                 ;; is _a_ signature on the certificate. :)
+                 (print "DIGEST: " signature)
+                 (verify (cdr l))))
+              (else
+               'bad-certificate-chain))))
+
+    (define (verify-common-name cert)
+      (cond ((assq 'commonName
+                   (tbs-certificate-subject
+                    (certificate-tbs-certificate (car chain))))
+             =>
+             (lambda (cn)
+               (common-name=? common-name
+                              (cdr cn))))
+            (else #f)))
+
+    (cond ((null? chain) 'bad-certificate-chain)
+          ((not (verify-common-name (car chain)))
+           'bad-common-name)
+          (else
+           (verify chain))))
+
 
   (define (print-certificate c)
     (let ((cert (certificate-tbs-certificate c)))
