@@ -1,6 +1,6 @@
 #!/usr/bin/env scheme-script
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -302,7 +302,7 @@
          =>
          #vu8(40 133 68 67 27 139 209 192 46 100 229 224 59 71 75 231 162 201 27 29))
 
-  (check (verify-certificate-chain (list cert1))
+  (check (verify-certificate-chain (list cert1) "Example CA")
          =>
          'self-signed)
 
