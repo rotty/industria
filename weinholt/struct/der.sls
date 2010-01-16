@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -21,7 +21,7 @@
 
 ;; TODO: output
 
-(library (weinholt struct der (0 0 20090821))
+(library (weinholt struct der (0 0 20100116))
   (export decode translate
           data-type
           data-start-index
@@ -304,7 +304,8 @@
          (format-field (car choice)
                        (cadr choice)
                        (translate data (cadr choice)
-                                  format-field))))
+                                  format-field)
+                       (data-start-index data) (data-length data))))
 
       ((sequence-of set-of)
        (unless (or (and (eq? (car type) 'sequence-of) (eq? (car data) 'sequence))
@@ -335,7 +336,8 @@
                       data
                       (cons (format-field (field-name (car fields))
                                           (field-type (car fields))
-                                          (cadr default))
+                                          (cadr default)
+                                          #f #f)
                             ret))))
                ((null? data)
                 (error 'translate "non-optional data missing" fields))
@@ -358,7 +360,9 @@
                                                  (cadddr (field-type f))
                                                  (translate (data-value d)
                                                             (cadddr (field-type f))
-                                                            format-field))
+                                                            format-field)
+                                                 (data-start-index d)
+                                                 (data-length d))
                                    ret)))
 
                         ;; CHOICE
@@ -374,8 +378,10 @@
                                (cdr data)
                                (cons (format-field (car choice)
                                                    (cadr choice)
-                                                   (translate (car data) (cadr choice)
-                                                              format-field))
+                                                   (translate d (cadr choice)
+                                                              format-field)
+                                                   (data-start-index d)
+                                                   (data-length d))
                                      ret))))
 
                         ;; FIXME: implicit
@@ -400,7 +406,9 @@
                              (cons (format-field (field-name f)
                                                  (field-type f)
                                                  (translate (car data) (field-type f)
-                                                            format-field))
+                                                            format-field)
+                                                 (data-start-index (car data))
+                                                 (data-length (car data)))
                                    ret)))
 
                         ((assoc 'default (field-opts f)) =>
@@ -410,19 +418,20 @@
                                data
                                (cons (format-field (field-name f)
                                                    (field-type f)
-                                                   (cadr default))
+                                                   (cadr default)
+                                                   #f #f)
                                      ret))))
                         (else
                          (error 'translate
                                 "unexpected data" (caar data) (field-type f)))))))))
       (else
 
-       (error 'translate "error in type" type))))
+       (error 'translate "error in ASN.1 type" type))))
 
   (define translate
     (case-lambda
       ((data type)
-       (translate data type (lambda (name type value) value)))
+       (translate data type (lambda (name type value start len) value)))
       ((data type format-field)
        (cond ((list? type)
               (translate-sequence data type format-field))

@@ -297,7 +297,7 @@
   #;(print-certificate cert1)
   (check (decipher-certificate-signature cert1 cert1)
          =>
-         '((sha1 #f) #vu8(40 133 68 67 27 139 209 192 46 100 229 224 59 71 75 231 162 201 27 29)))
+         '(sha1 #vu8(40 133 68 67 27 139 209 192 46 100 229 224 59 71 75 231 162 201 27 29)))
   (check (sha-1->bytevector (sha-1 (certificate-tbs-data cert1)))
          =>
          #vu8(40 133 68 67 27 139 209 192 46 100 229 224 59 71 75 231 162 201 27 29))
@@ -311,7 +311,7 @@
 
     (check (decipher-certificate-signature cert2 cert1)
            =>
-           '((sha1 #f) #vu8(0 46 123 152 4 85 233 72 143 151 119 59 247 169 178 151 164 80 223 122)))
+           '(sha1 #vu8(0 46 123 152 4 85 233 72 143 151 119 59 247 169 178 151 164 80 223 122)))
 
     (check (sha-1->bytevector (sha-1 (certificate-tbs-data cert2)))
            =>

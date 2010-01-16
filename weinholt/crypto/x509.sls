@@ -85,24 +85,37 @@
 ;;            101 51)))
 
 
-(library (weinholt crypto x509 (0 0 20100115))
+(library (weinholt crypto x509 (0 0 20100116))
   (export certificate<-bytevector
           public-key<-certificate
           decipher-certificate-signature
           verify-certificate-chain
+          CA-path CA-file
 
           certificate-tbs-data
 
           print-certificate)
   (import (rnrs)
-          (only (srfi :13 strings) string-join)
+          (only (srfi :13 strings) string-join
+                string-pad)
           (srfi :19 time)
+          (srfi :39 parameters)
+          (weinholt bytevectors)
+          (weinholt crypto dsa)
+          (weinholt crypto md5)
           (weinholt crypto rsa)
           (weinholt crypto sha-1)
-          (prefix (weinholt struct der (0 0)) der:))
+          (prefix (weinholt struct der (0 0)) der:)
+          (weinholt struct pack)
+          (weinholt text base64))
 
   (define (print . x) (for-each display x) (newline))
 
+  ;; The CA-path has to end with the system's path separator, because
+  ;; there's no standard way to find the path separator.
+  (define CA-path (make-parameter "/etc/ssl/certs/"))
+  (define CA-file (make-parameter "/etc/ssl/certs/ca-certificates.crt"))
+  
 ;;; The Certificate ASN.1 type from the RFC (parsed by hand).
   (define (RelativeDistinguishedName)
     `(set-of 1 +inf.0 ,(AttributeTypeAndValue)))
@@ -166,7 +179,15 @@
                (subjectPublicKeyInfo ,(SubjectPublicKeyInfo))
                (issuerUniqueID (implicit context 1 ,(UniqueIdentifier)) (default #vu8()))
                (subjectUniqueID (implicit context 2 ,(UniqueIdentifier)) (default #vu8()))
-               (extensions (explicit context 3 ,(Extensions)) (default '()))))
+               (extensions (explicit context 3 ,(Extensions)) (default ()))))
+
+  (define (DSAPublicKey)
+    'integer)
+
+  (define (Dss-Parms)
+    '(sequence (p integer)
+               (q integer)
+               (g integer)))
 
 ;;;
 
@@ -176,6 +197,7 @@
         ((1 2 840 10040 4 1) . dsa)
         ((1 2 840 10040 4 3) . dsaWithSha1)
         ((1 2 840 113549 1 1 1) . rsaEncryption)
+        ((1 2 840 113549 1 1 2) . md2WithRSAEncryption) ;will not be implemented
         ((1 2 840 113549 1 1 4) . md5withRSAEncryption)
         ((1 2 840 113549 1 1 5) . sha1WithRSAEncryption)
         ((1 2 840 113549 1 9 1) . emailAddress)
@@ -229,9 +251,11 @@
        (certificate<-bytevector bv 0 (bytevector-length bv)))
       ((bv start end)
        (let* ((parse-tree (der:decode bv start end))
-              (cert-data (der:translate parse-tree (Certificate) asn1translate)))
+              (cert-data (der:translate parse-tree (Certificate)
+                                        (lambda (name type value start len)
+                                          (asn1translate bv name type value start len)))))
          ;; (write (der:translate parse-tree (Certificate)
-         ;;                       (lambda (x y z) (list x z))))
+         ;;                       (lambda (x y z . w) (list x z))))
          (let* ((tbs (car (der:data-value parse-tree)))
                 (tbs-data (make-bytevector (der:data-length tbs))))
            ;; Copy the To Be Signed certificate, so the signature can
@@ -242,35 +266,51 @@
            (apply make-certificate tbs-data cert-data))))))
 
   (define (translate-algorithm value)
-    (list (symbol<-oid (car value))   ;algorithm
-          #f #;(cadr value)))         ;parameters
+    ;; Ignores the parameters
+    (symbol<-oid (car value)))
 
-  (define (asn1translate name type value)
+  (define (asn1translate bv name type value start len)
     ;; This uses the sequence field names to interpret the ASN.1
     ;; certificate data.
     (case name
       ((signatureValue)
        (bytevector-uint-ref value 0 (endianness big) (bytevector-length value)))
       ((issuer subject)
-       (map (lambda (e)
-              ;; FIXME: This is actually defined by the attribute type
-              ;; in some maze-like way.
-              (cons (symbol<-oid (car e))
-                    (der:translate (cadr e) '(choice (teletexString teletex-string)
-                                                     (printableString printable-string)
-                                                     (universalString universal-string)
-                                                     (utf8String utf8-string)
-                                                     (bmpString bmp-string)
-                                                     (IA5String ia5-string)
-                                                     (T61String t61-string)))))
-            (map car value)))
+       (let ((name-hash
+              (string-pad
+               (string-downcase
+                (number->string
+                 (unpack "<L"
+                         (md5->bytevector
+                          (md5 (subbytevector bv start (+ start len)))))
+                 16))
+               8 #\0)))
+         ;; The name hash is used to locate CA certificates in
+         ;; directories populated by OpenSSL's c_rehash.
+         (cons (cons 'name-hash name-hash)
+               (map (lambda (e)
+                      ;; FIXME: This is actually defined by the attribute type
+                      ;; in some maze-like way.
+                      (cons (symbol<-oid (car e))
+                            (der:translate (cadr e)
+                                           '(choice (teletexString teletex-string)
+                                                    (printableString printable-string)
+                                                    (universalString universal-string)
+                                                    (utf8String utf8-string)
+                                                    (bmpString bmp-string)
+                                                    (IA5String ia5-string)
+                                                    (T61String t61-string)))))
+                    (map car value)))))
       ((signature signatureAlgorithm) (translate-algorithm value))
       ((tbsCertificate) (apply make-tbs-certificate value))
       ((subjectPublicKeyInfo)
        (let ((algo (translate-algorithm (car value))))
-         (case (car algo)
+         (case algo
            ((rsaEncryption) (rsa-public-key<-bytevector (cadr value)))
-           ;; TODO: dsa
+           ((dsa)
+            (let ((key (der:translate (der:decode (cadr value)) (DSAPublicKey)))
+                  (params (der:translate (cadar value) (Dss-Parms))))
+              (make-dsa-public-key (car params) (cadr params) (caddr params) key)))
            (else
             (error 'certificate-bytevector
                    "unimplemented signature algorithm" (car algo))))))
@@ -292,8 +332,8 @@
                   (tbs-certificate-issuer  (certificate-tbs-certificate signed-cert)))
       (error 'decipher-certificate-signature
              "issuer on signed certificate does not match subject on signer"
-             (tbs-certificate-subject (certificate-tbs-certificate signer-cert))
-             (tbs-certificate-issuer  (certificate-tbs-certificate signed-cert))))
+             (tbs-certificate-issuer  (certificate-tbs-certificate signed-cert))
+             (tbs-certificate-subject (certificate-tbs-certificate signer-cert))))
     (let ((key (public-key<-certificate signer-cert)))
       (cond ((rsa-public-key? key)
              (let ((digest (rsa-pkcs1-decrypt-digest
@@ -302,57 +342,89 @@
                      (cadr digest))))
             (else
              (error 'decipher-certificate-signature
-                    "unimplemented crypto?")))))
+                    "unimplemented public key algorithm" key)))))
+
+  (define (get-root-certificate issuer)
+    (let ((name-hash (cdr (assq 'name-hash issuer))))
+      (let lp ((index 0))
+        (let ((fn (string-append (CA-path) name-hash "." (number->string index))))
+          (cond ((file-exists? fn)
+                 (call-with-port (open-input-file fn)
+                   (lambda (p)
+                     (let-values (((type bv) (get-delimited-base64 p)))
+                       (cond ((and (string=? type "CERTIFICATE")
+                                   (certificate<-bytevector bv))
+                              =>
+                              (lambda (cert)
+                                (if (dn=? issuer
+                                          (tbs-certificate-subject
+                                           (certificate-tbs-certificate cert)))
+                                    cert
+                                    (lp (+ index 1)))))
+                             (else (lp (+ index 1))))))))
+                (else
+                 ;; TODO: try the CA-file
+                 #f))))))
+
+  (define (self-issued? cert)
+    (let ((tbs (certificate-tbs-certificate cert)))
+      (dn=? (tbs-certificate-subject tbs)
+            (tbs-certificate-issuer tbs))))
+
+  (define (cross-signed? signed signer)
+    (let ((signed-tbs (certificate-tbs-certificate signed))
+          (signer-tbs (certificate-tbs-certificate signer)))
+      (dn=? (tbs-certificate-issuer signed-tbs)
+            (tbs-certificate-subject signer-tbs))))
 
   (define (verify-certificate-chain chain common-name)
     ;; TODO: check subject/issuer, all that jazz. CRLs. Time fields.
     ;; Same signature algorithms. That critical CA extension. List of
     ;; trusted root certificates. Maximum depth.
+    (define (verify-signature signed signer if-ok)
+      (let ((signature (decipher-certificate-signature signed signer)))
+        (case (car signature)
+          ((sha1)
+           (if (bytevector=? (sha-1->bytevector
+                              (sha-1 (certificate-tbs-data signed)))
+                             (cadr signature))
+               if-ok
+               'bad-signature))
+          (else 'unimplemented-signing-algorithm))))
     (define (verify l)
       (let ((cert (certificate-tbs-certificate (car l))))
-        (cond ((and (dn=? (tbs-certificate-subject cert)
-                          (tbs-certificate-issuer cert))
-                    (null? (cdr l)))
-               (let* ((signature (decipher-certificate-signature (car l) (car l)))
-                      (algo (car signature)))
-                 (case (car algo)
-                   ((sha1)
-                    (if (bytevector=? (sha-1->bytevector
-                                       (sha-1 (certificate-tbs-data (car l))))
-                                      (cadr signature))
-                        'self-signed
-                        'bad-signature))
-                   (else
-                    'unimplemented-signing-algorithm))))
+        (cond
+          ((and (null? (cdr l))
+                (get-root-certificate (tbs-certificate-issuer cert)))
+           =>
+           (lambda (root-ca)
+             ;; This is the final test. Note that it returns a vague
+             ;; answer, because lots of stuff is not checked yet.
+             (verify-signature (car l) root-ca 'probably-ok)))
+          
+          ((and (self-issued? (car l)) (null? (cdr l)))
+           (verify-signature (car l) (car l) 'self-signed))
 
-              ((null? (cdr l))
-               ;; TODO: parse e.g. the CAfile /etc/ssl/certs/ca-certificates.crt
-               (print "Would need to find root certificate for:")
-               (write (tbs-certificate-issuer cert))
-               (newline)
-               'no-root-certificate)
-              ((dn=? (tbs-certificate-issuer cert)
-                     (tbs-certificate-subject (certificate-tbs-certificate (cadr l))))
-               (let ((signature (decipher-certificate-signature (car l) (cadr l))))
-                 ;; TODO: verify the digest. this only proves that there
-                 ;; is _a_ signature on the certificate. :)
-                 (print "DIGEST: " signature)
-                 (verify (cdr l))))
-              (else
-               'bad-certificate-chain))))
+          ((null? (cdr l))
+           'no-root-certificate)
+          
+          ((cross-signed? (car l) (cadr l))
+           (let ((result (verify-signature (car l) (cadr l) 'ok)))
+             (if (eq? result 'ok)
+                 (verify (cdr l))
+                 result)))
+          (else
+           'bad-certificate-chain))))
 
     (define (verify-common-name cert)
       (cond ((assq 'commonName
                    (tbs-certificate-subject
                     (certificate-tbs-certificate (car chain))))
-             =>
-             (lambda (cn)
-               (common-name=? common-name
-                              (cdr cn))))
+             => (lambda (cn) (common-name=? common-name (cdr cn))))
             (else #f)))
 
     (cond ((null? chain) 'bad-certificate-chain)
-          ((not (verify-common-name (car chain)))
+          ((and common-name (not (verify-common-name (car chain))))
            'bad-common-name)
           (else
            (verify chain))))
@@ -379,7 +451,7 @@
 
       (print "Signature algorithm: " (certificate-signature-algorithm c))
 
-      #;(print "Signature: " (bit-string-value (certificate-signature-value c)))
+      #;(print "Signature: " (certificate-signature-value c))
 
       ))
 
