@@ -85,7 +85,7 @@
 ;;            101 51)))
 
 
-(library (weinholt crypto x509 (0 0 20100116))
+(library (weinholt crypto x509 (0 0 20100117))
   (export certificate<-bytevector
           public-key<-certificate
           decipher-certificate-signature
@@ -115,7 +115,7 @@
   ;; there's no standard way to find the path separator.
   (define CA-path (make-parameter "/etc/ssl/certs/"))
   (define CA-file (make-parameter "/etc/ssl/certs/ca-certificates.crt"))
-  
+
 ;;; The Certificate ASN.1 type from the RFC (parsed by hand).
   (define (RelativeDistinguishedName)
     `(set-of 1 +inf.0 ,(AttributeTypeAndValue)))
@@ -188,6 +188,40 @@
     '(sequence (p integer)
                (q integer)
                (g integer)))
+
+  (define (BasicConstraints)
+    '(sequence (cA boolean (default #f))
+               (pathLenConstraint integer (default #f))))
+
+  (define (SubjectAltName)
+    `(sequence-of 1 +inf.0 ,(GeneralName)))
+
+  (define (GeneralName)
+    `(choice (otherName (implicit context 0 ,(OtherName)))
+             (rfc822Name (implicit context 1 ia5-string))
+             (dNSName (implicit context 2 ia5-string))
+             ;; FIXME:
+             ;; (x400Address (implicit context 3 ,(ORAddress)))
+             (directoryName (implicit context 4 ,(Name)))
+             (ediPartyName (implicit context 5 ,(EDIPartyName)))
+             (uniformResourceIdentifier (implicit context 6 ia5-string))
+             (iPAddress (implicit context 7 octet-string))
+             (registeredID (implicit context 8 object-identifier))))
+
+  (define (OtherName)
+    '(sequence (type-id object-identifier)
+               (value (explicit context 0 ANY)))) ;XXX: might be mistranslated
+
+  (define (EDIPartyName)                ;XXX: mistranslated maybe
+    `(sequence (nameAssigner (implicit context 0 ,(DirectoryString)) (default #f))
+               (partyName (implicit context 1 ,(DirectoryString)))))
+
+  (define (DirectoryString)
+    '(choice (teletexString TeletexString)
+             (printableString PrintableString)
+             (universalString UniversalString)
+             (utf8String UTF8String)
+             (bmpString BMPString)))
 
 ;;;
 
@@ -273,8 +307,6 @@
     ;; This uses the sequence field names to interpret the ASN.1
     ;; certificate data.
     (case name
-      ((signatureValue)
-       (bytevector-uint-ref value 0 (endianness big) (bytevector-length value)))
       ((issuer subject)
        (let ((name-hash
               (string-pad
@@ -306,9 +338,11 @@
       ((subjectPublicKeyInfo)
        (let ((algo (translate-algorithm (car value))))
          (case algo
-           ((rsaEncryption) (rsa-public-key<-bytevector (cadr value)))
+           ((rsaEncryption)
+            (rsa-public-key<-bytevector (uint->bytevector (cadr value))))
            ((dsa)
-            (let ((key (der:translate (der:decode (cadr value)) (DSAPublicKey)))
+            (let ((key (der:translate (der:decode (uint->bytevector (cadr value)))
+                                      (DSAPublicKey)))
                   (params (der:translate (cadar value) (Dss-Parms))))
               (make-dsa-public-key (car params) (cadr params) (caddr params) key)))
            (else
@@ -321,11 +355,29 @@
 
 ;;; Certificate signatures etc
 
-  (define dn=? equal?) ;compare distinguished names. FIXME: sec 7.1
+  ;; `equal?' should be ok, because according to rfc5280 4.1.2.6 the
+  ;; DER encoding of subject and issuer must match.
+  (define dn=? equal?) ;compare distinguished names
+
   ;; FIXME: This doesn't really work, because the name must be
   ;; converted to ascii (punycode) first, etc. Or it might be an IP
-  ;; address in a non-canonical form, I suppose.
-  (define common-name=? string-ci=?)
+  ;; address in a non-canonical form, I suppose. See section 7.1.
+  ;; Wildcards are missing.
+  (define (common-name-matches? pattern cn)
+    (and (string? cn)
+         (string-ci=? pattern cn)))
+
+  (define (find-extension cert extension)
+    (let ((cert (certificate-tbs-certificate cert)))
+      (find (lambda (ext) (eq? extension (symbol<-oid (car ext))))
+            (tbs-certificate-extensions cert))))
+
+  (define (subject-alt-names cert)
+    (cond ((find-extension cert 'subjectAltName)
+           =>
+           (lambda (ext)
+             (der:translate (der:decode (caddr ext)) (SubjectAltName))))
+          (else '())))
 
   (define (decipher-certificate-signature signed-cert signer-cert)
     (unless (dn=? (tbs-certificate-subject (certificate-tbs-certificate signer-cert))
@@ -377,6 +429,9 @@
       (dn=? (tbs-certificate-issuer signed-tbs)
             (tbs-certificate-subject signer-tbs))))
 
+  ;; Verify a certificate chain. The chain is a list of certificates
+  ;; where the first certificate is the end-entity that should
+  ;; correspond to the given common-name (often the server name).
   (define (verify-certificate-chain chain common-name)
     ;; TODO: check subject/issuer, all that jazz. CRLs. Time fields.
     ;; Same signature algorithms. That critical CA extension. List of
@@ -401,13 +456,13 @@
              ;; This is the final test. Note that it returns a vague
              ;; answer, because lots of stuff is not checked yet.
              (verify-signature (car l) root-ca 'probably-ok)))
-          
+
           ((and (self-issued? (car l)) (null? (cdr l)))
            (verify-signature (car l) (car l) 'self-signed))
 
           ((null? (cdr l))
            'no-root-certificate)
-          
+
           ((cross-signed? (car l) (cadr l))
            (let ((result (verify-signature (car l) (cadr l) 'ok)))
              (if (eq? result 'ok)
@@ -420,11 +475,17 @@
       (cond ((assq 'commonName
                    (tbs-certificate-subject
                     (certificate-tbs-certificate (car chain))))
-             => (lambda (cn) (common-name=? common-name (cdr cn))))
+             => (lambda (cn) (common-name-matches? common-name (cdr cn))))
             (else #f)))
 
+    (define (verify-alternative-name cert)
+      (exists (lambda (name) (common-name-matches? common-name name))
+              (subject-alt-names cert)))
+
     (cond ((null? chain) 'bad-certificate-chain)
-          ((and common-name (not (verify-common-name (car chain))))
+          ((and common-name
+                (not (verify-common-name (car chain)))
+                (not (verify-alternative-name (car chain))))
            'bad-common-name)
           (else
            (verify chain))))
@@ -446,7 +507,22 @@
       (display "- Subject: ") (write (tbs-certificate-subject cert)) (newline)
 
       (print "- Extensions: ")
-      (for-each (lambda (x) (write x) (newline))
+      (for-each (lambda (x)
+                  (display (if (cadr x) "  Critical: " "  Ignoreable: "))
+                  (case (symbol<-oid (car x))
+                    ((basicConstraints)
+                     (display "basic constraints: ")
+                     (let ((bc (der:translate (der:decode (caddr x))
+                                              (BasicConstraints))))
+                       (write bc)))
+                    ((subjectAltName)
+                     (display "subject alt names: ")
+                     (let ((an (der:translate (der:decode (caddr x)) (SubjectAltName))))
+                       (write an)))
+                    (else
+                     (write (list (symbol<-oid (car x))
+                                  (caddr x)))))
+                  (newline))
                 (tbs-certificate-extensions cert))
 
       (print "Signature algorithm: " (certificate-signature-algorithm c))

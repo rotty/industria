@@ -21,19 +21,26 @@
 
 ;; TODO: output
 
-(library (weinholt struct der (0 0 20100116))
+(library (weinholt struct der (0 0 20100117))
   (export decode translate
           data-type
           data-start-index
           data-length
           data-value)
   (import (rnrs)
+          (only (srfi :1 lists) take)
           (srfi :19 time)
-          (srfi :26 cut))
+          (srfi :26 cut)
+          (weinholt bytevectors))
 
-  (define (print . x)
-    ;; (for-each display x) (newline)
-    (values))
+  (define-syntax print
+    (syntax-rules ()
+      #;
+      ((_ . args)
+       (begin
+         (for-each display (list . args))
+         (newline)))
+      ((_ . args) (values))))
 
 ;;; The code that follows reads DER encoded data from bytevectors and
 ;;; turns it into a parse tree.
@@ -128,6 +135,18 @@
       (bytevector-copy! bv start ret 0 length)
       (utf16->string ret (endianness big)))) ;FIXME: verify this
 
+  (define (get-GraphicString bv start length)
+    ;; TODO: this is not really UTF-8
+    (utf8->string (subbytevector bv start (+ start length))))
+
+  (define (get-VisibleString bv start length)
+    ;; TODO: this is not really UTF-8
+    (utf8->string (subbytevector bv start (+ start length))))
+
+  (define (get-GeneralString bv start length)
+    ;; TODO: this is not really UTF-8
+    (utf8->string (subbytevector bv start (+ start length))))
+
   (define (get-octet-string bv start length)
     (let ((ret (make-bytevector length)))
       (bytevector-copy! bv start ret 0 length)
@@ -135,17 +154,16 @@
 
   (define (get-bit-string bv start length)
     ;; This is an arbitrary string of bits, which is not exactly the
-    ;; same thing as a string of octets. The length doesn't have to
-    ;; divide eight. The first byte specifies how many bits at the end
-    ;; are unused. Sometimes this value is to be interpreted as an
-    ;; integer, other times as a bytevector since they hid a DER
-    ;; encoded value in it. It's weird. There can also be trailing
-    ;; bits, as many as you like. All this seems to be forbidden in
-    ;; DER, luckily. If they aren't forbidden, then there are multiple
-    ;; valid encodings, and that's not very Distinguished.
-    (unless (zero? (bytevector-u8-ref bv start))
-      (error 'get-bit-string "trailing bits in bit-string"))
-    (get-octet-string bv (+ start 1) (- length 1)))
+    ;; same thing as a string of octets or an integer. The length
+    ;; doesn't have to divide eight. The first byte specifies how many
+    ;; bits at the end are unused.
+    (if (= length 1)
+        0
+        (let ((unused (bytevector-u8-ref bv start))
+              (i (bytevector-uint-ref bv (+ start 1) (endianness big) (- length 1))))
+          (when (> unused 7)
+            (error 'get-bit-string "too many trailing bits in bit-string"))
+          (bitwise-arithmetic-shift-right i unused))))
 
   (define (get-UTCTime bv start length)
     ;; YYMMDDHHMMSSZ
@@ -219,9 +237,9 @@
        (ia5-string ,get-IA5String #f)
        (utc-time ,get-UTCTime #f)
        (generalized-time #f #f)         ;FIXME: implement this
-       (graphic-string #f #f)
-       (visible-string #f #f)
-       (general-string #f #f)
+       (graphic-string ,get-GraphicString #f)
+       (visible-string ,get-VisibleString #f)
+       (general-string ,get-GeneralString #f)
        (universal-string ,get-UniversalString #f)
        (character-string #f #f)
        (bmp-string ,get-UniversalString #f)
@@ -256,7 +274,17 @@
                             start* (- end start*)
                             (if constructed
                                 (car (get-sequence/set bv start len))
-                                (get-octet-string bv start len)))))))
+                                (subbytevector bv start end)))))))
+
+  (define (decode-implicit type value)
+    ;; Given a universal type name, return a decoder procedure.
+    (let lp ((i 0))
+      (cond ((= i (vector-length universal-types))
+             (error 'get-decoder "No decoder for this type" type))
+            ((eq? (car (vector-ref universal-types i)) type)
+             ((cadr (vector-ref universal-types i))
+              value 0 (bytevector-length value)))
+            (else (lp (+ i 1))))))
 
   (define decode
     (case-lambda
@@ -280,6 +308,19 @@
   (define data-length caddr)
   (define data-value cadddr)
 
+
+  (define (find-choice choices type)
+    ;; Returns (field-name field-type ...) or #f if there's no match.
+    (find
+     (lambda (choice)
+       (or (eq? (field-type choice) type)
+           ;; choice: (dNSName (implicit context 2 ia5-string))
+           ;; type: (implicit context 2)
+           (and (list? (field-type choice))
+                (>= (length (field-type choice)) 3)
+                (equal? type (take (field-type choice) 3)))))
+     choices))
+
   ;; TODO: rewrite this function. It's a horrible mess of duplicated
   ;; functionality.
 
@@ -295,17 +336,28 @@
                             (data-value data))))))
 
       ((choice)
-       (let ((choice (find (lambda (choice)
-                             ;; FIXME: eq? is not good enough
-                             (eq? (cadr choice) (data-type data)))
-                           (cdr type))))
-         (unless choice
+       (let ((f (find-choice (cdr type) (data-type data)))
+             (d data))
+         (unless f
            (error 'translate "no right choice" type data))
-         (format-field (car choice)
-                       (cadr choice)
-                       (translate data (cadr choice)
-                                  format-field)
-                       (data-start-index data) (data-length data))))
+         (print "In a CHOICE and the TAKEN CHOICE is " f)
+         (print "The DATA is " d)
+         (cond ((and (list? (field-type f)) (list? (data-type d))
+                     (eq? 'implicit (car (field-type f)))
+                     (eq? 'implicit (car (data-type d)))
+                     (eq? (cadr (field-type f)) (cadr (data-type d)))
+                     (eq? (caddr (field-type f)) (caddr (data-type d))))
+                (let ((implicit-type (list-ref (field-type f) 3)))
+                  (format-field (field-name f)
+                                (field-type f)
+                                (decode-implicit implicit-type (data-value data))
+                                (data-start-index data) (data-length data))))
+               
+               (else
+                (format-field (field-name f)
+                              (field-type f)
+                              (translate data (field-type f) format-field)
+                              (data-start-index data) (data-length data))))))
 
       ((sequence-of set-of)
        (unless (or (and (eq? (car type) 'sequence-of) (eq? (car data) 'sequence))
@@ -320,7 +372,7 @@
        (unless (eq? (car type) (car data))
          (error 'translate "expected set/sequence" type (car data)))
        (let lp ((fields (cdr type))
-                (data (cadddr data))
+                (data (data-value data) #;(cadddr data))
                 (ret '()))
          (print "---")
          (print "These are the fields: " (length fields) " " fields)
@@ -368,10 +420,8 @@
                         ;; CHOICE
                         ((and (list? (field-type f))
                               (eq? (car (field-type f)) 'choice)
-                              (find (lambda (choice)
-                                      ;; FIXME: eq? is not good enough
-                                      (eq? (cadr choice) (data-type d)))
-                                    (cdr (field-type f))))
+                              (find-choice (cdr (field-type f))
+                                           (data-type d)))
                          =>
                          (lambda (choice)
                            (lp (cdr fields)
@@ -433,6 +483,7 @@
       ((data type)
        (translate data type (lambda (name type value start len) value)))
       ((data type format-field)
+       (print (list 'translate data type format-field))
        (cond ((list? type)
               (translate-sequence data type format-field))
              ((eq? 'ANY type)

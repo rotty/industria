@@ -308,6 +308,9 @@
 
   (let ((cert2 (certificate<-bytevector rfc3280bis-cert2)))
     #;(print-certificate cert2)
+    (check (verify-certificate-chain (list cert2 cert1) "End Entity")
+           =>
+           'self-signed)
 
     (check (decipher-certificate-signature cert2 cert1)
            =>
