@@ -1,6 +1,6 @@
 #!/usr/bin/env scheme-script
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -220,5 +220,19 @@ the format string. Then see if pack/unpack gives the expected result."
             '("C" "!S" "!xxC")
             '(1 1 1))
        => '(#vu8(1) #vu8(0 1) #vu8(0 0 1)))
+
+(check (pack "4C" 1 2 3 4)
+       =>
+       (pack "CCCC" 1 2 3 4))
+
+(check (pack (car '("4C")) 1 2 3 4)
+       =>
+       #vu8(1 2 3 4))
+
+(check (let-values ((x (unpack "4C" #vu8(1 2 3 4)))) x)
+       => '(1 2 3 4))
+
+(check (let-values ((x (unpack (car '("4C")) #vu8(1 2 3 4)))) x)
+       => '(1 2 3 4))
 
 (check-report)

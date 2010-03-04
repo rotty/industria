@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -148,7 +148,7 @@
 ;; syntax can handle non-constant offsets. Removed another unnecessary
 ;; size check in pack!. Added documentation and examples.
 
-(library (weinholt struct pack (1 4 20091003))
+(library (weinholt struct pack (1 4 20100304))
   (export format-size pack pack! unpack get-unpack)
   (import (rnrs)
           (for (prefix (weinholt struct pack-aux (1 0)) aux:)
@@ -454,7 +454,8 @@
                                                     ((startoff) (if align (aux:roundb o n) o)))
                                         (lp (+ i 1) (aux:add startoff (* n rep)) #f
                                             endian align
-                                            (let lp* ((o* startoff) (rep rep) (setters (append (zeroers o startoff) setters)))
+                                            (let lp* ((o* startoff) (rep rep) (vals vals)
+                                                      (setters (append (zeroers o startoff) setters)))
                                               (cond ((zero? rep)
                                                      setters)
                                                     (else
@@ -462,7 +463,7 @@
                                                        (syntax-violation #f "Too few values for the format" #'fmt*))
                                                      (with-syntax ((foff o*)
                                                                    ((val1 vals ...) vals))
-                                                       (lp* (aux:add o* n) (- rep 1)
+                                                       (lp* (aux:add o* n) (- rep 1) #'(vals ...)
                                                             (cons (cond ((eq? set 's8)
                                                                          #`(bytevector-s8-set! bv foff val1))
                                                                         ((eq? set 'u8)
@@ -551,7 +552,9 @@
      (lambda (x)
        (syntax-case x ()
          ((_ fmt bv offset vals ...)
+          (string? (syntax->datum #'fmt))
           #'(pack!* fmt bv offset vals ...))
+         ((_ . rest) #'(pack!** . rest))
          (var
           (identifier? #'var)
           #'pack!**)))))
