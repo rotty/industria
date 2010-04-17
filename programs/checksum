@@ -1,7 +1,7 @@
 #!/usr/bin/env scheme-script
 ;; -*- mode: scheme; coding: utf-8 -*-
 ;; Print the checksum/hash of a file
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -17,7 +17,8 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!r6rs
 
-(import (weinholt crypto sha-1)
+(import (weinholt compression adler-32)
+        (weinholt crypto sha-1)
         (weinholt crypto sha-2)
         (weinholt crypto md5)
         (weinholt crypto crc)
@@ -77,6 +78,8 @@
       ("sha-256" . ,(lambda () (checksum-port/hash make-sha-256 sha-256-update! sha-256-finish! sha-256->string)))
       ("sha-384" . ,(lambda () (checksum-port/hash make-sha-384 sha-384-update! sha-384-finish! sha-384->string)))
       ("sha-512" . ,(lambda () (checksum-port/hash make-sha-512 sha-512-update! sha-512-finish! sha-512->string)))
+      ("adler-32" . ,(lambda () (checksum-port/crc 'adler-32 adler-32-init adler-32-finish adler-32-update
+                                                   adler-32-self-test adler-32-width)))
       ,(import-crc crc-32)
       ,(import-crc crc-16)
       ,(import-crc crc-16/ccitt)

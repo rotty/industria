@@ -1,6 +1,6 @@
 #!/usr/bin/env scheme-script
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -17,6 +17,7 @@
 #!r6rs
 
 (import (weinholt crypto crc)
+        (weinholt compression adler-32)
         (srfi :78 lightweight-testing)
         (rnrs))
 
@@ -63,5 +64,8 @@
             #xB704CE #f #f 0 #x21CF02)  ;CRC-24
 
 (check (crc-test-self-test) => 'success)
+
+;; And last a test for Adler-32
+(check (adler-32-self-test) => 'success)
 
 (check-report)
