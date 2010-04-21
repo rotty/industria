@@ -1,6 +1,6 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
 ;; An IRC parser library useful for both IRC clients and servers.
-;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -20,10 +20,12 @@
 
 ;; (1 0) - Unreleased. Initial version.
 
-;; (2 0) - Unreleased. Replace swe-ascii-string-ci=? with
+;; (2 0) - Unreleased. Replaced swe-ascii-string-ci=? with
 ;; string-irc=?, which uses the CASEMAPPING ISUPPORT parameter. Added
 ;; string-upcase-irc, string-downcase-irc, parse-isupport,
 ;; isupport-defaults and ctcp-message?.
+
+;; (2 1) - Unreleased. Added irc-match?.
 
 ;;; Usage etc
 
@@ -49,14 +51,15 @@
 ;; and send all your replies as NOTICEs. IRC bots can get into wars
 ;; with each other if they send PRIVMSGs.
 
-(library (weinholt net irc (2 0 20090918))
+(library (weinholt net irc (2 1 20100421))
   (export irc-format-condition? irc-parse-condition?
           parse-message parse-message-bytevector
           format-message-raw format-message-and-verify
           format-message-with-whitewash
           extended-prefix? prefix-split prefix-nick
           parse-isupport isupport-defaults ctcp-message?
-          string-irc=? string-upcase-irc string-downcase-irc)
+          string-irc=? string-upcase-irc string-downcase-irc
+          irc-match?)
   (import (rnrs)
           (only (srfi :1 lists) make-list drop-right append-map)
           (only (srfi :13 strings) string-index string-map)
@@ -476,6 +479,61 @@
                  (string-downcase-irc y mapping)))
       ((x y)
        (string-irc=? x y 'rfc1459))))
+
+  ;; Wildcard matching as per section 2.5 of RFC2812. Suitable for
+  ;; matching masks like foo*!*@example.com against prefixes. Uses
+  ;; lots of evil pruning and backtracking that makes it good enough
+  ;; for many real-world patterns and inputs.
+  (define (irc-match? pattern input)
+    (define (avancez pattern input plen ilen)
+      (let lp ((p 0) (i 0) (p* #f) (i* #f))
+        ;; (write (list (and (< p plen) (substring pattern p plen))
+        ;;              (and (< i ilen) (substring input i ilen))
+        ;;              (and p* (substring pattern p* plen))
+        ;;              (and i* (substring input i* ilen))))
+        ;; (newline)
+        (let ((pc (and (not (= p plen)) (char-ascii-downcase (string-ref pattern p))))
+              (ic (and (not (= i ilen)) (char-ascii-downcase (string-ref input i)))))
+          (cond ((not ic)               ;no more input
+                 (cond ((not pc) #t)    ;no more pattern
+                       ((eqv? pc #\*)
+                        (lp (+ p 1) i p* i*))
+                       ((eqv? i* ilen) #f) ;can't backtrack
+                       (i*                 ;backtrack
+                        (lp p* i* p* (+ i* 1)))
+                       (else #f)))    ;more pattern, but no more input
+                ((and pc (or (char=? ic pc)
+                             (char=? pc #\?)) ;wildone
+                      (not (char=? #\* ic pc)))
+                 (lp (+ p 1) (+ i 1) p* i*)) ;pattern and input matched
+                ;; Pattern and input didn't match, or end of pattern
+                ((eqv? pc #\*)          ;wildmany
+                 (or (= (+ p 1) plen)  ;* at the end matches all input
+                     (lp (+ p 1) i (+ p 1) i)))
+                ((and (eqv? pc #\\)     ;escapes
+                      (not (= (+ p 1) plen))
+                      (char=? ic (char-ascii-downcase (string-ref pattern (+ p 1)))))
+                 (lp (+ p 2) (+ i 1) p* i*))
+                ((and pc (not (char=? pc #\\))
+                      (not (string-index input pc i)))
+                 #f)                    ;prune (seems to work pretty well for IRC)
+                ((eqv? p p*)            ;backtrack
+                 (lp p* (+ i 1) p* i*))
+                (p*                     ;backtrack
+                 (lp (if (char=? ic (char-ascii-downcase (string-ref pattern p*)))
+                         (+ p* 1)       ;prune
+                         p*)
+                     (+ i 1) p* i*))
+                (else #f)))))         ;more input, but no more pattern
+    (let ((plen (string-length pattern))
+          (ilen (string-length input)))
+      (if (and (not (zero? plen))
+               (not (zero? ilen))
+               (not (memv (string-ref pattern (- plen 1)) '(#\? #\*)))
+               (not (char=? (char-ascii-downcase (string-ref pattern (- plen 1)))
+                            (char-ascii-downcase (string-ref input (- ilen 1))))))
+          #f                            ;prune
+          (avancez pattern input plen ilen))))       
 
   ;; http://www.irc.org/tech_docs/005.html
 
