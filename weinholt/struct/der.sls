@@ -21,7 +21,7 @@
 
 ;; TODO: output
 
-(library (weinholt struct der (0 0 20100117))
+(library (weinholt struct der (0 0 20100528))
   (export decode translate
           data-type
           data-start-index
@@ -322,7 +322,7 @@
      choices))
 
   ;; TODO: rewrite this function. It's a horrible mess of duplicated
-  ;; functionality.
+  ;; functionality. And it gets more and more complicated.
 
   (define (translate-sequence data type format-field)
     (case (car type)
@@ -340,8 +340,8 @@
              (d data))
          (unless f
            (error 'translate "no right choice" type data))
-         (print "In a CHOICE and the TAKEN CHOICE is " f)
-         (print "The DATA is " d)
+         (print "#;TAKEN-CHOICE " f)
+         (print "#;WITH-DATA " d)
          (cond ((and (list? (field-type f)) (list? (data-type d))
                      (eq? 'implicit (car (field-type f)))
                      (eq? 'implicit (car (data-type d)))
@@ -352,6 +352,20 @@
                                 (field-type f)
                                 (decode-implicit implicit-type (data-value data))
                                 (data-start-index data) (data-length data))))
+
+               ((and (list? (field-type f)) (list? (data-type d))
+                     (eq? 'explicit (car (field-type f)))
+                     (eq? 'explicit (car (data-type d)))
+                     (eq? (cadr (field-type f)) (cadr (data-type d)))
+                     (eq? (caddr (field-type f)) (caddr (data-type d))))
+                (let ((explicit-type (list-ref (field-type f) 3)))
+                  (format-field (field-name f)
+                                (cadddr (field-type f))
+                                (translate (data-value d)
+                                           (cadddr (field-type f))
+                                           format-field)
+                                (data-start-index d)
+                                (data-length d))))
                
                (else
                 (format-field (field-name f)
@@ -476,7 +490,7 @@
                                 "unexpected data" (caar data) (field-type f)))))))))
       (else
 
-       (error 'translate "error in ASN.1 type" type))))
+       (error 'translate "error in ASN.1 type" data type))))
 
   (define translate
     (case-lambda
