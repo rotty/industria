@@ -19,6 +19,7 @@
 (import (weinholt crypto x509)
         (weinholt crypto sha-1)
         (weinholt text base64)
+        (srfi :19 time)
         (srfi :78 lightweight-testing)
         (rnrs))
 
@@ -293,34 +294,44 @@
           66 44 94 225 179 59 128 2 20 96 244 49 23 202 244 207
           255 238 244 8 167 217 178 97 190 177 195 218 191))
 
-(let ((cert1 (certificate<-bytevector rfc3280bis-cert1)))
-  #;(print-certificate cert1)
-  (check (decipher-certificate-signature cert1 cert1)
-         =>
-         '(sha1 #vu8(40 133 68 67 27 139 209 192 46 100 229 224 59 71 75 231 162 201 27 29)))
-  (check (sha-1->bytevector (sha-1 (certificate-tbs-data cert1)))
-         =>
-         #vu8(40 133 68 67 27 139 209 192 46 100 229 224 59 71 75 231 162 201 27 29))
+(define cert1 (certificate<-bytevector rfc3280bis-cert1))
 
-  (check (verify-certificate-chain (list cert1) "Example CA")
-         =>
-         'self-signed)
 
-  (let ((cert2 (certificate<-bytevector rfc3280bis-cert2)))
-    #;(print-certificate cert2)
-    (check (verify-certificate-chain (list cert2 cert1) "End Entity")
-           =>
-           'self-signed)
 
-    (check (decipher-certificate-signature cert2 cert1)
-           =>
-           '(sha1 #vu8(0 46 123 152 4 85 233 72 143 151 119 59 247 169 178 151 164 80 223 122)))
+(print-certificate cert1)
+(check (decipher-certificate-signature cert1 cert1)
+       =>
+       '(sha1 #vu8(40 133 68 67 27 139 209 192 46 100 229 224 59 71 75 231 162 201 27 29)))
+(check (sha-1->bytevector (sha-1 (certificate-tbs-data cert1)))
+       =>
+       #vu8(40 133 68 67 27 139 209 192 46 100 229 224 59 71 75 231 162 201 27 29))
 
-    (check (sha-1->bytevector (sha-1 (certificate-tbs-data cert2)))
-           =>
-           #vu8(0 46 123 152 4 85 233 72 143 151 119 59 247 169 178 151 164 80 223 122))
+(check (validate-certificate-path (list cert1) "Example CA"
+                                  (date->time-utc (make-date 0 0 0 0 24 12 2004 0))
+                                  cert1)
+       =>
+       'ok)
 
-    ))
+
+(define cert2 (certificate<-bytevector rfc3280bis-cert2))
+
+(print-certificate cert2)
+(check (validate-certificate-path (list cert1 cert2) "End Entity"
+                                  (date->time-utc (make-date 0 0 0 0 24 12 2004 0))
+                                  cert1)
+       =>
+       'ok)
+
+(check (decipher-certificate-signature cert2 cert1)
+       =>
+       '(sha1 #vu8(0 46 123 152 4 85 233 72 143 151 119 59 247 169 178 151 164 80 223 122)))
+
+(check (sha-1->bytevector (sha-1 (certificate-tbs-data cert2)))
+       =>
+       #vu8(0 46 123 152 4 85 233 72 143 151 119 59 247 169 178 151 164 80 223 122))
+
+
 
 
 (check-report)
+

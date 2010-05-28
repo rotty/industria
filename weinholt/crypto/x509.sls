@@ -20,76 +20,11 @@
 ;; The decoding routines are implemented manually, but should maybe be
 ;; automatically generated from the ASN.1 types in the RFC.
 
-;; Here is an example of a parsed and annotated certificate:
-
-;; ((tbsCertificate (version v3)
-;;                  (serialNumber 256)
-;;                  (signature (algorithm (1 2 840 113549 1 1 5))
-;;                             (parameters ()))
-;;                  (issuer (((type (2 5 4 6)) (value "US")))
-;;                          (((type (2 5 4 11)) (value "gov")))
-;;                          (((type (2 5 4 10)) (value "NIST"))))
-;;                  (validity (utcTime #[date 0 26 58 9 21 5 1996 0])
-;;                            (utcTime #[date 0 26 58 9 21 5 1997 0]))
-;;                  (subject (((type (2 5 4 6)) (value "US")))
-;;                           (((type (2 5 4 11)) (value "gov")))
-;;                           (((type (2 5 4 10)) (value "NIST")))
-;;                           (((type (2 5 4 3)) (value "Tim Polk"))))
-;;                  (subjectPublicKeyInfo
-;;                   (algorithm (algorithm (1 2 840 113549 1 1 1))
-;;                              (parameters ()))
-;;                   (subjectPublicKey
-;;                    #vu8(48 129 137 2 129 129 0 225 106 228 3 48 151 2 60
-;;                            244 16 243 181 30 77 127 20 123 246 245 208 120
-;;                            233 164 138 240 163 117 236 237 182 86 150 127
-;;                            136 153 133 154 242 62 104 119 135 235 158 209
-;;                            159 192 180 23 220 171 137 35 164 29 126 22 35
-;;                            76 79 168 77 245 49 184 124 170 227 26 73 9 244
-;;                            75 38 219 39 103 48 130 18 1 74 233 26 182 193
-;;                            12 83 139 108 252 47 122 67 236 51 54 126 50 178
-;;                            123 213 170 207 1 20 198 18 236 19 242 45 20 122
-;;                            139 33 88 20 19 76 70 163 154 242 22 149 255 35
-;;                            2 3 1 0 1)))
-;;                  (issuerUniqueID #f)
-;;                  (subjectUniqueID #f)
-;;                  (extensions
-;;                   ((extnID (2 5 29 17)) (critical #f)
-;;                    (extnValue
-;;                     #vu8(48 54 134 52 104 116 116 112 58 47 47 119 119
-;;                             119 46 105 116 108 46 110 105 115 116 46 103
-;;                             111 118 47 100 105 118 56 57 51 47 115 116 97
-;;                             102 102 47 112 111 108 107 47 105 110 100 101
-;;                             120 46 104 116 109 108)))
-;;                   ((extnID (2 5 29 18)) (critical #f)
-;;                    (extnValue #vu8(48 22 134 20 104 116 116 112 58 47 47 119 119
-;;                                       119 46 110 105 115 116 46 103 111 118 47)))
-;;                   ((extnID (2 5 29 35)) (critical #f)
-;;                    (extnValue #vu8(48 22 128 20 8 104 175 133 51 200 57 74 122
-;;                                       248 130 147 142 112 106 74 32 132 44 50)))
-;;                   ((extnID (2 5 29 32)) (critical #f)
-;;                    (extnValue #vu8(48 14 48 12 6 10 96 134 72 1 101 3 2 1 48 9)))
-;;                   ((extnID (2 5 29 15)) (critical #t)
-;;                    (extnValue #vu8(3 2 7 128)))))
-;;  (signatureAlgorithm (algorithm (1 2 840 113549 1 1 5))
-;;                      (parameters ()))
-;;  (signatureValue
-;;   #vu8(142 142 54 86 120 139 191 161 57 117 23 46 227 16
-;;            220 131 43 104 52 82 28 246 108 29 82 94 84 32 16
-;;            94 76 169 64 249 75 114 158 130 185 97 220 235 50
-;;            165 189 177 177 72 249 155 1 187 235 175 155 131
-;;            246 82 140 176 109 124 208 154 57 84 62 109 32 111
-;;            205 208 222 190 39 95 32 79 182 171 13 245 183 225
-;;            186 180 223 223 61 212 246 237 1 251 110 203 152 89
-;;            172 65 251 72 156 31 246 91 70 224 41 226 118 236
-;;            196 58 10 252 146 197 192 210 169 201 211 41 82 135
-;;            101 51)))
-
-
-(library (weinholt crypto x509 (0 0 20100117))
+(library (weinholt crypto x509 (0 0 20100528))
   (export certificate<-bytevector
           public-key<-certificate
           decipher-certificate-signature
-          verify-certificate-chain
+          validate-certificate-path
           CA-path CA-file
 
           certificate-tbs-data
@@ -202,7 +137,7 @@
              (dNSName (implicit context 2 ia5-string))
              ;; FIXME:
              ;; (x400Address (implicit context 3 ,(ORAddress)))
-             (directoryName (implicit context 4 ,(Name)))
+             (directoryName (explicit context 4 ,(Name)))
              (ediPartyName (implicit context 5 ,(EDIPartyName)))
              (uniformResourceIdentifier (implicit context 6 ia5-string))
              (iPAddress (implicit context 7 octet-string))
@@ -222,6 +157,9 @@
              (universalString UniversalString)
              (utf8String UTF8String)
              (bmpString BMPString)))
+
+  (define (KeyUsage)
+    'bit-string)
 
 ;;;
 
@@ -376,25 +314,46 @@
     (cond ((find-extension cert 'subjectAltName)
            =>
            (lambda (ext)
+             ;; TODO: should probably discriminate between the
+             ;; different types in GeneralName here.
              (der:translate (der:decode (caddr ext)) (SubjectAltName))))
           (else '())))
+
+  (define (basic-constraints cert)
+    ;; Returns a list. The first entry is true if the certificate is
+    ;; supposed to belong to a CA, and the second entry is a path
+    ;; length constraint.
+    (cond ((find-extension cert 'basicConstraints)
+           =>
+           (lambda (ext)
+             (der:translate (der:decode (caddr ext)) (BasicConstraints))))
+          (else '(#f #f))))             ;default
 
   (define (decipher-certificate-signature signed-cert signer-cert)
     (unless (dn=? (tbs-certificate-subject (certificate-tbs-certificate signer-cert))
                   (tbs-certificate-issuer  (certificate-tbs-certificate signed-cert)))
       (error 'decipher-certificate-signature
-             "issuer on signed certificate does not match subject on signer"
+             "Issuer on signed certificate does not match subject on signer"
              (tbs-certificate-issuer  (certificate-tbs-certificate signed-cert))
              (tbs-certificate-subject (certificate-tbs-certificate signer-cert))))
+    (unless (eq? (certificate-signature-algorithm signed-cert)
+                 (tbs-certificate-signature-algorithm
+                  (certificate-tbs-certificate signed-cert)))
+      (error 'validate-certificate-path
+             "Signature algorithms differ"
+             (certificate-signature-algorithm signed-cert)
+             (tbs-certificate-signature-algorithm
+              (certificate-tbs-certificate signed-cert))))
     (let ((key (public-key<-certificate signer-cert)))
       (cond ((rsa-public-key? key)
+             ;; XXX: verify the signature algorithm specifies RSA
              (let ((digest (rsa-pkcs1-decrypt-digest
                             (certificate-signature-value signed-cert) key)))
                (list (translate-algorithm (car digest))
                      (cadr digest))))
             (else
              (error 'decipher-certificate-signature
-                    "unimplemented public key algorithm" key)))))
+                    "Unimplemented public key algorithm" key)))))
 
   (define (get-root-certificate issuer)
     (let ((name-hash (cdr (assq 'name-hash issuer))))
@@ -416,6 +375,7 @@
                              (else (lp (+ index 1))))))))
                 (else
                  ;; TODO: try the CA-file
+                 ;; Build a hashtable indexed by issuer
                  #f))))))
 
   (define (self-issued? cert)
@@ -429,68 +389,125 @@
       (dn=? (tbs-certificate-issuer signed-tbs)
             (tbs-certificate-subject signer-tbs))))
 
+  (define (time-ok? cert time)
+    (let ((validity (tbs-certificate-validity
+                     (certificate-tbs-certificate cert))))
+      (and (time>=? time (date->time-utc (car validity)))
+           (time<=? time (date->time-utc (cadr validity))))))
+
+  (define (signature-ok? signed signer)
+    (let ((signature (decipher-certificate-signature signed signer)))
+      (case (car signature)
+        ((sha1)
+         ;; XXX: verify the signature algorithm specifies sha1
+         (bytevector=? (sha-1->bytevector
+                        (sha-1 (certificate-tbs-data signed)))
+                       (cadr signature)))
+        (else (error 'validate-certificate-path
+                     "Unimplemented signature algorithm"
+                     (car signature))))))
+
+  (define (common-name-ok? cert common-name)
+    (cond ((assq 'commonName
+                 (tbs-certificate-subject
+                  (certificate-tbs-certificate cert)))
+           => (lambda (cn) (common-name-matches? common-name (cdr cn))))
+          (else #f)))
+
+  (define (alternative-name-ok? cert common-name)
+    (exists (lambda (name) (common-name-matches? common-name name))
+            (subject-alt-names cert)))
+
+  (define (revoked? cert)
+    ;; TODO: CRLs and so on
+    #f)
+
+  (define (critical-extensions-handled? cert)
+    (let ((cert (certificate-tbs-certificate cert)))
+      (for-all (lambda (ext)
+                 (or (not (cadr ext))   ;not critical
+                     (let ((name (symbol<-oid (car ext))))
+                       (memv name '(basicConstraints keyUsage)))))
+               (tbs-certificate-extensions cert))))
+
+  ;; Validate a certificate path as per section 6 of RFC 5280. The
+  ;; path is a list of certificates where the first certificate is
+  ;; issued by a trusted certificate and the last certificate is the
+  ;; end-entity (e.g. the server). Trust anchor information is passed
+  ;; either via the CA-path and CA-file parameters or the root-cert
+  ;; argument.
+  (define validate-certificate-path
+    (case-lambda
+      ((path)
+       (validate-certificate-path path #f (current-time) #f))
+      ((path common-name)
+       (validate-certificate-path path common-name (current-time) #f))
+      ((path common-name time)
+       (validate-certificate-path path common-name time #f))
+      ((path common-name time root-cert)
+       ;; XXX: Policy mappings and the permitted/excluded subtrees
+       ;; stuff is not (yet) implemented.
+       (let lp ((path path)
+                (maxlen (length path))
+                (signer (or root-cert
+                            (get-root-certificate
+                             (tbs-certificate-issuer
+                              (certificate-tbs-certificate (car path)))))))
+         (cond ((not signer)
+                'root-certificate-not-found)
+               ((not (signature-ok? (car path) signer))
+                'bad-signature)
+               ((not (time-ok? (car path) time))
+                'expired)
+               ((revoked? (car path))
+                'revoked)
+               ((not (cross-signed? (car path) signer))
+                'bad-issuer)
+               ((not (critical-extensions-handled? (car path)))
+                'unhandled-critical-extension)
+               ;; TODO: check subtrees
+               ((not (null? (cdr path)))
+                ;; Prepare for the next certificate
+                (let ((self-issued (self-issued? (car path)))
+                      (bc (basic-constraints (car path))))
+                  (let ((ca? (car bc))
+                        (maxlen-constraint (cadr bc)))
+                    (cond ((not ca?)
+                           'intermediate-is-not-ca)
+                          ((and (not self-issued) (<= maxlen 0))
+                           'maximum-path-length-exceeded)
+                          ;; TODO: verify keyUsage:keyCertSign
+                          ;; TODO: handle keyUsage
+                          (else
+                           (lp (cdr path)
+                               (min (if self-issued maxlen (- maxlen 1))
+                                    (or maxlen-constraint maxlen))
+                               (car path)))))))
+               ;; This is the last certificate in the path
+               ((not (or (not common-name)
+                         (common-name-ok? (car path) common-name)
+                         (alternative-name-ok? (car path) common-name)))
+                'bad-common-name)
+               ;; TODO: handle keyUsage
+               (else
+                'ok))))))
+
   ;; Verify a certificate chain. The chain is a list of certificates
   ;; where the first certificate is the end-entity that should
   ;; correspond to the given common-name (often the server name).
-  (define (verify-certificate-chain chain common-name)
-    ;; TODO: check subject/issuer, all that jazz. CRLs. Time fields.
-    ;; Same signature algorithms. That critical CA extension. List of
-    ;; trusted root certificates. Maximum depth.
-    (define (verify-signature signed signer if-ok)
-      (let ((signature (decipher-certificate-signature signed signer)))
-        (case (car signature)
-          ((sha1)
-           (if (bytevector=? (sha-1->bytevector
-                              (sha-1 (certificate-tbs-data signed)))
-                             (cadr signature))
-               if-ok
-               'bad-signature))
-          (else 'unimplemented-signing-algorithm))))
-    (define (verify l)
-      (let ((cert (certificate-tbs-certificate (car l))))
-        (cond
-          ((and (null? (cdr l))
-                (get-root-certificate (tbs-certificate-issuer cert)))
-           =>
-           (lambda (root-ca)
-             ;; This is the final test. Note that it returns a vague
-             ;; answer, because lots of stuff is not checked yet.
-             (verify-signature (car l) root-ca 'probably-ok)))
+  (define (load-certificates fn)
+    (call-with-port (open-input-file fn)
+      (lambda (p)
+        (let lp ()
+          (let-values (((type bv) (get-delimited-base64 p)))
+            (cond ((eof-object? bv)
+                   '())
+                  ((string=? type "CERTIFICATE")
+                   (cons (certificate<-bytevector bv)
+                         (lp)))
+                  (else (lp))))))))
 
-          ((and (self-issued? (car l)) (null? (cdr l)))
-           (verify-signature (car l) (car l) 'self-signed))
-
-          ((null? (cdr l))
-           'no-root-certificate)
-
-          ((cross-signed? (car l) (cadr l))
-           (let ((result (verify-signature (car l) (cadr l) 'ok)))
-             (if (eq? result 'ok)
-                 (verify (cdr l))
-                 result)))
-          (else
-           'bad-certificate-chain))))
-
-    (define (verify-common-name cert)
-      (cond ((assq 'commonName
-                   (tbs-certificate-subject
-                    (certificate-tbs-certificate (car chain))))
-             => (lambda (cn) (common-name-matches? common-name (cdr cn))))
-            (else #f)))
-
-    (define (verify-alternative-name cert)
-      (exists (lambda (name) (common-name-matches? common-name name))
-              (subject-alt-names cert)))
-
-    (cond ((null? chain) 'bad-certificate-chain)
-          ((and common-name
-                (not (verify-common-name (car chain)))
-                (not (verify-alternative-name (car chain))))
-           'bad-common-name)
-          (else
-           (verify chain))))
-
-
+  ;; XXX: should probably not be here
   (define (print-certificate c)
     (let ((cert (certificate-tbs-certificate c)))
       (print "---------------")
@@ -499,17 +516,37 @@
       (print "- Signature algorithm: " (tbs-certificate-signature-algorithm cert))
       (print "- Subject Public Key: ")
       (print (public-key<-certificate c))
-
       (display "- Issuer: ") (write (tbs-certificate-issuer cert)) (newline)
       (let ((v (tbs-certificate-validity cert)))
         (print "- Not valid before: " (date->string (car v)))
         (print "- Not valid after: " (date->string (cadr v))))
       (display "- Subject: ") (write (tbs-certificate-subject cert)) (newline)
-
       (print "- Extensions: ")
       (for-each (lambda (x)
                   (display (if (cadr x) "  Critical: " "  Ignoreable: "))
                   (case (symbol<-oid (car x))
+                    ((keyUsage)
+                     (display "key usage: ")
+                     (let ((ku (der:translate (der:decode (caddr x))
+                                              (KeyUsage))))
+                       (display "#b")
+                       (display (number->string ku 2))
+                       (display " ")
+                       (do ((i 0 (+ i 1))
+                            (names '(digitalSignature
+                                     nonRepudiation
+                                     keyEncipherment
+                                     dataEncipherment
+                                     keyAgreement
+                                     keyCertSign
+                                     cRLSign
+                                     encipherOnly
+                                     decipherOnly)
+                                   (cdr names))
+                            (bits '() (if (bitwise-bit-set? ku i)
+                                          (cons (car names) bits)
+                                          bits)))
+                           ((null? names) (display (reverse bits))))))
                     ((basicConstraints)
                      (display "basic constraints: ")
                      (let ((bc (der:translate (der:decode (caddr x))
@@ -524,13 +561,10 @@
                                   (caddr x)))))
                   (newline))
                 (tbs-certificate-extensions cert))
-
       (print "Signature algorithm: " (certificate-signature-algorithm c))
-
       #;(print "Signature: " (certificate-signature-value c))
-
       ))
 
 
-
   )
+

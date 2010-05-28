@@ -28,8 +28,8 @@
                            (caddr (command-line)))))
 
   (print "Server certificate validation: "
-         (x509:verify-certificate-chain (tls-conn-remote-certs conn)
-                                        (cadr (command-line))))
+         (x509:validate-certificate-path (tls-conn-remote-certs conn)
+                                         (cadr (command-line))))
 
   (print "Sending GET request.")
   
