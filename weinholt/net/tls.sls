@@ -41,8 +41,9 @@
 ;; TODO: go through the implementation pitfalls in the RFC.
 
 ;; TODO: handle fragmentation and multiple message in the same record.
+;; very important!
 
-(library (weinholt net tls (0 0 20100115))
+(library (weinholt net tls (0 0 20100528))
   (export make-tls-wrapper
           flush-tls-output
           put-tls-record get-tls-record
@@ -56,6 +57,7 @@
           put-tls-application-data
           tls-conn-remote-certs)
   (import (rnrs)
+          (only (srfi :1 lists) last)
           (srfi :19 time)
           (srfi :27 random-bits)
           (weinholt bytevectors)
@@ -157,7 +159,7 @@
             (mutable seq-read)
             (mutable seq-write)
             (mutable version)
-            (mutable remote-certs)
+            (mutable remote-certs)      ;end-entity is last
             (mutable server-key)
             (mutable server-random)
             (mutable client-random)
@@ -601,11 +603,10 @@
                (buffer-seek! b 3)
                (let lp ((certs '()))
                  (cond ((= certs-end (buffer-top b))
-                        (let ((certs (reverse certs)))
-                          (tls-conn-server-key-set! conn (public-key<-certificate
-                                                          (car certs)))
-                          (tls-conn-remote-certs-set! conn certs)
-                          'handshake-certificate))
+                        (tls-conn-server-key-set! conn (public-key<-certificate
+                                                        (last certs)))
+                        (tls-conn-remote-certs-set! conn certs)
+                        'handshake-certificate)
                        (else
                         (let* ((cert-len (read-u24 b 0))
                                (cert (certificate<-bytevector (buffer-data b)
@@ -622,7 +623,6 @@
 
             ((= type TLS-HANDSHAKE-CERTIFICATE-REQUEST)
              (hash!)
-             (print "server requests a client certificate")
              'handshake-certificate-request)
 
             ((= type TLS-HANDSHAKE-FINISHED)
