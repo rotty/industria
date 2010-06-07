@@ -1,0 +1,499 @@
+@c -*-texinfo-*-
+
+@node crypto
+@section Cryptographic primitives
+
+Beware that if you're using some of these libraries for sensitive
+data, let's say passwords, then there is probably no way to make sure
+a password is ever gone from memory. There is no guarantee that the
+passwords will not be swapped out to disk or transmitted by radio.
+There might be other problems as well. The algorithms themselves might
+be weak. Don't pick weak keys. Know what you're doing.
+
+Your Scheme's implementation of @code{(srfi :27 random-bits)} might be
+too weak. It's common that it will be initialized from time alone, so
+an attacker can easily guess your @code{random-source} internal state
+by trying a few timestamps and checking which one generates the data
+you sent. These libraries try to use @code{/dev/urandom} if it exists,
+but if it doesn't they fall back on SRFI-27 and could reveal the
+secret of your heart to the enemy. See RFC4086 for details on how
+randomness works.
+@cindex randomness
+@cindex entropy
+
+And remember what the license says about warranties. Don't come crying
+to me if the enemy deciphers your secret messages and your whole
+convoy blows up. These libraries have not been validated by the NIST
+or the FDA and quite likely aren't allowed for government work.
+@cindex security, warning
+
+@menu
+* crypto aes::         Advanced Encryption Standard
+* crypto blowfish::    The Blowfish cipher
+* crypto crc::         Cyclic Redundancy Codes
+* crypto des::         Data Encryption Standard
+* crypto md5::         Message-Digest algorithm 5
+@end menu
+
+@c ======================================================================
+@node crypto aes
+@subsection Advanced Encryption Standard
+The @code{(weinholt crypto aes)} library provides an implementation of
+the symmetrical Rijndael cipher as parameterized by the Advanced
+Encryption Standard (AES). It was created by the Belgian
+cryptographers Joan Daemen and Vincent Rijmen. Key lengths of 128, 192
+and 256 bits are supported.
+
+The code uses clever lookup tables and is probably as fast as any
+@rnrs{} implementation of AES can be without using an FFI. The number
+of modes provided is pretty sparse though (only ECB and CTR). It also
+leaks key material via memory.
+
+@deffn Procedure expand-aes-key key
+Expands the @var{key} into an @dfn{AES key schedule} suitable for
+@code{aes-encrypt!}. The @var{key} must be a bytevector of length 16,
+24 or 32 bytes. The type of the return value is unspecified.
+@end deffn
+
+@deffn Procedure aes-encrypt! source source-start target target-start key-schedule
+Takes the 16 bytes at @var{source}+@var{source-start}, encrypts
+them in Electronic Code Book (ECB) mode using the given
+@var{key-schedule}, and then writes the result at
+@var{target}+@var{target-start}. The @var{source} and the @var{target}
+can be the same.
+
+@example
+(import (weinholt crypto aes))
+(let ((buf (string->utf8 "A Scheme at work"))
+      (sched (expand-aes-key (string->utf8 "super-secret-key"))))
+  (aes-encrypt! buf 0 buf 0 sched)
+  buf)
+@result{} #vu8(116 7 242 187 114 235 130 138 166 39 24 204 117 224 5 8)
+@end example
+
+It is generally not a good idea to use ECB mode alone.
+@end deffn
+
+@deffn Procedure reverse-aes-schedule key-schedule
+Reverses the @var{key-schedule} to make it suitable for @code{aes-decrypt!}.
+@end deffn
+
+@deffn Procedure aes-decrypt! source source-start target target-start key-schedule
+Performs the inverse of @code{aes-encrypt!}. The @var{key-schedule}
+should first be reversed with @code{reverse-aes-schedule}.
+
+@example
+(import (weinholt crypto aes))
+(let ((buf (bytevector-copy #vu8(116 7 242 187 114 235 130 138
+                                 166 39 24 204 117 224 5 8)))
+      (sched (reverse-aes-schedule 
+              (expand-aes-key 
+               (string->utf8 "super-secret-key")))))
+  (aes-decrypt! buf 0 buf 0 sched)
+  (utf8->string buf))
+@result{} "A Scheme at work"
+@end example
+@end deffn
+
+@deffn Procedure clear-aes-schedule! key-schedule
+Clears the AES key schedule so that it no longer contains
+cryptographic material. Please note that there is no guarantee that
+the key material will actually be gone from memory. It might remain in
+temporary numbers or other values.
+@end deffn
+
+@deffn Procedure aes-ctr! source source-start target target-start len key-schedule ctr
+Encrypts or decrypts the @var{len} bytes at
+@var{source}+@var{source-start} using Counter (CTR) mode and writes
+the result to @var{target}+@var{target-start}. The @var{len} does not
+need to be a block multiple. The @var{ctr} argument is a non-negative
+integer.
+
+This procedure is its own inverse and the @var{key-schedule} should
+not be reversed for decryption.
+
+Never encrypt more than once using the same @var{key-schedule} and
+@var{ctr} value. If you're not sure why that is a bad idea, you should
+read up on CTR mode.
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
+@end itemize
+
+@c ======================================================================
+@node crypto blowfish
+@subsection The Blowfish Cipher
+The @code{(weinholt crypto blowfish)} library is a complete
+implementation of Bruce Schneier's Blowfish cipher. It is a symmetric
+block cipher with key length between 8 and 448 bits. The key
+length does not affect the performance.
+
+@deffn Procedure expand-blowfish-key key
+Expands a Blowfish @var{key}, which is a bytevector of length between
+1 and 56 bytes (the longer the better). The returned key schedule can
+be used with @code{blowfish-encrypt!} or
+@code{reverse-blowfish-schedule}.
+@end deffn
+
+@deffn Procedure blowfish-encrypt! source source-index target target-index schedule
+Encrypts the eight bytes at @var{source}+@var{source-start} using
+Electronic Code Book (ECB) mode. The result is written to
+@var{target}+@var{target-start}.
+@end deffn
+
+@deffn Procedure reverse-blowfish-schedule
+Reverses a Blowfish key schedule so that it can be used with
+@code{blowfish-decrypt!}.
+@end deffn
+
+@deffn Procedure blowfish-decrypt! source source-index target target-index schedule
+The inverse of @code{blowfish-encrypt!}.
+@end deffn
+
+@deffn Procedure clear-blowfish-schedule!
+Clears the Blowfish key schedule so that it no longer contains
+cryptographic material. Please note that there is no guarantee that
+the key material will actually be gone from memory. It might remain in
+temporary numbers or other values.
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(0 0)} -- Initial version.
+@end itemize
+
+@c ======================================================================
+@node crypto crc
+@subsection Cyclic Redundancy Codes
+The @code{(weinholt crypto crc)} library exports syntax for defining
+procedures that calculate CRCs. There is a simple syntax that simply
+requires the name of the CRC, and an advanced syntax that can define
+new CRCs.
+
+CRCs do not really qualify as cryptography, because it is trivial to
+modify data so that the modified data's CRC matches the old one.
+
+@deffn Syntax define-crc name
+This is the simple interface that requires merely the name of the CRC
+algorithm. The pre-defined CRCs that can be used this way are currently:
+@code{crc-32}, @code{crc-16}, @code{crc-16/ccitt}, @code{crc-32c},
+@code{crc-24} and @code{crc-64}.
+
+@example
+(import (weinholt crypto crc))
+(define-crc crc-32)
+@end example
+@end deffn
+
+@deffn Syntax define-crc name width polynomial init ref-in ref-out xor-out check
+For details on how the arguments work, and the theory behind them, see
+Ross N.@tie{}Williams's paper @cite{A painless guide to CRC error
+detection algorithms}, which is available at
+@url{http://www.ross.net/crc/crcpaper.html}. A brief description of the
+arguments follows.
+
+The @var{width} is the bitwise length of the polynomial. You might be
+led to believe that it should sometimes be 33, but if so you've
+been counting the highest bit, which doesn't count.
+
+The polynomial for CRC-16 is sometimes given as @math{x^{16} + x^{15}
++ x^2 + 1}. This translates to @code{#b1000000000000101}
+(@code{#x8005}). Notice that @math{x^{16}} is absent. Don't use the
+reversed polynomial if you have one of those, instead set @var{ref-in}
+and @var{ref-out} properly.
+
+After a CRC has been calculated it is sometimes XOR'd with a final
+value, this is @var{xor-out}.
+
+@var{check} is either @code{#f} or the CRC of the string @code{"123456789"}.
+@end deffn
+
+@deffn Syntax define-crc name (coefficients ...) init ref-in ref-out xor-out check
+This is a slightly easier version of the advanced interface where you
+can simply specify the powers of the coefficients. CRC-16 in this
+syntax becomes:
+
+@example
+(import (weinholt crypto crc))
+(define-crc crc-16 (16 15 2 0) #x0000 #t #t #x0000 #xBB3D)
+@expansion{}
+(begin
+  (define (crc-16 bv)
+    (crc-16-finish (crc-16-update (crc-16-init) bv)))
+  (define (crc-16-init) #x0000)
+  (define (crc-16-finish r) (bitwise-xor r #x0000))
+  (define (crc-16-self-test)
+    (if #xBB3D
+        (if (= (crc-16 (string->utf8 "123456789")) #xBB3D)
+            'success 'failure)
+        'no-self-test))
+  @dots{})
+@end example
+
+Another example: the polynomial @math{x^8 + x^2 + x + 1} in this syntax
+is @code{(8 2 1 0)}.
+@end deffn
+
+After e.g.@: @code{(define-crc crc-32)} has been used, these bindings
+will be available (with names that match the name of the CRC):
+
+@deffn Procedure crc-32 bytevector
+Calculates the final CRC of the entire bytevector and returns it as an
+integer.
+
+@example
+(import (weinholt crypto crc))
+(define-crc crc-32)
+(crc-32 (string->utf8 "A fiendish scheme"))
+@result{} 1384349758
+@end example
+@end deffn
+
+@deffn Procedure crc-32-init
+Returns an initial CRC state.
+@end deffn
+
+@deffn Procedure crc-32-update state bv [start end]
+Uses the @var{state} and returns a new state that includes the CRC of
+the given bytes.
+
+@example
+(import (weinholt crypto crc))
+(define-crc crc-32)
+(crc-32-finish
+ (crc-32-update (crc-32-init)
+                (string->utf8 "A fiendish scheme")))
+@result{} 1384349758
+@end example
+@end deffn
+
+@deffn Procedure crc-32-finish state
+Finalizes the CRC @var{state}.
+@end deffn
+
+@deffn Procedure crc-32-width
+Returns the bit-width of the CRC, e.g.@: 32 for CRC-32.
+@end deffn
+
+@deffn Procedure crc-32-self-test
+Performs a sanity check and returns either
+@code{success}, @code{failure} or @code{no-self-test}.
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version. Includes crc-32, crc-16,
+ crc-16/ccitt, crc-32c, and crc-24.
+@item
+@code{(1 1)} -- Added crc-64 and the @code{-width} procedures. The
+@code{-update} procedures use fixnums if @code{(fixnum-width)} is
+larger than the CRC's width.
+@end itemize
+
+@c ======================================================================
+@node crypto des
+@subsection Data Encryption Standard
+The Data Encryption Standard (DES) is older than AES and uses shorter
+keys. To get longer keys the Triple Data Encryption Algorithm (TDEA,
+3DES) is commonly used instead of DES alone.
+@cindex Triple Data Encryption Algorithm
+@cindex 3DES
+
+
+The @code{(weinholt crypto des)} library is incredibly inefficient and
+the API is, for no good reason, different from the AES library. You
+should probably use AES instead, if possible.
+
+@deffn Procedure des-key-bad-parity? key
+Returns @code{#f} if the DES @var{key} has good parity, or the index
+of the first bad byte. Each byte of the @var{key} has one parity bit,
+so even though it is a bytevector of length eight (64 bits), only 56
+bits are used for encryption and decryption. Parity is usually
+ignored.
+@end deffn
+
+@deffn Procedure des! bv key-schedule [offset E]
+The fundamental DES procedure, which performs both encryption and
+decryption in Electronic Code Book (ECB) mode. The eight bytes
+starting at @var{offset} in the bytevector @var{bv} are modified
+in-place.
+
+The @var{offset} can be omitted, in which case 0 is used.
+
+The @var{E} argument will normally be omitted. It is only used by the
+@code{des-crypt} procedure.
+
+@example
+(import (weinholt crypto des))
+(let ((buf (string->utf8 "security"))
+      (sched (permute-key (string->utf8 "terrible"))))
+  (des! buf sched)
+  buf)
+@result{} #vu8(106 72 113 111 248 178 225 208)
+@end example
+
+@example
+(import (weinholt crypto des))
+(let ((buf (bytevector-copy #vu8(106 72 113 111 248 178 225 208)))
+      (sched (reverse (permute-key (string->utf8 "terrible")))))
+  (des! buf sched)
+  (utf8->string buf))
+@result{} "security"
+@end example
+
+@end deffn
+
+@deffn Procedure permute-key key
+Permutes the DES @var{key} into a key schedule. The key schedule is
+then used as an argument to @code{des!}. To decrypt, simply reverse
+the key schedule. The return value is a list.
+@end deffn
+
+@deffn Procedure tdea-permute-key key1 [key2 key3]
+Permutes a 3DES key into a key schedule. If only one argument is given
+then it must be a bytevector of length 24. If three arguments are given
+they must all be bytevectors of length eight.
+
+The return value's type is unspecified.
+@end deffn
+
+@deffn Procedure tdea-encipher! bv offset key
+Encrypts the eight bytes at @var{offset} of @var{bv} using the given
+3DES key schedule.
+@end deffn
+
+@deffn Procedure tdea-decipher! bv offset key
+The inverse of @code{tdea-encipher!}.
+@end deffn
+
+@deffn Procedure tdea-cbc-encipher! bv key iv offset count
+Encrypts the @var{count} bytes at @var{offset} of @var{bv} using
+Cipher Block Chaining (CBC) mode.
+
+The @var{iv} argument is the @dfn{Initial Vector}, which is XOR'd with
+the data before encryption. It is a bytevector of length eight and it
+is modified for each block.
+
+Both @var{offset} and @var{count} must be a multiples of eight.
+@end deffn
+
+@deffn Procedure tdea-cbc-decipher! bv key iv offset count
+The inverse of @code{tdea-cbc-encipher!}.
+@end deffn
+
+@deffn Procedure des-crypt password salt
+This is a password hashing algorithm that used to be very popular on
+Unix systems, but is today too fast (which means brute forcing
+passwords from hashes is fast). The @var{password} string is at most
+eight characters.
+
+The algorithm is based on 25 rounds of a slightly modified DES.
+
+The @var{salt} must be a string of two characters from the alphabet
+@code{#\A}--@code{#\Z}, @code{#\a}--@code{#\z},
+@code{#\0}--@code{#\9}, @code{#\.} and @code{#\/}.
+
+@example
+(import (weinholt crypto des))
+(des-crypt "password" "4t")
+@result{} "4tQSEW3lEnOio"
+@end example
+@end deffn
+
+A more convenient interface is provided by @code{(weinholt crypto password)}.
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
+@end itemize
+
+@c ======================================================================
+@node crypto md5
+@subsection Message-Digest algorithm 5
+The @code{(weinholt crypto md5)} library is an implementation of the
+cryptographic hash function MD5. It takes bytes as input and returns a
+@dfn{message digest}, which is like a one-way summary of the data. The
+idea is that even the smallest change in the data should produce a
+completely different digest, and it should be difficult to find
+different data that has the same digest. An MD5 digest is 16 bytes.
+
+The MD5 algorithm is considered broken and you will likely want to use
+SHA-2 instead, if possible.
+
+@deffn Procedure md5 bv ...
+The complete all-in-one procedure to calculate the MD5 message digest
+of all the given bytevectors in order. Returns an md5 state, which
+should be used with @code{md5->bytevector} or @code{md5->string}.
+
+@example
+(md5->string (md5 (string->utf8 "A Scheme in my pocket")))
+@result{} "65A2B2D8EE076250EA0A105A8D5EF1BB"
+@end example
+@end deffn
+
+@deffn Procedure make-md5
+Returns a new MD5 state for use with the procedures below. The type of
+the return value is unspecified.
+@end deffn
+
+@deffn Procedure md5-update! md5state bv [start end]
+Updates the @var{md5state} to include the specified range of data from
+@var{bv}.
+@end deffn
+
+@deffn Procedure md5-finish! md5state
+Finalizes the @var{md5state}. This must be used after the last call to
+@code{md5-update!}.
+@end deffn
+
+@deffn Procedure md5-clear! md5state
+Clear the @var{md5state} so that it does not contain any part of the
+input data or the message digest.
+@end deffn
+
+@deffn Procedure md5-copy md5state
+Make a copy of the @var{md5state}.
+@end deffn
+
+@deffn Procedure md5-finish md5state
+Performs @code{md5-finish!} on a copy of @var{md5state} and then
+returns the new state.
+@end deffn
+
+@deffn Procedure md5-copy-hash! md5state bv offset
+Copies the message digest (a.k.a.@: hash) in the finalized
+@var{md5state} into @var{bv} at the given offset.
+@end deffn
+
+@deffn Procedure md5->bytevector md5state
+Returns a new bytevector which contains a binary representation of the
+finalized @var{md5state}.
+@end deffn
+
+@deffn Procedure md5->string md5state
+Returns a new string which contains a textual representation of the
+finalized @var{md5state}. The conventional hexadecimal representation
+is used.
+@end deffn
+
+@deffn Procedure hmac-md5 secret bytevector ...
+An HMAC is a Hash-based Message Authentication Code. This procedure uses
+MD5 to generate such a code. The return value is an MD5 state.
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
+@end itemize

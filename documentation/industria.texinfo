@@ -1,0 +1,124 @@
+\input texinfo   @c -*-texinfo-*-
+@c %**start of header
+@setfilename industria.info
+@settitle The Industria Libraries Manual
+@c %**end of header
+
+@c info: makeinfo industria
+@c html: makeinfo --no-split --html industria
+@c pdf: texi2pdf industria.texinfo
+
+@ifinfo
+@macro rnrs{}
+R6RS
+@end macro
+@end ifinfo
+
+@ifnotinfo
+@macro rnrs{}
+R@math{^6}RS
+@end macro
+@end ifnotinfo
+
+@ifhtml
+@unmacro rnrs
+@macro rnrs{}
+@html
+R<sup><small>6</small></sup>RS
+@end html
+@end macro
+@end ifhtml
+
+@syncodeindex fn cp
+
+@copying
+This manual is for the Industria libraries, a collection of @rnrs{}
+Scheme libraries.
+
+Copyright @copyright{} 2010 G@"oran Weinholt @email{goran@@weinholt.se}.
+
+@quotation
+Permission is granted to copy, distribute and/or modify this document
+under the terms of the GNU General Public License, Version 3 or any
+later version published by the Free Software Foundation.
+@end quotation
+@end copying
+
+@c Same category SLIB uses
+@dircategory The Algorithmic Language Scheme
+@direntry
+* Industria: (industria).          The Industria libraries
+@end direntry
+
+@titlepage
+@title The Industria Libraries Manual
+@author G@"oran Weinholt
+
+@c  The following two commands
+@c  start the copyright page.
+@page
+@vskip 0pt plus 1filll
+@insertcopying
+
+@end titlepage
+
+@c So the toc is printed at the start.
+@contents
+
+@ifnottex
+@node Top
+@top Industria
+
+This manual is for the Industria libraries, an assortment of portable
+@rnrs{} Scheme libraries. A set of cryptographical primitives (AES, DES,
+Blowfish, HMAC, MD5, SHA-1, SHA-2, RSA, DSA). Decompression (zip,
+gzip, zlib, inflate), an amd64 disassembler, Off-the-Record Messaging,
+bytevector pack/unpack syntax, CRCs and more.
+
+@c maybe do insertcopying here
+
+@end ifnottex
+
+@menu
+* Getting started::    Installation and usage
+* Library reference::  How to use the individual libraries
+@c * Copying::            Your right to keep and arm bears
+* Index::              Index of concepts, functions, etc
+@end menu
+
+@node Getting started
+@chapter Getting started
+
+@menu
+* Installation::       Where to put all the files
+* Usage::              How to make it go
+* Versioning::         On avoiding horribly broken releases
+@end menu
+
+@include starting.texinfo
+
+@node Library reference
+@chapter Library reference
+
+@menu
+@c * archive::            File archive utilities
+@c * assembler::          Machine code assemblers
+@c * binfmt::             Executable file format utilities
+@c * compression::        Decompression code
+* crypto::             Cryptographic primitives
+@c * disassembler::       Disassemble machine code
+@c * net::                Network protocols
+* struct::             Binary structure utilities
+@c * text::               Textual structure utilities
+@c * x::                  X Window System interface
+@end menu
+
+@include crypto.texinfo
+@include struct.texinfo
+
+@node Index
+@unnumbered Index
+@printindex cp
+
+
+@bye

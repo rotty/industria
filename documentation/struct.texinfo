@@ -1,0 +1,183 @@
+@c -*-texinfo-*-
+
+@node struct
+@section Binary structure utilities
+
+@menu
+@c * struct der::         ASN.1 DER reader
+* struct pack::        Binary structure packing and unpacking
+@end menu
+
+@c ======================================================================
+@node struct pack
+@subsection Binary structure packing and unpacking
+With @code{(weinholt struct pack)} you can easily access fields in a
+bytevector and make new bytevectors from fields. The library defines
+syntax that is similar to Python's struct module or Perl's pack/unpack
+functions.
+
+The exported bindings are actually syntax, but they can be used as
+normal procedures, thanks to the use of
+@code{make-variable-transformer}. The syntax transformers basically
+perform inlining.
+
+This library uses @dfn{format strings} which specify binary fields.
+The format strings are read left-to-right and their syntax is:
+
+@itemize
+@item
+@code{c} -- s8, a signed byte.
+@item
+@code{C} -- u8, an unsigned byte.
+@item
+@code{s} -- s16, a signed 16-bit word.
+@item
+@code{S} -- u16, an unsigned 16-bit word.
+@item
+@code{l} -- s32, a signed 32-bit word.
+@item
+@code{L} -- u32, an unsigned 32-bit word.
+@item
+@code{q} -- s64, a signed 64-bit word.
+@item
+@code{Q} -- u64, an unsigned 64-bit word.
+@item
+@code{f} -- an IEEE-754 single-precision number.
+@item
+@code{d} -- an IEEE-754 double-precision number.
+@item
+@code{x} -- one byte of padding (zero).
+@item
+@code{a} -- enable automatic natural alignment (default).
+  Padding is inserted to align fields to their natural alignment,
+  i.e.@: a 32-bit field is aligned to a 4 byte offset.
+@item
+@code{u} -- disable automatic natural alignment.
+@item
+@code{!} and @code{>} -- the following fields will have big-endian
+  (network) byte order.
+@item
+@code{<} -- the following fields will have little-endian byte order.
+@item
+@code{=} -- the following fields will have native endianness.
+@item
+whitespace -- ignored.
+@item
+decimals -- repeat the following format character N times.
+@end itemize
+
+@deffn Procedure unpack fmt bytevector [offset]
+Returns as many values as there are fields in the @var{fmt} string.
+The values are fetched from the @var{bytevector} starting at the
+@var{offset} (by default 0). For example, if the format string is
+@code{"C"}, this translates into a @code{bytevector-u8-ref} call.
+
+@example
+(import (weinholt struct pack))
+(unpack "!xd" (pack "!xd" 3.14))
+@result{} 3.14
+@end example
+
+@example
+(import (weinholt struct pack))
+(number->string (unpack "!L" #vu8(#x00 #xFB #x42 #xE3)) 16)
+@result{} "FB42E3"
+@end example
+
+@example
+(import (weinholt struct pack))
+(unpack "!2CS" #vu8(1 2 0 3))
+@result{} 1 
+@result{} 2
+@result{} 3
+@end example
+
+@end deffn
+
+@deffn Procedure pack fmt values ...
+Returns a new bytevector containing the values encoded as per the
+@var{fmt} string.
+
+@example
+(import (weinholt struct pack))
+(pack "!CCS" 1 2 3)
+@result{} #vu8(1 2 0 3)
+@end example
+
+@example
+(pack "!CSC" 1 2 3)
+@result{} #vu8(1 0 0 2 3)
+@end example
+
+@example
+(pack "!SS" (question-qtype x) (question-qclass x))
+@expansion{}
+(let ((bv (make-bytevector 4)))
+  (pack! "!SS" bv 0 (question-qtype x) (question-qclass x))
+  bv)
+@expansion{}
+(let ((bv (make-bytevector 4)))
+  (let ((bv bv) (off 0))
+    (bytevector-u16-set! bv 0 (question-qtype x) 
+                         (endianness big))
+    (bytevector-u16-set! bv 2 (question-qclass x)
+                         (endianness big))
+    (values))
+  bv)
+@end example
+@end deffn
+
+@deffn Procedure pack! fmt bytevector offset values ...
+The same as @code{pack}, except it modifies the given @var{bytevector}
+and returns no values.
+@end deffn
+
+@deffn Procedure get-unpack binary-input-port fmt
+Reads @code{(format-size fmt)} bytes from the @var{binary-input-port}
+and unpacks them according to the format string. Returns the same
+values as @code{unpack} would.
+
+@example
+(get-unpack port "4xCCxCC7x")
+@expansion{}
+(let ((bv (get-bytevector-n port 16))
+      (off 0))
+  (values (bytevector-u8-ref bv 4) (bytevector-u8-ref bv 5)
+          (bytevector-u8-ref bv 7) (bytevector-u8-ref bv 8)))
+@end example
+@end deffn
+
+@deffn Procedure format-size fmt
+Returns how many bytes the fields in the format string would use
+if packed together, including any padding.
+
+@example
+(import (weinholt struct pack))
+(format-size "!xQ")
+@result{} 16
+@end example
+
+@example
+(format-size "!uxQ")
+@result{} 9
+@end example
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
+@item
+@code{(1 1)} -- @code{unpack} can now be used as a procedure.
+@item
+@code{(1 2)} -- Added the format characters @code{a} and @code{u}.
+@item
+@code{(1 3)} -- Added @code{get-unpack}. Removed the unnecessary size check
+in unpack.
+@item
+@code{(1 4)} -- @code{pack}, @code{get-unpack} and @code{format-size}
+are now syntax. The unpack syntax can handle non-constant offsets.
+Removed another unnecessary size check in @code{pack!}. Added
+documentation and examples.
+@end itemize

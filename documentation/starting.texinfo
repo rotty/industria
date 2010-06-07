@@ -1,0 +1,126 @@
+@node Installation
+@section Installation
+
+The short version: extend your Scheme library search path to include
+the @code{industria} directory, e.g.@: if you're using Ikarus on a Unix
+system and you unpacked Industria in your home directory:
+@verbatim
+export IKARUS_LIBRARY_PATH=$HOME/industria
+@end verbatim
+
+Other possible environment variables include @code{CHEZSCHEMELIBDIRS},
+@code{LARCENY_LIBPATH}, @code{MOSH_LOADPATH} and @code{YPSILON_SITELIB}.
+For more details please refer to your Scheme implementation's
+documentation.
+@uref{http://srfi.schemers.org/srfi-103/srfi-103.html,SRFI-103} is
+attempting to standardize this environment variable name. An
+alternative is to move or symlink the @code{weinholt} directory into a
+directory that already exists in your Scheme's search path.
+
+There have not been any releases yet. The development version of
+Industria is available in a Bazaar repository on
+@uref{https://launchpad.net/,Launchpad}. You can download the
+development version like this:
+@verbatim
+bzr checkout --lightweight lp:~weinholt/scheme-libraries/industria
+@end verbatim
+
+Development snapshots are available at
+@url{https://weinholt.se/industria/}.
+@cindex development snapshots
+
+
+You will also need a number of SRFI libraries. If your Scheme does not
+come with a collection of SRFIs already you can get them from the
+@url{https://code.launchpad.net/~scheme-libraries-team/scheme-libraries/srfi,
+Scheme Libraries Team at Launchpad}.
+
+Another way to install the libraries is to use the Dorodango package
+manager. It's available at @url{http://rotty.yi.org/software/dorodango/}.
+@cindex dorodango, package manager
+
+@node Usage
+@section Usage
+I'll assume you're familiar with Scheme already. To load an
+@rnrs{} library into your program or library, put it in the @code{import}
+specification. Here's Hello World for @rnrs{} Scheme:
+
+@lisp
+#!/usr/bin/env scheme-script
+(import (rnrs))
+(display "Hello World!\n")
+@end lisp
+@cindex Hello World, example
+
+The first line is useful on Unix systems, but it is specified in the
+@rnrs{} Non-Normative Appendices, so your Scheme might not accept
+programs with that line present.
+
+Common file extensions for @rnrs{} programs are @code{.scm},
+@code{.sps}, @code{.ss} or no extension at all. The @code{(rnrs)}
+library will normally be built-in and might not correspond to any
+file, but other libraries are usually found by converting the library
+name into a file system path. Here's an example that uses the
+@code{(weinholt crypto md5)} library:
+
+@lisp
+(import (rnrs)
+        (weinholt crypto md5))
+(display (md5->string (md5 (string->utf8 (cadr (command-line))))))
+(newline)
+@end lisp
+
+The @code{md5->string} and @code{md5} bindings were imported from
+@code{weinholt/crypto/md5.sls}. Here is how you might run the program
+with Ikarus:
+@verbatim
+$ ikarus --r6rs-script example.sps "a grand scheme"
+A6FD66F0888EDCAC812D441EFE95E6C1
+@end verbatim
+
+
+@node Versioning
+@section Versioning
+
+@rnrs{} libraries can contain a version number, but they can be
+completely ignored if you like. The Industria libraries will use a
+versioning scheme that consist of (@code{major} @code{minor}
+@code{date}) sub-versions, where
+
+@itemize
+@item
+@code{major} is incremented when backwards compatibility is broken.
+@item
+@code{minor} is incremented when new functionality is introduced.
+@item
+@code{date} is the date of the latest change in YYYYMMDD format.
+@end itemize
+
+Here's a library that demonstrates how version dependencies can be
+specified:
+
+@lisp
+(library (foo)
+  (export be32ref)
+  (import (rnrs)
+          (weinholt struct pack (1 (>= 3))))
+  (define (be32ref x)
+    (unpack "!L" x)))
+@end lisp
+
+The example is importing the version of the pack library that supports
+all programs and libraries that were written against the features
+supported by version @code{(1 3)}. If there are major changes to the
+library that need to break backwards compatibility, the version will
+be incremented to @code{(2 0)}. New functionality that does not break
+current programs and libraries will be introduced in version @code{(1 4)},
+@code{(1 5)} and so on.
+
+The @code{date} sub-version doesn't have to be used, but it can be
+used to depend on bug-fixed versions. It is automatically incremented
+by my editor, so it could possibly be more correct than the other
+sub-versions, which are modified manually.
+
+There is no guarantee that the versioning scheme will be adhered to in
+unreleased development versions. This does not imply that there is a
+guarantee for released versions either, but I'll do my best.
