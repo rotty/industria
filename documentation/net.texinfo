@@ -1,0 +1,518 @@
+@c -*-texinfo-*-
+
+@node net
+@section Network protocols
+
+@menu
+* net irc::            Internet Relay Chat
+* net irc fish::       Blowcrypt/FiSH encryption for IRC
+* net otr::            Off-the-Record Messaging
+@end menu
+
+@c ======================================================================
+@node net irc
+@subsection Internet Relay Chat
+The @code{(weinholt net irc)} library provides low-level procedures
+for parsing and formatting IRC protocol commands. It makes it easy to
+split incoming commands into parts and to format outgoing commands.
+There are also helpers for various other parsing needs.
+
+The IRC protocol is standardized by RFCs 2810-2813, but servers very
+often (always?) disregard the RFCs. They do provide good guidelines
+for what should work.
+
+@deffn Procedure parse-message message [remote-server]
+This procedure splits an IRC @var{message} into three parts: prefix,
+command and a list of arguments. The command is either a symbol or a
+number. If the message does not have a prefix the @var{remote-server}
+argument will be used instead, because it is implied by the protocol.
+
+@example
+(import (weinholt net irc))
+(parse-message 
+ ":irc.example.net PONG irc.example.net :irc.example.net")
+@result{} "irc.example.net"
+@result{} PONG
+@result{} ("irc.example.net" "irc.example.net")
+@end example
+
+@example
+(parse-message 
+ ":user!ident@@example.com PRIVMSG #test :this is a test")
+@result{} "user!ident@@example.com"
+@result{} PRIVMSG
+@result{} ("#test" "this is a test")
+@end example
+
+@example
+(parse-message "PING irc.example.net" "irc.example.net")
+@result{} "irc.example.net"
+@result{} PING
+@result{} ("irc.example.net")
+@end example
+
+@example
+(parse-message "PING irc.example.net")
+@result{} #f
+@result{} PING
+@result{} ("irc.example.net")
+@end example
+@end deffn
+
+@deffn Procedure parse-message-bytevector bv [start end remote-server]
+This procedure does the same thing @code{parse-message} does, except
+it works on bytevectors. This is useful because the IRC protocol does
+not have a standard character encoding. Different channels on IRC
+often use different encodings.
+@end deffn
+
+@deffn Procedure format-message-raw port codec prefix cmd parameters ...
+Formats and outputs an IRC message to the given @var{port}, which must
+be in binary mode.
+
+The @var{codec} is a codec, meaning the value returned by e.g.@:
+@code{utf-8-codec} or @code{latin-1-codec}. The codec is used to
+transcode the parameters.
+
+The @var{prefix} is the name of the server or client that originated
+the message. IRC clients should use #f as prefix when sending to a
+server.
+
+The @var{cmd} is a symbol or string representing an IRC command, but
+it can also be an integer (which must be be between 000 and 999). Only
+servers send numerical commands.
+
+The rest of the arguments are the @var{parameters} for the given
+command, which can be either numbers, strings or bytevectors. Only the
+last of the parameters may contain whitespace. The maximum number of
+parameters allowed by the protocol is 15. Each IRC protocol command
+takes a pre-defined number of parameters, so e.g.@: if @var{cmd} is
+@code{PRIVMSG} then you must only pass two parameters.
+
+@example
+(import (weinholt net irc))
+(utf8->string
+ (call-with-bytevector-output-port
+   (lambda (port)
+     (format-message-raw port (utf-8-codec)
+                         "irc.example.net" 1 "luser"
+                         "Welcome to the IRC"))))
+@result{} ":irc.example.net 001 luser :Welcome to the IRC\r\n"
+@end example
+
+@example
+(utf8->string
+ (call-with-bytevector-output-port
+   (lambda (port)
+     (format-message-raw port (utf-8-codec)
+                         #f 'NOTICE "#example"
+                         "Greetings!"))))
+@result{} "NOTICE #example Greetings!\r\n"
+@end example
+@end deffn
+
+@deffn Procedure format-message-and-verify port codec prefix cmd parameters ...
+This procedure works just like format-message-raw, except before
+writing the message it parses the formatted message and compares it
+with the input to make sure it is the same. This prevents some attacks
+against IRC bots.
+
+@example
+(import (weinholt net irc))
+(utf8->string
+ (call-with-bytevector-output-port
+   (lambda (port)
+     (format-message-and-verify
+      port (utf-8-codec) #f 'NOTICE 
+      "#scheme" "announcing the 2^32th irc library!"))))
+@result{} "NOTICE #scheme :announcing the 2^32th irc library!\r\n"
+@end example
+
+This example shows what happens when a parameter contains a newline,
+which is a common attack against bots. The command after the newline
+would be sent to the server, and the bot would exit all channels.
+Instead an exception is raised:
+
+@example
+(utf8->string
+ (call-with-bytevector-output-port
+   (lambda (port)
+     (format-message-and-verify
+      port (utf-8-codec) #f 'NOTICE 
+      "#example" "Querent: the answer is \r\nJOIN 0"))))
+@error{} &irc-format
+@end example
+@end deffn
+
+@deffn Procedure format-message-with-whitewash port codec prefix cmd parameters ...
+This provides an alternative to @code{format-message-and-verify} which
+is useful if you're not concerned about data integrity, so to speak.
+It replaces all bad characters with space before transmitting.
+
+@example
+(utf8->string
+ (call-with-bytevector-output-port
+   (lambda (port)
+     (format-message-with-whitewash
+      port (utf-8-codec) #f 'NOTICE 
+      "#example" "Querent: the answer is \r\nJOIN 0"))))
+@result{} "NOTICE #example :Querent: the answer is   JOIN 0\r\n"
+@end example
+@end deffn
+
+
+@deffn Procedure irc-parse-condition? obj
+Returns @code{#t} is @var{obj} is an @code{&irc-parse} condition. The
+message parsing procedures use this condition when they detect a
+malformed message.
+@end deffn
+
+@deffn Procedure irc-format-condition? obj
+Returns @code{#t} is @var{obj} is an @code{&irc-format} condition. The
+message formatting procedures use this condition when they are unable
+to format a message.
+@end deffn
+
+
+@deffn Procedure extended-prefix? str
+The prefix in an IRC message can either be a server name or an
+extended prefix which identifies a client. Extended prefixes look like
+@code{nickname!user@@host}.
+@end deffn
+
+@deffn Procedure prefix-split str
+Splits an extended prefix into its parts and returns three values:
+nickname, user and host.
+@end deffn
+
+@deffn Procedure prefix-nick str
+Returns the nickname part of an extended prefix.
+@end deffn
+
+
+@deffn Procedure parse-isupport list
+Parses an @code{ISUPPORT} list. The return value is an alist.
+
+See @url{http://www.irc.org/tech_docs/005.html} for more on
+@code{ISUPPORT}.
+
+@c TODO: document how the different parameters are parsed
+@end deffn
+
+@deffn Procedure isupport-defaults
+Returns an alist of default @code{ISUPPORT} values.
+@end deffn
+
+
+@deffn Procedure string-irc=? str1 str2 [mapping]
+Compares @var{str1} and @var{str2} for equality. The comparison is
+case-insensitive and uses the specified @var{mapping} to compare
+characters. This procedure is useful for comparing nicknames.
+
+The @var{mapping} should be one of @code{rfc1459}, @code{ascii} or
+@code{strict-rfc1459}. Servers indicate in the @code{CASEMAPPING
+ISUPPORT} parameter which mapping they use.
+
+The first IRC servers used Swedish ASCII for nicknames, so the
+nicknames @code{sm|rg@}s} and @code{SM\RG]S} are equivalent on some servers.
+@end deffn
+
+@deffn Procedure string-upcase-irc str mapping
+Upcases @var{str} using the given case @var{mapping}.
+@end deffn
+
+@deffn Procedure string-downcase-irc str mapping
+Downcases @var{str} using the given case @var{mapping}.
+@end deffn
+
+
+@deffn Procedure ctcp-message? str
+Returns @code{#t} if the @var{str} represents a CTCP message. This is
+currently the extent of this library's CTCP support. CTCP is used for
+sending files, opening direct connections between clients, checking
+client versions, asking for the time, pinging clients, doing
+``action'' style messages, and some other stuff.
+@end deffn
+
+@deffn Procedure irc-match? pattern input
+Returns @code{#t} if the @var{pattern}, which can contain wildcards,
+matches the @var{input}. Otherwise returns @code{#f}. Strings
+containing wildcards are called @dfn{masks}, and they are used in
+e.g.@: channel ban lists.
+
+The pattern follows the syntax specified in section 2.5 of RFC2812. A
+@code{#\*} matches zero or more characters and @code{#\?} matches any
+single character. The comparison is case-insensitive. Wildcard
+characters can be escaped with @code{#\\}.
+
+@example
+(import (weinholt net irc))
+(irc-match? "a?c" "abc")
+@result{} #t
+(irc-match? "a*c" "ac")
+@result{} #t
+(irc-match? "a*c" "acb")
+@result{} #f
+@end example
+@end deffn
+
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
+@item
+@code{(2 0)} -- Replaced @code{swe-ascii-string-ci=?} with
+@code{string-irc=?}, which uses the @code{CASEMAPPING ISUPPORT}
+parameter. Added @code{string-upcase-irc}, @code{string-downcase-irc},
+@code{parse-isupport}, @code{isupport-defaults} and @code{ctcp-message?}.
+@item
+@code{(2 1)} -- Added @code{irc-match?}.
+@end itemize
+
+
+@c ======================================================================
+@node net irc fish
+@subsection Blowcrypt/FiSH encryption for IRC
+The @code{(weinholt net irc fish)} library provides procedures for
+interacting with IRC clients that use Blowcrypt/FiSH encryption.
+Messages are encrypted with Blowfish in ECB mode and then encoded with
+a peculiar base64 encoding. Keys can be exchanged with Diffie-Hellman
+(vulnerable to middleman attacks) or they can be pre-shared. FiSH is
+useful if you want to draw attention to your communications.
+
+There is currently no way to initialize key-exchange.
+
+Blowcrypt/FiSH supports both private messages and public channels. If
+you only need private messages then OTR provides a much better
+protocol. @xref{net otr}.
+
+@deffn Procedure fish-message? str
+Returns @code{#f} is the string is not a FiSH message.
+@end deffn
+
+@deffn Procedure fish-decrypt-message msg key
+Decrypts a FiSH message. The @var{msg} is the line that the remote
+client sent to you.
+@end deffn
+
+@deffn Procedure fish-encrypt-message msg key
+Encrypts the string @var{msg} with FiSH encryption. Returns a string
+containing the plaintext. There is no verification that the key was
+correct and the returned string might be garbage.
+@end deffn
+
+@deffn Procedure fish-key-init? str
+Returns @code{#f} is @var{str} is not a FiSH key-exchange
+initialization request.
+@end deffn
+
+@deffn Procedure fish-generate-key init-msg
+Finishes the DH1080 key-exchange request contained in @var{init-msg}.
+Returns two values: the newly generated key and a response for the
+remote client. There is no protection against middleman attacks.
+@end deffn
+
+@deffn Procedure make-fish-key str
+The @var{str} is expanded and can then be used with
+@code{fish-decrypt-message} and @code{fish-encrypt-message}.
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
+@end itemize
+
+
+@c ======================================================================
+@node net otr
+@subsection Off-the-Record Messaging
+The @code{(weinholt net otr)} library provides Off-the-Record
+Messaging (OTR), which is a security protocol for private chat. It can
+be tunneled over any protocol that guarantees in-order delivery
+(e.g.@: IRC or XMPP). It provides encryption, authentication,
+deniability and perfect forward secrecy.
+
+This library does not manage user identities, which is something the
+OTR Development Team's C library does. This choice was made to keep
+the implementation simple and focused on the protocol only.
+
+The website for OTR is @url{http://www.cypherpunks.ca/otr/}.
+
+@deffn Procedure otr-message? str
+Returns @code{#t} if @var{str}, which is a message from a remote
+party, contains an OTR message. If it is an OTR message you should
+look up the OTR state that corresponds to the remote party (possibly
+make a new state) and call @code{otr-update!}.
+@end deffn
+
+@deffn Procedure make-otr-state dsa-key mss
+Creates an OTR state value given the private DSA key @var{dsa-key} and
+a maximum segment size @var{mss}. The state is used to keep track of
+session keys and incoming message fragments.
+
+The @var{dsa-key} must have a 160-bit q-parameter because of details
+in the protocol and limitations of other implementations. A 1024-bit
+DSA key will work. @xref{crypto dsa}.
+
+The maximum segment size @var{mss} is used to split long OTR messages
+into smaller parts when OTR is used over a protocol with a maximum
+message size, e.g.@: IRC.
+@end deffn
+
+@deffn Procedure otr-update! state str
+Processes the @var{str} message, which came from the remote party,
+and updates the @var{state}. Use @code{otr-empty-queue!} to retrieve
+scheduled events.
+@end deffn
+
+@deffn Procedure otr-send-encrypted! state msg
+@c tlv ...
+This is used to send a message to the remote party. It encrypts and
+enqueues the @var{msg} bytevector and updates the @var{state}.
+Use @code{otr-empty-queue!} to retrieve the encrypted and formatted
+messages that should be sent to the remote party.
+
+The @var{msg} must not contain a NUL (0) byte.
+@c TODO: document the tlv parameters when there's a procedure for
+@c formatting them, and a way to receive tlv's from the remote party.
+@c Optionally you can send one or more @dfn{type/length/value} (TLV)
+@c bytevectors. A @var{tlv} can be used to transmit data that is not
+@c meant to be shown to the remote party as plain text. The OTR protocol
+@c allocates type 0 for padding, and this procedure automatically pads
+@c messages with up to 7 bytes, to disguise message lengths. Types 1-7
+@c are used by the SMP authentication protocol. Type 1 is used to tell
+@c the remote party that your side is closing down the OTR connection.
+@end deffn
+
+@deffn Procedure otr-authenticate! state secret [question]
+Initiate or respond to an authentication request.
+After calling this procedure you should use @code{otr-empty-queue!},
+just like with @code{otr-send-encrypted!}.
+
+The authentication protocol can be used to verify that both partyies
+know the @var{secret} bytevector. The secret is never revealed over
+the network and is not even transmitted in an encrypted form. The
+protocol used is the Socialist Millionaires' Protocol (SMP), which is
+based on a series of zero-knowledge proofs.
+@cindex Socialist Millionaires' Protocol
+@end deffn
+
+@deffn Procedure otr-empty-queue! state
+Returns and clears the event queue. The queue is a list of pairs where
+the symbol in the @code{car} of the pair determines its meaning. These
+are the possible types:
+
+@itemize
+@item
+@t{(outgoing . }@emph{line}@t{)} -- The @code{cdr} is a bytevector
+that should be sent to the remote party.
+@item
+@t{(encrypted . }@emph{msg}@t{)} -- The @code{cdr} is a bytevector
+that contains a decrypted message that was sent by the remote party.
+@item
+@t{(unencrypted . }@emph{msg}@t{)} -- The @code{cdr} is a string
+that sent @emph{unencrypted} by the remote party. This happens when
+a whitespace-tagged message is received. 
+@item
+@t{(session-established . }@emph{whence}@t{)} -- A session has been
+established with the remote party. It is now safe to call
+@code{otr-state-their-dsa-key}, @code{otr-state-secure-session-id},
+@code{otr-send-encrypted!} and @code{otr-authenticate!}. The
+@code{cdr} is the symbol @code{from-there} if the session was
+initiated by the remote party. Otherwise it is @code{from-here}.
+@item
+@t{(session-finished . }@emph{whom}@t{)} -- The session is now
+finished and no new messages can be sent over it. The @code{cdr} is
+either the symbol @code{by-them} or @code{by-us}. @emph{Note}: there
+is currently no way to finish the session from the local side, so
+@code{by-us} is not used yet.
+@item
+@t{(authentication . expecting-secret)} -- The remote party has
+started the authentication protocol and now expects you to
+call @code{otr-authenticate!}.
+@item
+@t{(authentication . #t)} -- The authentication protocol has
+succeeded and both parties had the same secret.
+@item
+@t{(authentication . #f)} -- The authentication protocol has
+failed. The secrets were not identical.
+@item
+@t{(authentication . aborted-by-them)} -- The remote party
+has aborted the authentication protocol.
+@item
+@t{(authentication . aborted-by-us)} -- The local party has
+encountered an error and therefore aborted the authentication
+protocol.
+@item
+@t{(they-revealed . }@emph{k}@t{)} -- The remote party revealed an old
+signing key. This is a normal part of the protocol and the key is sent
+unencrypted to ensure the deniability property. You might like to
+reveal the key somehow yourself in case you're tunneling OTR over an
+encrypted protocol.
+@item
+@t{(we-revealed . }@emph{k}@t{)} -- The local party has revealed an
+old signing key. @emph{Note}: currently not used.
+@item
+@t{(undecipherable-message . #f)} -- An encrypted message was
+received, but it was not possible to decrypt it. This might mean
+e.g.@: that the remote and local parties have different sessions or
+that a message was sent out of order.
+@item
+@t{(remote-error . }@emph{msg}@t{)} -- The remote party encountered a
+protocol error and sent a plaintext error message (probably in
+English).
+@item
+@t{(local-error . }@emph{con}@t{)} -- The was an exception raised
+during processing of a message. The @code{cdr} is the condition value.
+@end itemize
+
+For forward-compatibility you should ignore any pair with an unknown
+@code{car}. Most messages are quite safe to ignore if you don't want
+to handle them.
+@end deffn
+
+@deffn Procedure otr-state-their-dsa-key state
+Returns the remote party's public DSA key. This should be used to
+verify the remote party's identity. If the SMP authentication protocol
+succeeds you can remember the hash of the key for the next session.
+The user could also verify the key's hash by cell phone telephone or
+something.
+@end deffn
+
+@deffn Procedure otr-state-our-dsa-key state
+Returns the local party's private DSA key. This is useful when the
+user is on the phone with the remote party. First convert it to a
+public key with @code{dsa-private->public} and then hash it with
+@code{otr-hash-public-key}.
+@end deffn
+
+@deffn Procedure otr-hash-public-key public-dsa-key
+Hashes a public DSA key and formats it so that it can be shown to the
+OTR user.
+@end deffn
+
+@deffn Procedure otr-state-secure-session-id state
+Returns the @dfn{secure session ID} associated with the OTR state.
+@end deffn
+
+@deffn Procedure otr-format-session-id id
+Formats a secure session ID in the format that is recommended when
+the ID should be shown to the OTR user.
+
+The first part of the ID should be shown in bold if the session was
+initiated by the local party. Otherwise the second part should be bold.
+@end deffn
+
+Isn't this the most boring manual you've ever read?
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(0 0)} -- Initial version. Lacks a few sanity checks which might
+make it unsafe.
+@end itemize

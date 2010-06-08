@@ -1,0 +1,86 @@
+@c -*-texinfo-*-
+
+@node disassembler
+@section Machine code disassemblers
+
+@menu
+* disassembler x86::   Intel x86-16/32/64 disassembler
+@end menu
+
+@c ======================================================================
+@node disassembler x86
+@subsection Intel x86-16/32/64 disassembler
+The @code{(weinholt disassembler x86)} library is a disassembler for
+the Intel x86 architecture. It supports 16-bit, 32-bit and 64-bit
+modes as well as most modern instruction encodings, including the VEX
+prefix used by Intel AVX.
+
+The disassembler does not keep track of the instruction pointer, so
+relative offsets are returned as they appear in the instruction
+encoding. If you wish to show the destination for branches, or the
+actual offset for AMD64's RIP-relative addressing, you will need to
+compute the offset yourself.
+
+@deffn Procedure get-instruction binary-input-port mode collector
+Reads a single instruction from the given @var{binary-input-port}.
+The mode is one of 16, 32 or 64 (which roughly correspond to
+real, protected and long mode).
+
+The @var{collector} is either @code{#f} or a procedure that takes a
+symbolic tag and a variable number of bytes. The tag is one of the
+symbols @code{modr/m}, @code{sib}, @code{disp}, @code{immediate},
+@code{/is4}, @code{prefix} and @code{opcode}. The x86 instruction set
+uses variable length instructions (of up to 15 bytes) and the
+@var{collector} procedure can be used to find out the type of data
+each byte of an instruction contains.
+
+@c TODO: should probably document the format of the returned
+@c instructions
+The returned instructions have the same operand order as Intel's
+documentation uses, i.e.@: the left operand is the destination.
+
+@example
+(import (weinholt disassembler x86))
+(get-instruction (open-bytevector-input-port
+                  #vu8(#x69 #x6c #x6c #x65 #x01 #x00 #x00 #x00))
+                 64 #f)
+@result{} (imul ebp (mem32+ rsp 101 (* rbp 2)) 1)
+@end example
+@example
+(get-instruction (open-bytevector-input-port
+                  #vu8(196 227 113 72 194 49))
+                 64 (lambda x (display x) (newline)))
+@print{} (prefix 196 227 113)
+@print{} (opcode 72)
+@print{} (modr/m 194)
+@print{} (/is4 49)
+@result{} (vpermiltd2ps xmm0 xmm1 xmm2 xmm3)
+@end example
+@example
+(get-instruction (open-bytevector-input-port #vu8(#xEB #x20)) 
+                 64 #f)
+@result{} (jmp (+ rip 32))
+@end example
+@end deffn
+
+@deffn Procedure invalid-opcode? obj
+When an invalid opcode is encountered an exception with the
+@code{&invalid-opcode} condition is raised. Use @code{invalid-opcode?}
+to guard against it.
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
+@end itemize
+
+
+@c ======================================================================
+@c @node disassembler x86-opcodes
+@c @subsection Intel x86 opcode table
+@c An opcode table for the Intel x86 that includes all SSE instructions
+@c up to SSE5, all Intel AVX instructions and of course the AMD64
+@c instructions. The table layout is designed for use with a
+@c disassembler, but it can also be transformed for use in an assembler.

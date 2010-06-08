@@ -93,6 +93,7 @@ bytevector pack/unpack syntax, CRCs and more.
 * Installation::       Where to put all the files
 * Usage::              How to make it go
 * Versioning::         On avoiding horribly broken releases
+* Conflicting names::  When two exports have the same name
 @end menu
 
 @include starting.texinfo
@@ -106,19 +107,20 @@ bytevector pack/unpack syntax, CRCs and more.
 @c * binfmt::             Executable file format utilities
 @c * compression::        Decompression code
 * crypto::             Cryptographic primitives
-@c * disassembler::       Disassemble machine code
-@c * net::                Network protocols
+* disassembler::       Machine code disassemblers
+* net::                Network protocols
 * struct::             Binary structure utilities
 @c * text::               Textual structure utilities
 @c * x::                  X Window System interface
 @end menu
 
 @include crypto.texinfo
+@include disassembler.texinfo
+@include net.texinfo
 @include struct.texinfo
 
 @node Index
 @unnumbered Index
 @printindex cp
-
 
 @bye

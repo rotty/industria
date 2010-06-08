@@ -124,3 +124,29 @@ sub-versions, which are modified manually.
 There is no guarantee that the versioning scheme will be adhered to in
 unreleased development versions. This does not imply that there is a
 guarantee for released versions either, but I'll do my best.
+
+@node Conflicting names
+@section Conflicting names
+In some places the same name is exported by two libraries, even though
+they have different bindings. Two disassemblers might both export a
+@code{get-instruction} procedure. In this case it is useful to use
+@code{prefix} when importing the libraries, like this:
+
+@lisp
+(import (rnrs)
+        (prefix (weinholt disassembler x86) x86:)
+        (prefix (weinholt disassembler arm) arm:))
+@end lisp
+
+Now the procedures will be called @code{x86:get-instruction} and
+@code{arm:get-instruction}. This method can also be useful for keeping
+track of which library a binding comes from. An alternative is to
+use @code{rename}:
+
+@lisp
+(import (rnrs)
+        (rename (weinholt disassembler x86) 
+                (get-instruction x86:dis))
+        (rename (weinholt disassembler arm) 
+                (get-instruction arm:dis)))
+@end lisp

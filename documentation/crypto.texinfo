@@ -32,7 +32,11 @@ or the FDA and quite likely aren't allowed for government work.
 * crypto blowfish::    The Blowfish cipher
 * crypto crc::         Cyclic Redundancy Codes
 * crypto des::         Data Encryption Standard
+* crypto dsa::         Digital Signature Algorithm
 * crypto md5::         Message-Digest algorithm 5
+* crypto password::    Password hashing
+* crypto sha-1::       Secure Hash Algorithm 1
+* crypto sha-2::       Secure Hash Algorithm 2
 @end menu
 
 @c ======================================================================
@@ -406,9 +410,10 @@ The @var{salt} must be a string of two characters from the alphabet
 (des-crypt "password" "4t")
 @result{} "4tQSEW3lEnOio"
 @end example
+
+A more general interface is also available, @pxref{crypto password}.
 @end deffn
 
-A more convenient interface is provided by @code{(weinholt crypto password)}.
 
 @noindent
 Version history:
@@ -416,6 +421,98 @@ Version history:
 @item
 @code{(1 0)} -- Initial version.
 @end itemize
+
+
+@c ======================================================================
+@node crypto dsa
+@subsection Digital Signature Algorithm
+The @code{(weinholt crypto dsa)} library provides procedures for
+creating and verifying DSA signatures. DSA is a public key signature
+algorithm, which means that it uses private and public key pairs. With
+a private key you can create a signature that can then be verified by
+someone using the corresponding public key. The idea is that it's very
+difficult to create a correct signature without having access to the
+private key, so if the signature can be verified it must have been
+made by someone who has access to the private key.
+
+DSA is standardized by FIPS Publication 186. It is available at this
+web site: @url{http://csrc.nist.gov/publications/PubsFIPS.html}.
+
+There is currently no procedure to generate a new DSA key. Here is
+how to generate keys with OpenSSL or GnuTLS:
+@verbatim
+openssl dsaparam 1024 | openssl gendsa /dev/stdin > dsa.pem
+certtool --dsa --bits 1024 -p > dsa.pem
+@end verbatim
+
+The key can then be loaded with @code{dsa-private-key-from-pem-file}.
+
+@deffn Procedure make-dsa-public-key p q g y
+Returns a DSA public key value. See the FIPS standard for a
+description of the parameters.
+
+To access the fields use @code{dsa-public-key-p},
+@code{dsa-public-key-q}, @code{dsa-public-key-g} and
+@code{dsa-public-key-y}.
+@end deffn
+
+@deffn Procedure dsa-public-key? obj
+Returns @code{#t} if @var{obj} is a DSA public key value.
+@end deffn
+
+@deffn Procedure make-dsa-private-key p q g y x
+Returns a DSA private key value. See the FIPS standard for a
+description of the parameters.
+
+To access the fields use @code{dsa-private-key-p},
+@code{dsa-private-key-q}, @code{dsa-private-key-g},
+@code{dsa-private-key-y} and @code{dsa-private-key-x}.
+@end deffn
+
+@deffn Procedure dsa-private-key? obj
+Returns @code{#t} if @var{obj} is a DSA private key.
+@end deffn
+
+@deffn Procedure dsa-private->public private-key
+Converts a private DSA key into a public DSA key by removing the
+private fields.
+@end deffn
+
+@deffn Procedure dsa-private-key-from-bytevector bv
+Parses @var{bv} as an ASN.1 DER encoded private DSA key.
+@end deffn
+
+@deffn Procedure dsa-private-key-from-pem-file filename
+Opens the file and reads a private DSA key. The file should be in
+Privacy Enhanced Mail (PEM) format and contain an ASN.1 DER encoded
+private DSA key.
+@end deffn
+
+@deffn Procedure dsa-create-signature hash private-key
+The @var{hash} is the message digest (as a bytevector) of the data you
+want to sign. The @var{hash} and the @var{private-key} are used to
+create a signature which is returned as two values: @code{r} and
+@code{s}.
+
+The @var{hash} can e.g.@: be an SHA-1 message digest. Such a digest is
+160 bits and the @var{q} parameter should then be 160 bits.
+@end deffn
+
+@deffn Procedure dsa-verify-signature hash public-key r s
+The @var{hash} is the message digest (as a bytevector) of the data
+which the signature is signing.
+
+Returns @code{#t} if the signature matches, otherwise @code{#f}.
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(0 0)} -- Initial version.
+@end itemize
+
+
 
 @c ======================================================================
 @node crypto md5
@@ -426,6 +523,8 @@ cryptographic hash function MD5. It takes bytes as input and returns a
 idea is that even the smallest change in the data should produce a
 completely different digest, and it should be difficult to find
 different data that has the same digest. An MD5 digest is 16 bytes.
+
+MD5 has a maximum message size of @math{2^{64}-1} bits.
 
 The MD5 algorithm is considered broken and you will likely want to use
 SHA-2 instead, if possible.
@@ -496,4 +595,98 @@ Version history:
 @itemize
 @item
 @code{(1 0)} -- Initial version.
+@end itemize
+
+@c ======================================================================
+@node crypto password
+@subsection Password hashing
+The procedure provided by @code{(weinholt crypto password)} is the
+same type of procedure that is called @code{crypt} in the standard C
+library. It is used for password hashing, i.e.@: it scrambles
+passwords. This is a method often used when passwords need to be
+stored in databases.
+
+The scrambling algorithms are based on cryptographic primitives but
+have been modified so that they take more time to compute. They also
+happen to be quite annoying to implement.
+
+Only DES and MD5 based hashes are currently supported.
+
+@deffn Procedure crypt password salt
+Scrambles a @var{password} using the given @var{salt}. The @var{salt}
+can also be a hash. The returned hash will be prefixed by the salt.
+
+A fresh random salt should be used when hashing a new password. The
+purpose of the salt is to make it infeasible to reverse the hash
+using lookup tables.
+
+To verify that a password matches a hash, you can do something like
+@code{(string=? hash (crypt password hash))}.
+
+@example
+(import (weinholt crypto password))
+(crypt "test" "..")
+@result{} "..9sjyf8zL76k"
+@end example
+
+@example
+(crypt "test" "$1$RQ3YWMJd$")
+@result{} "$1$RQ3YWMJd$oIomUD5DCxenAs2icezcn."
+@end example
+
+@example
+(string=? "$1$ggKHY.Dz$fNBcmNFTa1BFGXoLsRDkS."
+          (crypt "test" "$1$ggKHY.Dz$fNBcmNFTa1BFGXoLsRDkS."))
+@result{} #t
+@end example
+@end deffn
+
+@c TODO: there ought be a simple way to generate a fresh salt
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
+@end itemize
+
+@c ======================================================================
+@node crypto sha-1
+@subsection Secure Hash Algorithm 1
+The interface provided by @code{(weinholt crypto sha-1)} is identical
+to the one provided by the MD5 library, except every procedure is
+prefixed by @code{sha-1} instead of @code{md5}. @xref{crypto md5}.
+
+SHA-1 also has a maximum message size of @math{2^{64}-1} bits, but
+the message digests are 160 bits instead of 128.
+@cindex SHA-1
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
+@end itemize
+
+@c ======================================================================
+@node crypto sha-2
+@subsection Secure Hash Algorithm 2
+The interface provided by @code{(weinholt crypto sha-2)} is identical
+to the one provided by the MD5 library, but instead of @code{md5},
+every procedure is prefixed by @code{sha-224}, @code{sha-256},
+@code{sha-384} or @code{sha-512}. @xref{crypto md5}.
+
+SHA-224 and SHA-256 have a maximum message size of @math{2^{64}-1}
+bits. For SHA-384 and SHA-512 the maximum is @math{2^{128}-1} bits.
+The message digests produced by SHA-224 are 224 bits, and so on.
+@cindex SHA-224
+@cindex SHA-256
+@cindex SHA-384
+@cindex SHA-512
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(0 0)} -- Initial version.
 @end itemize
