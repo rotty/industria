@@ -1,6 +1,6 @@
 #!/usr/bin/env scheme-script
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -16,9 +16,9 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!r6rs
 
-(import (weinholt text base64)
-        (srfi :78 lightweight-testing)
-        (rnrs))
+(import (srfi :78 lightweight-testing)
+        (rnrs)
+        (weinholt text base64))
 
 (define (string->base64 x)
   (base64-encode (string->utf8 x)))
@@ -42,10 +42,8 @@
 ;; ad-hoc
 
 (define (base64-linewrapped str)
-  (let-values (((bv) (string->utf8 str))
-               ((p extract) (open-string-output-port)))
-    (base64-encode bv p 0 (bytevector-length bv) 76 #f base64-alphabet)
-    (extract)))
+  (let ((bv (string->utf8 str)))
+    (base64-encode bv 0 (bytevector-length bv) 76 #f)))
 
 (check (base64-linewrapped
         "My name is Ozymandias, king of kings:\n\

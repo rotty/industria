@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -26,7 +26,7 @@
 
 ;; TODO: initiating key exchange
 
-(library (weinholt net irc fish (0 0 20090919))
+(library (weinholt net irc fish (0 0 20100611))
   (export fish-message? fish-decrypt-message fish-encrypt-message
           fish-key-init? fish-generate-key make-fish-key)
   (import (rnrs)
@@ -126,10 +126,8 @@
           (base64-decode (string-append str (make-string padding #\=))))))
 
   (define (dh1080-base64-encode bv)
-    (let ((str
-           (call-with-string-output-port
-             (lambda (p)
-               (base64-encode bv p 0 (bytevector-length bv) #f #t base64-alphabet)))))
+    (let ((str (base64-encode bv 0 (bytevector-length bv)
+                              #f 'no-padding)))
       (if (zero? (mod (string-length str) 4))
           (string-append str "A")
           str)))
@@ -148,7 +146,7 @@ out+to+TMG+for+helping+to+generate+this+cool+sophie+germain+prime+number++++\
 
   (define (make-secret tries)
     (unless (< tries 1000)
-      (error 'make-secret "unable to make a secret"))
+      (error 'fish-generate-key "unable to make a secret"))
     (let* ((y (bytevector->uint (make-random-bytevector 1080/8)))
            (Y (expt-mod g y n)))
       (if (and (<= (expt 2 512) Y (- n 2))
