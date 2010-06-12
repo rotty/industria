@@ -2,10 +2,89 @@
 
 @node disassembler
 @section Machine code disassemblers
+All disassemblers provided here use the same method of signalling
+undefined/invalid opcodes. The following procedure can be used to
+guard against such errors:
+
+@deffn Procedure invalid-opcode? obj
+When an invalid opcode is encountered an exception with the
+@code{&invalid-opcode} condition is raised. Use @code{invalid-opcode?}
+to guard against it.
+@end deffn
+
+The disassemblers take an argument that is called a @emph{collector}.
+It is either @code{#f} or a procedure of the following form:
+@code{(lambda (tag . bytes) body)}. The tag is specific to the
+architecture, but the bytes are the bytes forming the instruction.
+The procedure is used to tell the caller what function each byte of
+an instruction performs. This works best for architectures that use
+variable-length instructions. For most instruction there will be
+multiple calls to the collector.
 
 @menu
-* disassembler x86::   Intel x86-16/32/64 disassembler
+* disassembler m68hc12::  Freescale 68HC12 disassembler
+* disassembler mips::     MIPS II disassembler
+* disassembler x86::      Intel x86-16/32/64 disassembler
 @end menu
+
+@c ======================================================================
+@node disassembler m68hc12
+@subsection Freescale 68HC12 disassembler
+The @code{(weinholt disassembler m68hc12)} library provides a
+disassembler for the Freescale 68HC12 architecture (formerly Motorola
+68HC12 and sometimes called 68HCS12, HC12 or CPU12). It is a 16-bit
+architecture used in microcontrollers.
+
+@deffn Procedure get-instruction binary-input-port collector
+Reads one instruction from the @var{binary-input-port} and returns it
+in symbolic form. For a description of the @var{collector},
+@pxref{disassembler}.
+
+@example
+(import (weinholt disassembler m68hc12))
+(get-instruction (open-bytevector-input-port
+                  #vu8(#x18 #x01 #xAE #x00 #x00))
+                 #f)
+@result{} (movw (0) (pre- 2 sp))
+@end example
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
+@end itemize
+
+@c ======================================================================
+@node disassembler mips
+@subsection MIPS II disassembler
+The @code{(weinholt disassembler mips)} library provides a
+disassembler for most 32-bit MIPS II instructions. MIPS is a RISC
+architecture and all instructions have the same length.
+
+@deffn Procedure get-instruction binary-input-port endianness collector
+Disassembles one instruction from the @var{binary-input-port} and
+returns it in symbolic form. The @var{endianness} specifies if
+instructions are read in big or little endianness. For a description
+of the @var{collector}, @pxref{disassembler}.
+
+@example
+(import (weinholt disassembler mips))
+(get-instruction (open-bytevector-input-port
+                  #vu8(#x10 #x40 #x00 #x02))
+                 (endianness big)
+                 #f)
+@result{} (beq $v0 $zero ($pc 8))
+@end example
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
+@end itemize
 
 @c ======================================================================
 @node disassembler x86
@@ -22,9 +101,9 @@ actual offset for AMD64's RIP-relative addressing, you will need to
 compute the offset yourself.
 
 @deffn Procedure get-instruction binary-input-port mode collector
-Reads a single instruction from the given @var{binary-input-port}.
-The mode is one of 16, 32 or 64 (which roughly correspond to
-real, protected and long mode).
+Reads a single instruction from the given @var{binary-input-port}. The
+@var{mode} is one of 16, 32 or 64 (which roughly correspond to real,
+protected and long mode).
 
 The @var{collector} is either @code{#f} or a procedure that takes a
 symbolic tag and a variable number of bytes. The tag is one of the
@@ -61,12 +140,6 @@ documentation uses, i.e.@: the left operand is the destination.
                  64 #f)
 @result{} (jmp (+ rip 32))
 @end example
-@end deffn
-
-@deffn Procedure invalid-opcode? obj
-When an invalid opcode is encountered an exception with the
-@code{&invalid-opcode} condition is raised. Use @code{invalid-opcode?}
-to guard against it.
 @end deffn
 
 @noindent
