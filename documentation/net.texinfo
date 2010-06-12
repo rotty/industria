@@ -195,7 +195,6 @@ Parses an @code{ISUPPORT} list. The return value is an alist.
 
 See @url{http://www.irc.org/tech_docs/005.html} for more on
 @code{ISUPPORT}.
-
 @c TODO: document how the different parameters are parsed
 @end deffn
 

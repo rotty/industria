@@ -91,7 +91,6 @@ The values are fetched from the @var{bytevector} starting at the
 @result{} 2
 @result{} 3
 @end example
-
 @end deffn
 
 @deffn Procedure pack fmt values ...

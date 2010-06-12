@@ -16,34 +16,21 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!r6rs
 
-;;; Version history
-
-;; (1 0) - Unreleased. Initial version.
-
-;; (2 0) - Unreleased. Replaced swe-ascii-string-ci=? with
-;; string-irc=?, which uses the CASEMAPPING ISUPPORT parameter. Added
-;; string-upcase-irc, string-downcase-irc, parse-isupport,
-;; isupport-defaults and ctcp-message?.
-
-;; (2 1) - Unreleased. Added irc-match?.
-
 ;;; Usage etc
 
-;; Note that this library isn't really ready to use. The parser will
-;; probably fail on malformed input (i.e. it will give exceptions
-;; other than &irc-parse). But if you're writing a client, it will be
-;; OK since if the server wants you to fail it can just disconnect
-;; you.
+;; The parser will probably fail on malformed input (i.e. it will give
+;; exceptions other than &irc-parse). So you should probably catch all
+;; exceptions when calling the parser.
 
-;; See programs/meircbot for an example usage.
+;; See programs/meircbot for an example usage. Also see the manual.
 
 ;; Note that the maximum message length that IRC supports is 512
-;; bytes, including the newline at the end of the message. But if you
-;; are writing a client you should be careful: when the server relays
-;; your message it will prepend your prefix (":nick!user@host ") to
-;; the message. So if you never want your message to be truncated and
-;; want to transmit maximum size messages, you must take the prefix
-;; into consideration.
+;; bytes, including the two newline bytes at the end of the message.
+;; But if you are writing a client you should be extra careful: when
+;; the server relays your message it will prepend your prefix
+;; (":nick!user@host ") to the message. So if you never want your
+;; message to be truncated and want to transmit maximum size messages,
+;; you must take the prefix into consideration.
 
 ;; Should follow RFC 2810-2813.
 
@@ -51,7 +38,7 @@
 ;; and send all your replies as NOTICEs. IRC bots can get into wars
 ;; with each other if they send PRIVMSGs.
 
-(library (weinholt net irc (2 1 20100421))
+(library (weinholt net irc (2 1 20100608))
   (export irc-format-condition? irc-parse-condition?
           parse-message parse-message-bytevector
           format-message-raw format-message-and-verify
@@ -507,7 +494,7 @@
                       (not (char=? #\* ic pc)))
                  (lp (+ p 1) (+ i 1) p* i*)) ;pattern and input matched
                 ;; Pattern and input didn't match, or end of pattern
-                ((eqv? pc #\*)          ;wildmany
+                ((eqv? pc #\*)         ;wildmany
                  (or (= (+ p 1) plen)  ;* at the end matches all input
                      (lp (+ p 1) i (+ p 1) i)))
                 ((and (eqv? pc #\\)     ;escapes
@@ -516,7 +503,7 @@
                  (lp (+ p 2) (+ i 1) p* i*))
                 ((and pc (not (char=? pc #\\))
                       (not (string-index input pc i)))
-                 #f)                    ;prune (seems to work pretty well for IRC)
+                 #f)        ;prune (seems to work pretty well for IRC)
                 ((eqv? p p*)            ;backtrack
                  (lp p* (+ i 1) p* i*))
                 (p*                     ;backtrack

@@ -5,8 +5,18 @@ These are the Industria libraries for R6RS Scheme. It's more or less a
 place for me to put the Scheme code I write.
 
 Here's the project website:
-
 <https://code.launchpad.net/~weinholt/scheme-libraries/industria>
+
+Here's an alternative website: <https://weinholt.se/industria/>.
+
+* DOCUMENTATION
+For the complete manual, please see the Texinfo document in the
+documentation directory. Use these commands to build it:
+
+makeinfo industria.texinfo                    # info format
+makeinfo --plaintext industria.texinfo        # text format
+makeinfo --no-split --html industria.texinfo  # html format
+texi2pdf industria.texinfo                    # pdf format
 
 * LICENSING
 If nothing else is mentioned, the code is:
@@ -26,140 +36,6 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-* INSTALLATION
-Short version: extend your Scheme library search path to include the
-industria directory.
-
-You will also need a few SRFI libraries which can be found here:
-<https://code.launchpad.net/~scheme-libraries-team/scheme-libraries/srfi>
-
-I regularly test the code with Ikarus, Ypsilon and Petite Chez. Other
-R6RS implementations might work.
-
-** Getting the source code
-There have not been any releases, so you will need to get the source
-code from the Bazaar repository. The repository for Industria can be
-checked out like this:
-
-  bzr checkout --lightweight lp:~weinholt/scheme-libraries/industria
-
-** Put the libraries in your Scheme library search path
-You might want to modify an environment variable to do this. It might
-be one of these: IKARUS_LIBRARY_PATH, CHEZSCHEMELIBDIRS, MOSH_LOADPATH
-or YPSILON_SITELIB. Alternatively you can symlink the weinholt
-directory into your existing search path.
-
-SRFI-103 is attempting to standardize the environment variable, among
-other things:
-
-<http://srfi.schemers.org/srfi-103/srfi-103.html>
-
-** Special instructions for MzScheme
-For MzScheme it is not enough to change an environment variable. Run
-something like this and ignore all the errors:
-
- find weinholt/ -regex '[^.]*\(\.mzscheme\)?.sls' \
-   -exec plt-r6rs --install {} \;
-
-This installs the libraries in ~/.plt-scheme/.
-
-MzScheme also does not handle the #!/usr/bin/env scheme-script line as
-recommended by R6RS Non-Normative Appendix D.
-
-"Standardizing the name of the executable used to start a Scheme
-script removes one barrier to the distribution of Scheme scripts."
-
-You will need to work around this barrier yourself. Simply comment out
-the shebang line in each program you want to run and run it with the
-plt-r6rs program.
-
-MzScheme has its own SRFI libraries, so you will probably not need the
-ones from the Scheme Libraries Team.
-
-* AVAILABLE LIBRARIES
-** (weinholt assembler x86)
-An assembler for the Intel x86 architecture. It is not yet feature
-complete and might generate bad code. It does not yet do any jump size
-optimization or produce relocatable object files. But it can be used
-to generate Multiboot images and programs/x86-demo shows this.
-
-** (weinholt crypto aes)
-This is an implementation of the Rijndael cipher as parameterized by
-the Advanced Encryption Standard (AES), FIPS 197. It uses clever
-lookup tables and is probably as fast as any R6RS implementation of
-AES can be (without using an FFI). See the library source for more
-information.
-
-** (weinholt crypto crc)
-This library exports the define-crc syntax which generates tables and
-procedures for calculating CRCs. Some pre-defined CRCs are available,
-but you can define your own by simply passing the CRC's parameters to
-define-crc. See the library source code for more information. Example
-usage:
-
-> (import (weinholt crypto crc))
-> (define-crc crc-32)
-> (number->string (crc-32 (string->utf8 "I worship His Shadow")) 16)
-"F130CA55"
-
-** (weinholt crypto des)
-The Data Encryption Standard, FIPS 42. This library implements DES and
-3DES (TDEA) in ECB mode, and the DES based crypt() password hashing
-function from UN*X. See the security note below.
-
-** (weinholt crypto md5)
-The obsolete MD5 message-digest algorithm:
-
-> (md5->string (md5 (string->utf8 "A Scheme in my pocket")))
-"65A2B2D8EE076250EA0A105A8D5EF1BB"
-
-See the security note below.
-
-** (weinholt crypto sha-1)
-The famous SHA-1 from the Secure Hash Standard, FIPS 180. Here's an
-example of the simple interface:
-
-> (sha-1->string (sha-1 (string->utf8 "A Scheme in every home")))
-"1153928E5092B8B64879C14128FE6CFB2F991CF9"
-
-See the security note below.
-
-** (weinholt disassembler x86)
-Disassembler for the Intel x86 architecture. Supports most modern
-instructions encodings as of 2008, including the VEX prefix used by
-Intel AVX. Supports 16-bit, 32-bit and 64-bit modes. The API consists
-of `get-instruction', which reads the next instruction on a port using
-the given bit-mode and returns the instruction as a list. See the
-source code for documentation.
-
-** (weinholt disassembler x86-opcodes)
-An opcode table for the Intel x86 that includes all SSE instructions
-up to SSE5, all Intel AVX instructions and of course the AMD64
-instructions. The table layout is designed for use with a
-disassembler, but it can also be transformed for use in an assembler.
-
-** (weinholt net irc)
-A parser and formatter for the Internet Relay Chat protocol. Should be
-usable both for clients and servers. It can split IRC messages into
-prefix, command and argument parts and it also does the inverse.
-
-** (weinholt struct pack)
-C compatible structure packer and unpacker. The pack function produces
-a bytevector from a format string and some values and the unpack
-syntax does the opposite. They are similar to Python's struct module
-or Perl's pack/unpack functions. Fields are aligned with their natural
-alignment, i.e. their own size. Useful for reading and writing binary
-files or network protocols. See the top of the library source code for
-documentation.
-
-> (unpack "!2S" (pack "!2s" -1 1))
-65535
-1
-
-* TEST ROUTINES
-The tests/ directory contains scripts that test the libraries. Can
-also be useful if you want to see how a library is used.
 
 * PROGRAMS
 The programs/ directory contains small utilities that use the
@@ -187,53 +63,3 @@ A demonstration of the (weinholt assembler x86) library. The program
 assembles a Multiboot image, which can be loaded by GNU GRUB. The demo
 uses the VGA text mode and a few VGA registers to generate a classic
 copper bar effect.
-
-* LIBRARY VERSIONING
-I intend to follow this library versioning scheme:
-
-The versions consist of (major minor date) sub-versions.
-`major' is incremented when backwards compatibility is broken.
-`minor' is incremented when new functionality is introduced.
-`date' is the date of the latest change in YYYYMMDD format.
-
-To use the versioning scheme you might import libraries like this:
-
-(import (rnrs)
-        (weinholt struct pack (1 (>= 3))))
-
-In the above example you're importing the version of the pack library
-that supports all programs and libraries that were written against
-version (1 3)'s supported features. If there are major changes to the
-library that need to break backwards compatibility, the version will
-be incremented to (2 0). New functionality that does not break current
-programs and libraries will be introduced in version (1 4), (1 5) etc.
-
-There haven't been any releases yet, so there is no guarantee that the
-versioning scheme will be followed. I'll try to keep a version history
-in each library source file. The `date' sub-version doesn't have to be
-used, but it can be used to depend on bug-fixed versions. It is
-automatically incremented by my editor, so it could possibly be more
-correct than the other sub-versions, which are modified manually.
-
-* SECURITY NOTE
-Beware that if you're using some of these libraries for sensitive
-data, let's say passwords, then there is probably no way to make sure
-a password is ever gone from memory. There is no guarantee that the
-passwords will not be swapped out to disk or transmitted via radio.
-There might be other problems as well. The algorithms themselves might
-be weak. Don't pick weak keys. Know your stuff.
-
-Your Scheme's implementation of (srfi :27 random-bits) might be too
-weak. It's common that it will be initialized from time alone, so an
-attacker can easily guess your random-source's internal state by
-trying a few timestamps and seeing which one generates the data you
-sent. These libraries try to use /dev/urandom if it exists, but if it
-doesn't they fall back on SRFI-27 and could reveal the secret of your
-heart to the enemy. See RFC4086.
-
-And remember what the license says about warranties. Don't come crying
-to me if the enemy deciphers your secret messages and your whole
-convoy blows up. These libraries have not been validated by the NIST
-or the FDA and quite likely aren't allowed for government work.
-
-(Perhaps an SRFI for secure memory would be in order).

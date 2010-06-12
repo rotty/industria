@@ -352,7 +352,6 @@ The @var{E} argument will normally be omitted. It is only used by the
   (utf8->string buf))
 @result{} "security"
 @end example
-
 @end deffn
 
 @deffn Procedure permute-key key

@@ -69,13 +69,7 @@ later version published by the Free Software Foundation.
 @node Top
 @top Industria
 
-This manual is for the Industria libraries, an assortment of portable
-@rnrs{} Scheme libraries. A set of cryptographical primitives (AES, DES,
-Blowfish, HMAC, MD5, SHA-1, SHA-2, RSA, DSA). Decompression (zip,
-gzip, zlib, inflate), an amd64 disassembler, Off-the-Record Messaging,
-bytevector pack/unpack syntax, CRCs and more.
-
-@c maybe do insertcopying here
+@insertcopying
 
 @end ifnottex
 
