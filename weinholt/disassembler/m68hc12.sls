@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -18,22 +18,11 @@
 ;; Disassembler for the Motorola 68HC12, 68HCS12, etc. Sometimes
 ;; called CPU12.
 
-;; TODO: Fix raise-UD to raise the same condition as the x86
-;; disassembler and the collect-stuff is not well thought-out. Some
-;; addressing modes might be wrong.
-
-(library (weinholt disassembler m68hc12 (0 0 20090823))
+(library (weinholt disassembler m68hc12 (1 0 20100612))
   (export get-instruction)
-  (import (except (rnrs) get-u8))
-
-  (define (map-in-order f l)
-    (if (null? l)
-        '()
-        (cons (f (car l))
-              (map-in-order f (cdr l)))))
-
-  (define (raise-UD why)
-    (error 'raise-UD "undefined opcode" why))
+  (import (except (rnrs) get-u8)
+          (only (srfi :1 lists) map-in-order)
+          (weinholt disassembler private))
 
 ;;; Port input
   (define (really-get-bytevector-n port n collect tag)

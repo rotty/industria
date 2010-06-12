@@ -1,6 +1,6 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
 ;; Disassembler for the Intel x86-16/32/64 instruction set.
-;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -16,56 +16,26 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!r6rs
 
-;;; Version history
-
-;; (1 0 0) - Unreleased.
-
-;;; Versioning scheme
-
-;; The version is made of (major minor patch) sub-versions.
-
-;; The `patch' sub-version will be incremented when bug fixes have
-;; been made, that do not introduce new features or break old ones.
-
-;; The `minor' is incremented when new features are implemented.
-
-;; The `major' is incremented when old features may no longer work
-;; without changes to the code that imports this library.
-
 ;;; Idea
 
 ;; One goal is to show the instructions as the processor would
 ;; interpret them (if it has support for the instruction at all, that
-;; is). I.e. if the processor would give an invalid-opcode exception
+;; is), i.e. if the processor would give an invalid-opcode exception
 ;; for a specific instruction stream (and it's not obvious how a
 ;; future processor would not), then this library should raise an
 ;; exception with the &invalid-opcode condition.
 
-;; Instructions with different semanics should always look different,
+;; Instructions with different semantics should always look different,
 ;; e.g. sysret, where a REX.W prefix modifies the semantics. So for
 ;; 64-bit operand sizes "sysretq" is returned. If the instruction has
 ;; an operand that can be used to decide the operand size, no such
 ;; suffix is necessary.
 
-;;; Usage
-
-;; Note that any offsets relative to rIP have *not* been computed. If
-;; you wish to show the destination for branches, or the actual offset
-;; for amd64's RIP-relative addressing, you will need to compute the
-;; offset yourself. This way the disassembler doesn't need to keep
-;; track of rIP, and it also allows a pretty printer for Intel or
-;; AT&T syntax to work better.
-
-;; Read the note about versioning above and decide on a version
-;; dependency for your program's import clause. Use the
-;; get-instruction function to read the next instruction from a binary
-;; input port. If an invalid opcode is encountered, an exception with
-;; the &invalid-opcode condition will be raised. Use invalid-opcode?
-;; to guard against it.
-
-(library (weinholt disassembler x86 (1 0 20090821))
+(library (weinholt disassembler x86 (1 0 20100607))
   (export get-instruction invalid-opcode?)
-  (import (except (rnrs) get-u8)
+  (import (only (srfi :1 lists) map-in-order)
+          (except (rnrs) get-u8)
+          (weinholt disassembler private (0 0))
           (weinholt disassembler x86-opcodes (1 0 (>= 0))))
 
   (define debug #f)
@@ -77,27 +47,11 @@
              rex.x rex.b vex vex.l)
     prefix-set)
 
-  (define-condition-type &invalid-opcode &condition
-    make-invalid-opcode invalid-opcode?)
-
   (define-enumeration tag
     ;; Just used for the `tag' syntax. So here is a list of all tags
     ;; that can be given to the "collect" function.
     (modr/m sib disp immediate /is4 prefix opcode)
     tag-set)
-
-  (define (raise-UD msg . irritants)
-    (raise (condition
-            (make-who-condition 'get-instruction)
-            (make-message-condition msg)
-            (make-irritants-condition irritants)
-            (make-invalid-opcode))))
-
-  (define (map-in-order f l)
-    (if (null? l)
-        '()
-        (cons (f (car l))
-              (map-in-order f (cdr l)))))
 
   (define (has-modr/m? instr)
     ;; Not the prettiest function ever, but it works.

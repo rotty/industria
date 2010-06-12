@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -19,9 +19,7 @@
 
 ;; Work in progress!
 
-;; http://www.caldera.com/developers/gabi/
-
-(library (weinholt binfmt elf (0 0 20090823))
+(library (weinholt binfmt elf (0 0 20100612))
   (export is-elf-image?
           open-elf-image-file
           elf-input-file-port
@@ -44,7 +42,8 @@
 
           EM-NONE EM-M32 EM-SPARC EM-386 EM-68K EM-88K EM-860
           EM-MIPS EM-MIPS-RS3-LE EM-PARISC EM-SPARC32PLUS EM-PPC
-          EM-PPC64 EM-S390 EM-ARM EM-SPARCV9 EM-IA-64 EM-X86-64
+          EM-PPC64 EM-S390 EM-ARM EM-SPARCV9 EM-IA-64 EM-68HC12
+          EM-X86-64 EM-68HC11
           EM-names
 
           elf-section-header-name
@@ -60,7 +59,7 @@
 
           elf-input-file-section-by-name)
   (import (rnrs)
-          (weinholt struct pack (1 (>= 0))))
+          (weinholt struct pack (1 (>= 3))))
 
 ;;; Utilities
 
@@ -72,14 +71,13 @@
     (if (input-port? f) f (open-file-input-port f)))
 
   (define (asciiz->string bv offset)
-    (let lp ((l '()) (offset offset))
-      (let ((byte (bytevector-u8-ref bv offset)))
-        (if (zero? byte)
-            (list->string (reverse (map integer->char l)))
-            (lp (cons byte l) (+ offset 1))))))
-
-  (define (read-unpack p fmt)
-    (unpack fmt (get-bytevector-n p (format-size fmt))))
+    (call-with-string-output-port
+      (lambda (p)
+        (let lp ((offset offset))
+          (let ((byte (bytevector-u8-ref bv offset)))
+            (unless (zero? byte)
+              (put-char p (integer->char byte))
+              (lp (+ offset 1))))))))
 
 ;;;
 
@@ -93,12 +91,12 @@ file looks like an ELF image."
         (set-port-position! f pos)
         (and (bytevector? bv)
              (= (bytevector-length bv) 16)
-             (call-with-values (lambda () (unpack "!LCCC9x" bv))
-               (lambda (magic word-size endian version)
-                 (and (= magic elf-magic)
-                      (<= 1 word-size 2)
-                      (<= 1 endian 2)
-                      (= version 1))))))))
+             (let-values (((magic word-size endian version)
+                           (unpack "!LCCC9x" bv)))
+               (and (= magic elf-magic)
+                    (<= 1 word-size 2)
+                    (<= 1 endian 2)
+                    (= version 1)))))))
 
   (define ET-NONE 0)
   (define ET-REL 1)
@@ -128,7 +126,9 @@ file looks like an ELF image."
   (define EM-ARM 40)
   (define EM-SPARCV9 43)
   (define EM-IA-64 50)
+  (define EM-68HC12 53)
   (define EM-X86-64 62)
+  (define EM-68HC11 70)
 
   (define EM-names
     (list (cons EM-NONE "No machine")
@@ -148,7 +148,9 @@ file looks like an ELF image."
           (cons EM-ARM "Advanced RISC Machines ARM")
           (cons EM-SPARCV9 "SPARC V9")
           (cons EM-IA-64 "Intel IA-64 Processor Architecture")
-          (cons EM-X86-64 "AMD x86-64 architecture")))
+          (cons EM-68HC12 "Motorola M68HC12")
+          (cons EM-X86-64 "AMD x86-64 architecture")
+          (cons EM-68HC11 "Motorola MC68HC11 microcontroller")))
 
   (define ELFOSABI-NONE 0)
   (define ELFOSABI-SYSV 0)
@@ -202,24 +204,24 @@ file looks like an ELF image."
       (unless (is-elf-image? port)
         (error 'open-file-image-file "Not an ELF image" fn))
       (set-port-position! port 0)
-      (call-with-values (lambda () (read-unpack port "4xCCxCC7x"))
-        (lambda (word-size endianness os-abi abi-version)
-          (call-with-values
-              (lambda ()
-                (read-unpack port
-                             (if (= word-size 1)
-                                 (if (= endianness 1)
-                                     "<SSLLLLLSSSSSS" ">SSLLLLLSSSSSS")
-                                 (if (= endianness 1)
-                                     "<SSLQQQLSSSSSS" ">SSLQQQLSSSSSS"))))
-            (lambda (type machine version entry phoff shoff flags
-                          ehsize phentsize phnum shentsize shnum shstrndx)
-              (make-elf-input-file
-               port word-size endianness os-abi abi-version
-               type machine ehsize
-               entry flags shstrndx
-               phoff phentsize phnum
-               shoff shentsize shnum)))))))
+      (let*-values (((word-size endianness os-abi abi-version)
+                     (get-unpack port "4xCCxCC7x"))
+                    ((type machine version entry phoff shoff flags
+                           ehsize phentsize phnum shentsize shnum shstrndx)
+                     (get-unpack port
+                                 (if (= word-size 1)
+                                     (if (= endianness 1)
+                                         "<SSLLLLLSSSSSS"
+                                         ">SSLLLLLSSSSSS")
+                                     (if (= endianness 1)
+                                         "<SSLQQQLSSSSSS"
+                                         ">SSLQQQLSSSSSS")))))
+        (make-elf-input-file
+         port word-size endianness os-abi abi-version
+         type machine ehsize
+         entry flags shstrndx
+         phoff phentsize phnum
+         shoff shentsize shnum))))
 
   (define-record-type elf-section-header
     (fields name type flags addr offset size link info addralign entsize))

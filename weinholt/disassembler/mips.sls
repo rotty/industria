@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -17,17 +17,16 @@
 
 ;; Disassembler for some of MIPS II (big-endian).
 
-;; TODO: call the collect routine, use the same illegal instruction
-;; behavior as the x86 disassembler. The collect routine could
-;; possibly indicate the instruction format.
-
-(library (weinholt disassembler mips (0 0 20090821))
+(library (weinholt disassembler mips (1 0 20100612))
   (export get-instruction)
-  (import (rnrs))
+  (import (rnrs)
+          (weinholt disassembler private))
 
-  (define (print . x)
-    (when #f
-      (for-each display x) (newline)))
+  (define-syntax print
+    (syntax-rules ()
+      #;
+      ((_ . args) (begin (for-each display (list . args)) (newline)))
+      ((_ . args) (begin 'dummy))))
 
   (define opcodes
     '#(op0
@@ -104,12 +103,6 @@
        #f #f #f #f #f #f #f #f
        #f #f #f #f #f #f #f #f))
 
-  (define (get-u32 port)
-    (let ((bv (get-bytevector-n port 4)))
-      (and (bytevector? bv)
-           (= (bytevector-length bv) 4)
-           (bytevector-u32-ref bv 0 (endianness big)))))
-
   (define (reg x)
     (vector-ref '#($zero $at $v0 $v1 $a0 $a1 $a2 $a3
                          $t0 $t1 $t2 $t3 $t4 $t5 $t6 $t7
@@ -172,98 +165,101 @@
               (cddr instruction)
               (cdr instruction))))
 
-  (define (get-instruction port collect)
-    (define (decode encoding)
-      (let lp ((instr (vector-ref opcodes (encoding-opcode encoding))))
-        (cond ((zero? encoding)
-               '(nop))
 
-              ((eq? instr 'op0)
-               (lp (vector-ref opcodes-op0 (encoding-funct encoding))))
+  (define (decode encoding bytes collect)
+    ;; FIXME: anyone interested might make more specific tags here
+    (apply collect 'generic bytes)
+    (let lp ((instr (vector-ref opcodes (encoding-opcode encoding))))
+      (cond ((zero? encoding)
+             '(nop))
 
-              ((eq? instr 'op1)
-               (lp (vector-ref opcodes-op1 (encoding-rt encoding))))
+            ((eq? instr 'op0)
+             (lp (vector-ref opcodes-op0 (encoding-funct encoding))))
 
-              ((eq? instr 'op1c)
-               (lp (vector-ref opcodes-op1c (encoding-funct encoding))))
+            ((eq? instr 'op1)
+             (lp (vector-ref opcodes-op1 (encoding-rt encoding))))
 
-              ((eq? instr 'movf/t.)
-               (lp (if (bitwise-bit-set? encoding 16)
-                       '(movt. fd fs cct)
-                       '(movf. fd fs cct))))
+            ((eq? instr 'op1c)
+             (lp (vector-ref opcodes-op1c (encoding-funct encoding))))
 
-              ((eq? instr 'movf/t)
-               (lp (if (bitwise-bit-set? encoding 16)
-                       '(movt rd rs cct)
-                       '(movf rd rs cct))))
+            ((eq? instr 'movf/t.)
+             (lp (if (bitwise-bit-set? encoding 16)
+                     '(movt. fd fs cct)
+                     '(movf. fd fs cct))))
 
-              ((eq? instr 'fp)
-               (let ((z (fxand #x3 (encoding-opcode encoding))))
-                 (print ";floating point, rs: #x" (number->string (encoding-rs encoding) 16))
-                 (case (encoding-rs encoding)
-                   ((0 2 4 6)
-                    (let ((op (/ (encoding-rs encoding) 2)))
-                      (lp (list (string->symbol (string-append
-                                                 (list-ref '("mfc" "cfc" "mtc" "ctc") op)
-                                                 (number->string z)))
-                                'rt
-                                (if (and (= z 1) (memq op '(0 2)))
-                                    'fs 'rd/cp)))))
+            ((eq? instr 'movf/t)
+             (lp (if (bitwise-bit-set? encoding 16)
+                     '(movt rd rs cct)
+                     '(movf rd rs cct))))
 
-                   ((8)
-                    (lp (cons (string->symbol
-                               (string-append
-                                "bc"
-                                (number->string z)
-                                (case (bitwise-bit-field encoding 16 18)
-                                  ((0) "f")
-                                  ((1) "t")
-                                  ((2) "fl")
-                                  ((3) "fl"))))
-                              '(label))))
-                   ((16)
-                    (cond ((zero? z)
-                           (lp (case (bitwise-bit-field encoding 0 5)
-                                 ((1) '(tlbr))
-                                 ((2) '(tlbwi))
-                                 ((6) '(tlbwr))
-                                 ((8) '(tlbp))
-                                 ((24) '(eret))
-                                 ((31) '(deret))
-                                 (else #f))))
-                          (else
-                           (print ";fp.s: #x" (number->string (encoding-funct encoding) 16))
-                           (fix-fp (lp (vector-ref opcodes-fp (encoding-funct encoding)))
-                                   "s"))))
-                   ((17)
-                    (print ";fp.d: #x" (number->string (encoding-funct encoding) 16))
-                    (fix-fp (lp (vector-ref opcodes-fp (encoding-funct encoding)))
-                            "d"))
+            ((eq? instr 'fp)
+             (let ((z (fxand #x3 (encoding-opcode encoding))))
+               (print ";floating point, rs: #x" (number->string (encoding-rs encoding) 16))
+               (case (encoding-rs encoding)
+                 ((0 2 4 6)
+                  (let ((op (/ (encoding-rs encoding) 2)))
+                    (lp (list (string->symbol (string-append
+                                               (list-ref '("mfc" "cfc" "mtc" "ctc") op)
+                                               (number->string z)))
+                              'rt
+                              (if (and (= z 1) (memq op '(0 2)))
+                                  'fs 'rd/cp)))))
 
-                   (else
-                    '(illegal-instruction)))))
+                 ((8)
+                  (lp (cons (string->symbol
+                             (string-append
+                              "bc"
+                              (number->string z)
+                              (case (bitwise-bit-field encoding 16 18)
+                                ((0) "f")
+                                ((1) "t")
+                                ((2) "fl")
+                                ((3) "fl"))))
+                            '(label))))
+                 ((16)
+                  (cond ((zero? z)
+                         (lp (case (bitwise-bit-field encoding 0 5)
+                               ((1) '(tlbr))
+                               ((2) '(tlbwi))
+                               ((6) '(tlbwr))
+                               ((8) '(tlbp))
+                               ((24) '(eret))
+                               ((31) '(deret))
+                               (else #f))))
+                        (else
+                         (print ";fp.s: #x" (number->string (encoding-funct encoding) 16))
+                         (fix-fp (lp (vector-ref opcodes-fp (encoding-funct encoding)))
+                                 "s"))))
+                 ((17)
+                  (print ";fp.d: #x" (number->string (encoding-funct encoding) 16))
+                  (fix-fp (lp (vector-ref opcodes-fp (encoding-funct encoding)))
+                          "d"))
 
-              ((not instr)
-               (print ";Encoding: #x" (number->string encoding 16)
-                      " opcode: #x" (number->string (encoding-opcode encoding) 16))
-               (when (zero? (bitwise-bit-field encoding 26 32))
-                 (print ";funct: #x" (number->string (encoding-funct encoding) 16)))
-               '(illegal-instruction))
+                 (else
+                  (raise-UD "Undefined FP opcode" (encoding-rs encoding))))))
 
-              (else
-               (print ";Encoding: #x" (number->string encoding 16)
-                      " opcode: #x" (number->string (encoding-opcode encoding) 16))
-               (format-instruction instr encoding)))))
+            ((not instr)
+             (print ";Encoding: #x" (number->string encoding 16)
+                    " opcode: #x" (number->string (encoding-opcode encoding) 16))
+             (when (zero? (bitwise-bit-field encoding 26 32))
+               (print ";funct: #x" (number->string (encoding-funct encoding) 16)))
+             (raise-UD "Undefined opcode" encoding))
+
+            (else
+             (print ";Encoding: #x" (number->string encoding 16)
+                    " opcode: #x" (number->string (encoding-opcode encoding) 16))
+             (format-instruction instr encoding)))))
+  
+  (define (get-instruction port endian collect)
+    (define (get-u32 port)
+      (let ((bv (get-bytevector-n port 4)))
+        (and (bytevector? bv)
+             (= (bytevector-length bv) 4)
+             bv)))
     (cond ((get-u32 port) =>
-           decode)
+           (lambda (bv)
+             (decode (bytevector-u32-ref bv 0 endian)
+                     (bytevector->u8-list bv)
+                     (or collect (lambda (tag . bytes) #f)))))
           (else
            (eof-object)))))
-
-
-#;(let ((p (open-file-input-port "/home/weinholt/code/mips/test.raw")))
-    (let lp ()
-      (let ((instr (get-instruction p #f)))
-        (unless (eof-object? instr)
-          (display instr)
-          (newline)
-          (lp)))))
