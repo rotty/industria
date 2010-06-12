@@ -105,12 +105,12 @@ bytevector pack/unpack syntax, CRCs and more.
 @c * archive::            File archive utilities
 @c * assembler::          Machine code assemblers
 @c * binfmt::             Executable file format utilities
-@c * compression::        Decompression code
+@c * compression::        Data decompression
 * crypto::             Cryptographic primitives
 * disassembler::       Machine code disassemblers
 * net::                Network protocols
 * struct::             Binary structure utilities
-@c * text::               Textual structure utilities
+* text::               Textual structure utilities
 @c * x::                  X Window System interface
 @end menu
 
@@ -118,6 +118,7 @@ bytevector pack/unpack syntax, CRCs and more.
 @include disassembler.texinfo
 @include net.texinfo
 @include struct.texinfo
+@include text.texinfo
 
 @node Index
 @unnumbered Index

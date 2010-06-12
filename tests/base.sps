@@ -65,4 +65,28 @@
     (check type => "TEST")
     (check (utf8->string str*) => str)))
 
+
+(let-values ((ex1 (get-delimited-base64
+                 (open-string-input-port
+                "-----BEGIN EXAMPLE-----\n\
+AAECAwQFBg==\n\
+-----END EXAMPLE-----\n"))))
+  (check ex1 => '("EXAMPLE" #vu8(0 1 2 3 4 5 6))))
+
+;; ignoring header and crc-24 checksum
+(let-values ((ex2 (get-delimited-base64
+                 (open-string-input-port
+                "Example follows\n\
+\n\
+-----BEGIN EXAMPLE-----\n\
+Header: data\n\
+Header2: data2\n\
+ etc
+foo
+\n\
+AAECAwQFBg==\n\
+=2wOb\n\
+-----END EXAMPLE-----\n"))))
+  (check ex2 => '("EXAMPLE" #vu8(0 1 2 3 4 5 6))))
+
 (check-report)

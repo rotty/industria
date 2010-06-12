@@ -1,0 +1,124 @@
+@c -*-texinfo-*-
+
+@node text
+@section Textual structure utilities
+
+@menu
+* text base64::        Base64 encoding and decoding
+@end menu
+
+@c ======================================================================
+@node text base64
+@subsection Base64 encoding and decoding
+The @code{(weinholt text base64)} library provides procedures for
+dealing with the standard Base64 encoding from RFC 4648 and some
+variations thereof. The Base64 encoding can be used to represent
+arbitrary bytevectors purely in printable ASCII.
+
+One variation of Base64 is in the alphabet used. The standard encoding
+uses an alphabet that ends with @code{#\+} and @code{#\/}, but these
+characters are reserved in some applications. One such application is
+HTTP URLs, so there is a special encoding called base64url that simply
+uses a different alphabet.
+
+The line length can also vary. Some applications will need Base64
+encoded strings that have no line endings at all, while other
+applications have 64 or 76 characters per line. For these uses the
+line length must be a multiple of four characters. Sometimes there is
+not enough input to get a multiple of four, but then the padding
+character @code{#\=} is used. Some applications don't use padding.
+
+Some applications have their own ``Base64'' encodings that encode bits
+in a different order. Such will be deemed magic and shall not work
+with this library.
+
+@deffn Procedure base64-encode bv [start end line-length no-padding alphabet port]
+Encodes the bytevector @var{bv} in Base64 encoding. Optionally a range
+of bytes can be specified with @var{start} and @var{end}.
+
+If a maximum line length is required, set @var{line-length} to an
+integer multiple of four (the default is @code{#f}). To omit padding
+at the end of the data, set @var{no-padding} or a non-false value. The
+@var{alphabet} is a string of length 64 (by default
+@code{base64-alphabet}).
+
+The @var{port} is either a textual output port or @code{#f}, in which
+case this procedure returns a string.
+@end deffn
+
+@deffn Procedure base64-decode str [alphabet port]
+Decodes the Base64 data in @var{str}. The string has to contain pure
+Base64 data, including padding, and no whitespace or other extra
+characters. The output is written to the binary output @var{port}.
+Returns a bytevector if @var{port} is @code{#f}.
+@end deffn
+
+@deffn Procedure put-delimited-base64 port type bv [line-length]
+Write the Base64 encoding of @var{bv} to the @var{port}. The output is
+delimited by BEGIN/END lines that include the @var{type}.
+@cindex ASCII Armor
+
+@example
+(import (weinholt text base64))
+(put-delimited-base64 (current-output-port) "EXAMPLE"
+                      (string->utf8 "POKEY THE PENGUIN"))
+@print{} -----BEGIN EXAMPLE-----
+@print{} UE9LRVkgVEhFIFBFTkdVSU4=
+@print{} -----END EXAMPLE-----
+@end example
+@end deffn
+
+@deffn Procedure get-delimited-base64 port
+Reads a delimited Base64 encoded bytevector and returns two values:
+@var{type} (a string) and @var{data} (a bytevector). The @var{data}
+value is the end-of-file object if @code{port-eof?} would return
+@code{#t}.
+
+@emph{Note}: This procedure ignores MIME headers. Some delimited
+Base64 formats have headers on the line after BEGIN, followed by an
+empty line.
+
+@emph{Note}: This procedure ignores the Radix-64 checksum. The
+Radix-64 format (RFC 4880) is based on Base64, but appends a CRC-24
+(prefixed by @code{#\=}) at the end of the data.
+
+The rationale for ignoring headers and checksums is that it follows
+the Principle of Robustness: ``Be conservative in what you send; be
+liberal in what you accept from others.'' Lines before the BEGIN line
+are also ignored, because some applications (like OpenSSL) like to
+prepend a human readable version of the data.
+
+You should probably use special parsers if you are reading data with
+headers or checksums. For some applications, e.g.@: MIME, you might
+need a Base64 decoder that also ignores characters outside the
+alphabet.
+
+@example
+(get-delimited-base64
+ (open-string-input-port
+  "-----BEGIN EXAMPLE-----\n\
+AAECAwQFBg==\n\
+-----END EXAMPLE-----\n"))
+@result{} "EXAMPLE"
+@result{} #vu8(0 1 2 3 4 5 6)
+@end example
+@end deffn
+
+@deffn Constant base64-alphabet
+The alphabet used by the standard Base64 encoding. The alphabet is
+@code{#\A}--@code{#\Z}, @code{#\a}--@code{#\z},
+@code{#\0}--@code{#\9}, @code{#\+}, @code{#\/}.
+@end deffn
+
+@deffn Constant base64url-alphabet
+The alphabet used by the base64url encoding. The alphabet is
+@code{#\A}--@code{#\Z}, @code{#\a}--@code{#\z},
+@code{#\0}--@code{#\9}, @code{#\-}, @code{#\_}.
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
+@end itemize

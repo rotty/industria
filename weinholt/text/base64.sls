@@ -17,10 +17,7 @@
 
 ;; RFC 4648 Base-N Encodings
 
-;; TODO: read headers in the delimited format. It's probably RFC822
-;; headers and Privacy Enhanced Mail etc.
-
-(library (weinholt text base64 (1 0 20100611))
+(library (weinholt text base64 (1 0 20100612))
   (export base64-encode
           base64-decode
           base64-alphabet
@@ -101,45 +98,54 @@
 
   ;; Decodes a base64 string. The string must contain only pure
   ;; unpadded base64 data.
-  (define (base64-decode str)
-    (unless (zero? (mod (string-length str) 4))
-      (error 'base64-decode
-             "input string must be a multiple of four characters"))
-    (let-values (((p extract) (open-bytevector-output-port)))
-      (do ((i 0 (+ i 4)))
-          ((= i (string-length str))
-           (extract))
-        (let ((c1 (string-ref str i))
-              (c2 (string-ref str (+ i 1)))
-              (c3 (string-ref str (+ i 2)))
-              (c4 (string-ref str (+ i 3))))
-          (let ((i1 (string-index base64-alphabet c1))
-                (i2 (string-index base64-alphabet c2))
-                (i3 (string-index base64-alphabet c3))
-                (i4 (string-index base64-alphabet c4)))
-            (cond ((and i1 i2 i3 i4)
-                   (let ((x (fxior (fxarithmetic-shift-left i1 18)
-                                   (fxarithmetic-shift-left i2 12)
-                                   (fxarithmetic-shift-left i3 6)
-                                   i4)))
-                     (put-u8 p (fxbit-field x 16 24))
-                     (put-u8 p (fxbit-field x 8 16))
-                     (put-u8 p (fxbit-field x 0 8))))
-                  ((and i1 i2 i3 (char=? c4 #\=)
-                        (= i (- (string-length str) 4)))
-                   (let ((x (fxior (fxarithmetic-shift-left i1 18)
-                                   (fxarithmetic-shift-left i2 12)
-                                   (fxarithmetic-shift-left i3 6))))
-                     (put-u8 p (fxbit-field x 16 24))
-                     (put-u8 p (fxbit-field x 8 16))))
-                  ((and i1 i2 (char=? c3 #\=) (char=? c4 #\=)
-                        (= i (- (string-length str) 4)))
-                   (let ((x (fxior (fxarithmetic-shift-left i1 18)
-                                   (fxarithmetic-shift-left i2 12))))
-                     (put-u8 p (fxbit-field x 16 24))))
-                  (else
-                   (error 'base64-decode "invalid input"
-                          (list c1 c2 c3 c4)))))))))
+  (define base64-decode
+    (case-lambda
+      ((str)
+       (base64-decode str base64-alphabet #f))
+      ((str alphabet)
+       (base64-decode str alphabet #f))
+      ((str alphabet port)
+       (unless (zero? (mod (string-length str) 4))
+         (error 'base64-decode
+                "input string must be a multiple of four characters"))
+       (let-values (((p extract) (if port
+                                     (values port (lambda () (values)))
+                                     (open-bytevector-output-port))))
+         (do ((i 0 (+ i 4)))
+             ((= i (string-length str))
+              (extract))
+           (let ((c1 (string-ref str i))
+                 (c2 (string-ref str (+ i 1)))
+                 (c3 (string-ref str (+ i 2)))
+                 (c4 (string-ref str (+ i 3))))
+             ;; TODO: be more clever than string-index
+             (let ((i1 (string-index alphabet c1))
+                   (i2 (string-index alphabet c2))
+                   (i3 (string-index alphabet c3))
+                   (i4 (string-index alphabet c4)))
+               (cond ((and i1 i2 i3 i4)
+                      (let ((x (fxior (fxarithmetic-shift-left i1 18)
+                                      (fxarithmetic-shift-left i2 12)
+                                      (fxarithmetic-shift-left i3 6)
+                                      i4)))
+                        (put-u8 p (fxbit-field x 16 24))
+                        (put-u8 p (fxbit-field x 8 16))
+                        (put-u8 p (fxbit-field x 0 8))))
+                     ((and i1 i2 i3 (char=? c4 #\=)
+                           (= i (- (string-length str) 4)))
+                      (let ((x (fxior (fxarithmetic-shift-left i1 18)
+                                      (fxarithmetic-shift-left i2 12)
+                                      (fxarithmetic-shift-left i3 6))))
+                        (put-u8 p (fxbit-field x 16 24))
+                        (put-u8 p (fxbit-field x 8 16))))
+                     ((and i1 i2 (char=? c3 #\=) (char=? c4 #\=)
+                           (= i (- (string-length str) 4)))
+                      (let ((x (fxior (fxarithmetic-shift-left i1 18)
+                                      (fxarithmetic-shift-left i2 12))))
+                        (put-u8 p (fxbit-field x 16 24))))
+                     (else
+                      (error 'base64-decode "invalid input"
+                             (list c1 c2 c3 c4)))))))))))
 
   (define (get-line-comp f port)
     (if (port-eof? port)
@@ -151,6 +157,18 @@
   ;; bytevector containing the base64 decoded data. The second value
   ;; is the eof object if there is an eof before the BEGIN delimiter.
   (define (get-delimited-base64 port)
+    (define (get-first-data-line port)
+      ;; Some MIME data has header fields in the same format as mail
+      ;; or http. These are ignored.
+      (let ((line (get-line-comp string-trim-both port)))
+        (cond ((eof-object? line) line)
+              ((string-index line #\:)
+               (let lp ()               ;read until empty line
+                 (let ((line (get-line-comp string-trim-both port)))
+                   (if (string=? line "")
+                       (get-line-comp string-trim-both port)
+                       (lp)))))
+              (else line))))
     (let ((line (get-line-comp string-trim-both port)))
       (cond ((eof-object? line)
              (values "" (eof-object)))
@@ -161,21 +179,20 @@
              (let* ((type (substring line 11 (- (string-length line) 5)))
                     (endline (string-append "-----END " type "-----")))
                (let-values (((outp extract) (open-bytevector-output-port)))
-                 (let lp ()
-                   (let ((line (get-line-comp string-trim-both port)))
-                     ;; TODO: some basic error checking by keeping track
-                     ;; of line lengths.
-                     (cond ((eof-object? line)
+                 (let lp ((line (get-first-data-line port)))
+                   (cond ((eof-object? line)
+                          (error 'get-delimited-base64
+                                 "unexpected end of file"))
+                         ((string-prefix? "-" line)
+                          (unless (string=? line endline)
                             (error 'get-delimited-base64
-                                   "unexpected end of file"))
-                           ((string-prefix? "-" line)
-                            (unless (string=? line endline)
-                              (error 'get-delimited-base64
-                                     "bad end delimiter" type line))
-                            (values type (extract)))
-                           (else
-                            (put-bytevector outp (base64-decode line))
-                            (lp))))))))
+                                   "bad end delimiter" type line))
+                          (values type (extract)))
+                         (else
+                          (unless (and (= (string-length line) 5)
+                                       (string-prefix? "=" line)) ;Skip Radix-64 checksum
+                            (base64-decode line base64-alphabet outp))
+                          (lp (get-line-comp string-trim-both port))))))))
             (else ;skip garbage (like in openssl x509 -in foo -text output).
              (get-delimited-base64 port)))))
 
