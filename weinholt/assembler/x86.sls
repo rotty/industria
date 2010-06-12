@@ -1,6 +1,6 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
 ;; Assembler for the Intel x86-16/32/64 instruction set.
-;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -59,11 +59,14 @@
             (weinholt assembler x86-misc (1 0 (>= 0)))
             (weinholt disassembler x86-opcodes (1 0 (>= 0))))
 
-  (define debug #t)
-
-  (define (print . x)
-    (when debug
-      (for-each display x) (newline)))
+  (define-syntax print
+    (syntax-rules ()
+      #;
+      ((_ . args)
+       (begin
+         (for-each display (list . args))
+         (newline)))
+      ((_ . args) (begin 'dummy))))
 
   (define (list-prefix? prefix list)
     (cond ((null? prefix)
@@ -735,8 +738,7 @@
                                         templates)))
                  (if (null? templates)
                      (try-pseudo #f)
-                     (let ((operands ;; (translate-operands operands mode)
-                            operands))
+                     (let ()
                        ;; TODO: a better idea might be to enumerate
                        ;; every possible way to encode each
                        ;; instruction, i.e. all operand sizes with
@@ -849,7 +851,7 @@
       (cond ((expression? operand)
              (let ((value (eval-expression operand (assembler-state-labels state))))
                (unless value
-                 (print "I CAN'T GET NO SATISFACTION! (expr=" operand ")")
+                 (print "#;not-evaluated " operand)
                  (assembler-state-relocs-set! state #t))
                (case (opsyntax-encoding-position opsyntax)
                  ((imm) (number->bytevector (or value 0) os))
@@ -877,7 +879,7 @@
              (let ((offset (eval-expression (far-pointer-offset operand)
                                             (assembler-state-labels state))))
                (unless offset
-                 (print "Far pointer doesn't get satisfaction either: " operand))
+                 (print "#;not-evaluated-far-pointer " operand))
                (case (assembler-state-mode state)
                  ((32 64)
                   ;; FIXME: verify that they look like this in 64-bit mode
@@ -907,12 +909,12 @@
         ;; dos: Default Operand Size (what the CPU uses without a prefix)
         ;; os: Operand Size (according to the given operands)
         ;; eos: Effective Operand Size (what the CPU will use)
-        (print "\n%%%%%%%%%% can encode now, mnemonic=" (car instr)
-               " operands=" (cdr instr)
-               " operand-size=" (list dos eos os)
-               " address-size=" (list mode as)
-               " prefixes=" prefixes
-               " encoding=" encoding)
+        (print "\n#;encoding " (car instr)
+               " #;operands " (cdr instr)
+               " #;operand-size " (list dos eos os)
+               " #;address-size " (list mode as)
+               " #;prefixes " prefixes
+               " #;encoding " encoding)
 
         (for-each (lambda (b) (put-u8 port b)) prefixes)
 
@@ -961,7 +963,7 @@
                                                       (else 0))))
                                          (- (port-position (assembler-state-port state)) pos)
                                          imms)))
-                   (print "size of immediates etc: " size " and they are: " imms)
+                   (print "#;immediates " imms " #;size " size)
 
                    (for-each
                     (lambda (y)
@@ -988,7 +990,7 @@
                           (let ((disp (eval-expression (memory-expr o)
                                                        (assembler-state-labels state))))
                             (unless disp
-                              (print "No satisfaction: " (memory-expr o))
+                              (print "#;not-evaluated-memory " (memory-expr o))
                               (assembler-state-relocs-set! state #t))
                             (let-values (((disp SIB ModR/M* REX*)
                                           (encode-memory (memory-addressing-mode o)
@@ -1057,11 +1059,10 @@
             ((expression? imm)
              (let ((value (eval-expression imm (assembler-state-labels state))))
                (unless value
-                 (print "Unknown label (expr=" imm ")")
+                 (print "#;unknown-label " imm)
                  (assembler-state-relocs-set! state #t))
                (put-bytevector (assembler-state-port state)
                                (number->bytevector (or value 0) size))))
-
             (else
              (error 'put-immediate "An expression was expected" imm)))))
 
@@ -1123,7 +1124,7 @@
                     (bvs '()))
              (if (zero? n) (reverse bvs)
                  (let ((pad (min (- (vector-length table) 1) n)))
-                   (print "pad: " pad)
+                   (print "#;pad " pad)
                    (lp (- n pad)
                        (cons (vector-ref table pad) bvs))))))))
 
@@ -1229,7 +1230,7 @@
                                 (hashtable-keys used-labels))
                (vector-for-each (lambda (label)
                                   (unless (hashtable-ref used-labels label #f)
-                                    (print "Unused label: " label)))
+                                    (print "#;unused-label " label)))
                                 (hashtable-keys known-labels))
                (reverse ret))
               (else
@@ -1239,7 +1240,7 @@
                   (hashtable-update! known-labels
                                      (cadar code)
                                      (lambda (old-label)
-                                       (when old-label
+                                       (when (and old-label (not (number? (cadar code))))
                                          (error 'assemble "Duplicate label" (cadar code)))
                                        #t)
                                      #f)
@@ -1283,7 +1284,7 @@
             ;; changing anymore.
             (cond ((or (assembler-state-relocs state)
                        (not (equal? labels newlabels)))
-                   (print "Some labels are unknown or changed! Assembling again...")
+                   (print ";Some labels are unknown or changed! Assembling again...")
                    (lp newlabels
                        (make-assembler-state 16
                                              #f
@@ -1292,43 +1293,12 @@
                                              #f
                                              '())))
                   (else
-                   (print "Symbol table:")
+                   (print ";Symbol table:")
                    (vector-for-each
-                    (lambda (x) (print "- " (car x) " => #x" (number->string (cdr x) 16)))
+                    (lambda (x) (print " '" (car x) " => #x" (number->string (cdr x) 16)))
                     newlabels)
-                   (print "Assembly complete.")
+                   (print ";Assembly complete.")
                    (values (extract) (assembler-state-labels state)))))))))
-
-
-;;   (begin
-;;     (if (file-exists? "/tmp/hmm")
-;;         (delete-file "/tmp/hmm"))
-;;     (let ((p (open-file-output-port "/tmp/hmm"))
-;;           (header-magic #x1BADB002)
-;;           (flags #x00010002)
-;;           (bootloader-magic #x2BADB002))
-;;       (put-bytevector p
-;;                       (assemble `((%mode 64)
-;;                                   (%origin 0)
-;;                                   (%label start)
-;;                                   (%comm stack 1 8)
-;;                                   ;; (mov (mem32+ start) 0)
-;;                                   (mov eax bss)
-;;                                   (mov eax end-bss)
-;;                                   (%label bss)
-;;                                   (%section bss)
-;;                                   (%label end-bss)
-;;                                   )))
-;;       (close-port p)
-;;       (system "objdump -b binary -m i386:x86-64 -M intel -D /tmp/hmm")
-;;       (system "/var/tmp/bin/ndisasm -b 64 /tmp/hmm")
-;;       (system "~/code/industria/programs/fcdisasm --nocolor -b 64 /tmp/hmm")
-
-;; ;;       (system "objdump -b binary -m i386 -M intel -D /tmp/hmm")
-;; ;;       (system "/var/tmp/bin/ndisasm -b 32 /tmp/hmm")
-;; ;;       (system "~/code/industria/programs/fcdisasm --nocolor -b 32 /tmp/hmm")
-
-;;       ))
 
 
 
