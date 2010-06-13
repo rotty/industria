@@ -391,6 +391,10 @@
       (dn=? (tbs-certificate-issuer signed-tbs)
             (tbs-certificate-subject signer-tbs))))
 
+  (define (cert=? x y)
+    (bytevector=? (certificate-tbs-data x)
+                  (certificate-tbs-data y)))
+
   (define (time-ok? cert time)
     (let ((validity (tbs-certificate-validity
                      (certificate-tbs-certificate cert))))
@@ -449,50 +453,55 @@
       ((path common-name time root-cert)
        ;; XXX: Policy mappings and the permitted/excluded subtrees
        ;; stuff is not (yet) implemented.
-       (let lp ((path path)
-                (maxlen (length path))
-                (signer (or root-cert
+       (let ((root-cert (or root-cert
                             (get-root-certificate
                              (tbs-certificate-issuer
                               (certificate-tbs-certificate (car path)))))))
-         (cond ((not signer)
-                'root-certificate-not-found)
-               ((not (signature-ok? (car path) signer))
-                'bad-signature)
-               ((not (time-ok? (car path) time))
-                'expired)
-               ((revoked? (car path))
-                'revoked)
-               ((not (cross-signed? (car path) signer))
-                'bad-issuer)
-               ((not (critical-extensions-handled? (car path)))
-                'unhandled-critical-extension)
-               ;; TODO: check subtrees
-               ((not (null? (cdr path)))
-                ;; Prepare for the next certificate
-                (let ((self-issued (self-issued? (car path)))
-                      (bc (basic-constraints (car path))))
-                  (let ((ca? (car bc))
-                        (maxlen-constraint (cadr bc)))
-                    (cond ((not ca?)
-                           'intermediate-is-not-ca)
-                          ((and (not self-issued) (<= maxlen 0))
-                           'maximum-path-length-exceeded)
-                          ;; TODO: verify keyUsage:keyCertSign
-                          ;; TODO: handle keyUsage
-                          (else
-                           (lp (cdr path)
-                               (min (if self-issued maxlen (- maxlen 1))
-                                    (or maxlen-constraint maxlen))
-                               (car path)))))))
-               ;; This is the last certificate in the path
-               ((not (or (not common-name)
-                         (common-name-ok? (car path) common-name)
-                         (alternative-name-ok? (car path) common-name)))
-                'bad-common-name)
-               ;; TODO: handle keyUsage
-               (else
-                'ok))))))
+         (let lp ((path path)
+                  (maxlen (length path))
+                  (signer root-cert))
+           (cond ((not signer)
+                  'root-certificate-not-found)
+                 ((not (signature-ok? (car path) signer))
+                  'bad-signature)
+                 ((not (time-ok? (car path) time))
+                  'expired)
+                 ((revoked? (car path))
+                  'revoked)
+                 ((not (cross-signed? (car path) signer))
+                  'bad-issuer)
+                 ((not (critical-extensions-handled? (car path)))
+                  'unhandled-critical-extension)
+                 ;; TODO: check subtrees
+                 ((not (null? (cdr path)))
+                  ;; Prepare for the next certificate
+                  (let ((self-issued (self-issued? (car path)))
+                        (bc (basic-constraints (car path))))
+                    (let ((ca? (car bc))
+                          (maxlen-constraint (cadr bc)))
+                      (cond ((and (not ca?) (not (cert=? root-cert (car path))))
+                             ;; Some root CAs don't have basic
+                             ;; constraints at all. Be forgiving to
+                             ;; them. But any CA not at the root will
+                             ;; need one.
+                             'intermediate-is-not-ca)
+                            ((and (not self-issued) (<= maxlen 0))
+                             'maximum-path-length-exceeded)
+                            ;; TODO: verify keyUsage:keyCertSign
+                            ;; TODO: handle keyUsage
+                            (else
+                             (lp (cdr path)
+                                 (min (if self-issued maxlen (- maxlen 1))
+                                      (or maxlen-constraint maxlen))
+                                 (car path)))))))
+                 ;; This is the last certificate in the path
+                 ((not (or (not common-name)
+                           (common-name-ok? (car path) common-name)
+                           (alternative-name-ok? (car path) common-name)))
+                  'bad-common-name)
+                 ;; TODO: handle keyUsage
+                 (else
+                  'ok)))))))
 
   ;; Verify a certificate chain. The chain is a list of certificates
   ;; where the first certificate is the end-entity that should
