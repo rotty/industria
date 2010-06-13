@@ -620,7 +620,7 @@
              (print ";Fragmented handshake (" (buffer-length b) " of " length ")")
              (print b)
              (buffer-seek! b -4)
-             'record-fragment)
+             (get-tls-record conn))
             ((= type TLS-HANDSHAKE-SERVER-HELLO)
              ;; The server replied (presumably, check this later) to
              ;; the CLIENT-HELLO message.

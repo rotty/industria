@@ -160,8 +160,7 @@
            (let ((data (trace (get-tls-record s))))
              (when (eof-object? data)
                (fail "The server disconnected during the handshake"))
-             (unless (or (eq? data 'record-fragment)
-                         (memq data allowed))
+             (unless (memq data allowed)
                (fail "The server did the handshake in the wrong order"
                      data))
              (case data
@@ -169,7 +168,6 @@
                 (set! send-cert? #t)
                 (lp '(handshake-server-hello-done)))
                ((handshake-server-hello-done) #t)
-               ((record-fragment) (lp allowed))
                (else
                 (lp (cdr (memq data allowed)))))))
 
