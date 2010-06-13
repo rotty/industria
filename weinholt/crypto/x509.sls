@@ -20,12 +20,12 @@
 ;; The decoding routines are implemented manually, but should maybe be
 ;; automatically generated from the ASN.1 types in the RFC.
 
-(library (weinholt crypto x509 (0 0 20100528))
+(library (weinholt crypto x509 (0 0 20100613))
   (export certificate<-bytevector
           public-key<-certificate
           decipher-certificate-signature
           validate-certificate-path
-          CA-path CA-file
+          CA-path CA-file CA-procedure
 
           certificate-tbs-data
 
@@ -50,6 +50,7 @@
   ;; there's no standard way to find the path separator.
   (define CA-path (make-parameter "/etc/ssl/certs/"))
   (define CA-file (make-parameter "/etc/ssl/certs/ca-certificates.crt"))
+  (define CA-procedure (make-parameter (lambda (issuer) #f)))
 
 ;;; The Certificate ASN.1 type from the RFC (parsed by hand).
   (define (RelativeDistinguishedName)
@@ -277,7 +278,7 @@
        (let ((algo (translate-algorithm (car value))))
          (case algo
            ((rsaEncryption)
-            (rsa-public-key<-bytevector (uint->bytevector (cadr value))))
+            (rsa-public-key-from-bytevector (uint->bytevector (cadr value))))
            ((dsa)
             (let ((key (der:translate (der:decode (uint->bytevector (cadr value)))
                                       (DSAPublicKey)))
@@ -359,7 +360,8 @@
     (let ((name-hash (cdr (assq 'name-hash issuer))))
       (let lp ((index 0))
         (let ((fn (string-append (CA-path) name-hash "." (number->string index))))
-          (cond ((file-exists? fn)
+          (cond (((CA-procedure) issuer))
+                ((file-exists? fn)
                  (call-with-port (open-input-file fn)
                    (lambda (p)
                      (let-values (((type bv) (get-delimited-base64 p)))

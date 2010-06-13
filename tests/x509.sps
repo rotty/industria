@@ -20,6 +20,7 @@
         (weinholt crypto sha-1)
         (weinholt text base64)
         (srfi :19 time)
+        (srfi :39 parameters)
         (srfi :78 lightweight-testing)
         (rnrs))
 
@@ -331,6 +332,51 @@
        #vu8(0 46 123 152 4 85 233 72 143 151 119 59 247 169 178 151 164 80 223 122))
 
 
+;; Test CA-procedure parameter
+(parameterize ((CA-procedure
+                (lambda (issuer)
+                  (write issuer)
+                  (newline)
+                  (cond ((assq 'commonName issuer) =>
+                         (lambda (cn)
+                           (if (string=? (cdr cn) "Example CA")
+                               cert1
+                               #f)))
+                        (else #f)))))
+  (check (validate-certificate-path (list cert1 cert2) "End Entity"
+                                    (date->time-utc (make-date 0 0 0 0 24 12 2004 0)))
+         =>
+         'ok))
+
+(check (validate-certificate-path (list cert1 cert2) "End Entity"
+                                  (date->time-utc (make-date 0 0 0 0 24 12 2004 0)))
+       =>
+       'root-certificate-not-found)
+
+;; Use current time, so the cert has expired
+(parameterize ((CA-procedure (lambda (issuer) cert1)))
+  (check (validate-certificate-path (list cert1 cert2) "End Entity")
+         =>
+         'expired))
+
+;; common-name doesn't match cert1
+(parameterize ((CA-procedure (lambda (issuer) cert1)))
+  (check (validate-certificate-path (list cert1 cert2) "Example CA"
+                                    (date->time-utc (make-date 0 0 0 0 24 12 2004 0)))
+         =>
+         'bad-common-name))
+(parameterize ((CA-procedure (lambda (issuer) cert1)))
+  (check (validate-certificate-path (list cert1 cert2) "Terrible Example"
+                                    (date->time-utc (make-date 0 0 0 0 24 12 2004 0)))
+         =>
+         'bad-common-name))
+
+;; cert1 doesn't have to be in the chain
+(parameterize ((CA-procedure (lambda (issuer) cert1)))
+  (check (validate-certificate-path (list cert2) "End Entity"
+                                    (date->time-utc (make-date 0 0 0 0 24 12 2004 0)))
+         =>
+         'ok))
 
 
 (check-report)

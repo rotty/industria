@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -24,9 +24,9 @@
 
 ;; But look at RFC 2313, it's easier to read...
 
-(library (weinholt crypto rsa (0 0 20090914))
+(library (weinholt crypto rsa (0 0 20100613))
   (export rsa-public-key?
-          rsa-public-key<-bytevector
+          rsa-public-key-from-bytevector
           rsa-public-key-length
           rsa-public-key-byte-length
           rsa-decrypt
@@ -97,7 +97,7 @@
     (make-rsa-public-key (rsa-private-key-modulus key)
                          (rsa-private-key-public-exponent key)))
 
-  (define (rsa-public-key<-bytevector bv)
+  (define (rsa-public-key-from-bytevector bv)
     (apply make-rsa-public-key (der:translate (der:decode bv)
                                               (RSAPublicKey))))
   
