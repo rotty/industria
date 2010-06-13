@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -32,9 +32,9 @@
 
 ;; TODO: proper conditions
 
-(library (weinholt net buffer (1 0 20090823))
+(library (weinholt net buffer (1 0 20100613))
   (export make-buffer
-          buffer-read!
+          buffer-read! buffer-copy!
           buffer-port buffer-port-set!
           buffer-data buffer-data-set!
           buffer-top buffer-top-set!
@@ -52,27 +52,43 @@
             (mutable bottom))
     (protocol (lambda (p)
                 (lambda (port)
-                  (p port (make-bytevector 1024) 0 0)))))
+                  ;; It's an interesting question what an optimal
+                  ;; initial buffer size is. The overhead (length
+                  ;; field) should probably be taken into account.
+                  ;; Depends on implementation details...
+                  (p port (make-bytevector (- 256 8) 0) 0 0)))))
 
+  ;; TODO: more clever
+  (define (grow! buf morelen)
+    (when (> (+ morelen (buffer-bottom buf))
+             (bytevector-length (buffer-data buf)))
+      ;; Extend the buffer size
+      (let* ((old (buffer-data buf))
+             (new (make-bytevector (* (bytevector-length old) 2) 0)))
+        (buffer-data-set! buf new)
+        (bytevector-copy! old 0
+                          new 0 (buffer-bottom buf))
+        (grow! buf morelen))))
+  
   (define (buffer-read! buf n)
-    (cond ((<= n 0))
-          ((> (+ (buffer-bottom buf) n)
-              (bytevector-length (buffer-data buf)))
-           ;; Extend the buffer size
-           (let* ((old (buffer-data buf))
-                  (new (make-bytevector (* (bytevector-length old) 2))))
-             (buffer-data-set! buf new)
-             (bytevector-copy! old 0
-                               new 0 (buffer-bottom buf))
-             (buffer-read! buf n)))
-          (else
-           (let ((bytes-read (get-bytevector-n! (buffer-port buf)
-                                                (buffer-data buf)
-                                                (buffer-bottom buf) n)))
-             (if (or (eof-object? bytes-read)
-                     (< bytes-read n))
-                 (error 'buffer-read! "unexpected end of data")
-                 (buffer-bottom-set! buf (+ (buffer-bottom buf) n)))))))
+    (when (> n 0)
+      (grow! buf n)
+      (let ((bytes-read (get-bytevector-n! (buffer-port buf)
+                                           (buffer-data buf)
+                                           (buffer-bottom buf) n)))
+        (if (or (eof-object? bytes-read)
+                (< bytes-read n))
+            (error 'buffer-read! "unexpected end of data")
+            (buffer-bottom-set! buf (+ (buffer-bottom buf) n))))))
+
+  ;; Copy `n' bytes from source+source-start to the top of the buffer.
+  (define (buffer-copy! source source-start buf n)
+    (when (> n 0)
+      (grow! buf n)
+      (bytevector-copy! source source-start
+                        (buffer-data buf) (buffer-bottom buf)
+                        n)
+      (buffer-bottom-set! buf (+ (buffer-bottom buf) n))))
 
   (define (buffer-reset! buf)
     (buffer-top-set! buf 0)
@@ -104,9 +120,9 @@
       (error 'read-u24 "attempt to read past bottom of buffer" index))
     (let ((data (buffer-data buf))
           (offset (+ (buffer-top buf) index)))
-      (fxior (fxarithmetic-shift-left (bytevector-u8-ref data (+ offset 0)) 16)
-             (fxarithmetic-shift-left (bytevector-u8-ref data (+ offset 1)) 8)
-             (bytevector-u8-ref data (+ offset 2)))))
+      (bitwise-ior (bitwise-arithmetic-shift-left (bytevector-u8-ref data (+ offset 0)) 16)
+                   (fxarithmetic-shift-left (bytevector-u8-ref data (+ offset 1)) 8)
+                   (bytevector-u8-ref data (+ offset 2)))))
 
   (define (read-u32 buf i)
     (read-generic buf bytevector-u32-ref 4 i))

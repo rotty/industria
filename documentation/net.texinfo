@@ -7,6 +7,7 @@
 * net irc::            Internet Relay Chat
 * net irc fish::       Blowcrypt/FiSH encryption for IRC
 * net otr::            Off-the-Record Messaging
+* net tls simple::     Transport Layer Security (simple interface)
 @end menu
 
 @c ======================================================================
@@ -514,4 +515,53 @@ Version history:
 @item
 @code{(0 0)} -- Initial version. Lacks a few sanity checks which might
 make it unsafe.
+@end itemize
+
+
+@c ======================================================================
+@node net tls simple
+@subsection Transport Layer Security (simple interface)
+The @code{(weinholt net tls simple)} library provides custom binary
+ports that implement the Transport Layer Security (TLS) protocol used
+by e.g.@: https. After starting TLS you can use the new ports as
+easily as if they were unencrypted. TLS encrypts the traffic and
+lets you verify the remote server's identity.
+@cindex https
+@cindex TLS
+@cindex SSL
+
+Only the client part of TLS 1.0 is implemented, and the only cipher
+suite implemented uses the super slow 3DES library. This whole thing
+is kind of experimental and I'd appreciate feedback.
+
+@deffn Procedure tls-connect hostname portname [client-certificates]
+Initiates a TCP connection to the given @var{hostname} and
+@var{portname} (which are strings) and negotiates a TLS connection.
+Can hang forever.
+
+Pay no attention to the optional @var{client-certificates} argument.
+It is not yet implemented.
+
+This procedure returns three values: a binary input port, a binary
+output port, and a TLS connection object. The last value comes from
+the not-yet-documented @code{(weinholt net tls)} library. It is
+intended to be used to access the server's certificate chain, which
+can be verified using the not-yet-documented @code{(weinholt crypto
+x509)} library.
+@end deffn
+
+@deffn Procedure start-tls hostname portname binary-input-port @
+                 binary-output-port [client-certificates]
+Negotiates TLS on two already opened ports. Same return values as
+@code{tls-connect}. This procedure can be used for protocols where the
+communication at first is in plaintext and then switches over to
+encrypted (i.e.@: STARTTLS). Some such protocols are SMTP, LDAP and
+XMPP.
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version. Very slow indeed, but it works.
 @end itemize
