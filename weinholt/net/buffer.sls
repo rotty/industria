@@ -32,7 +32,7 @@
 
 ;; TODO: proper conditions
 
-(library (weinholt net buffer (1 0 20100613))
+(library (weinholt net buffer (1 0 20100614))
   (export make-buffer
           buffer-read! buffer-copy!
           buffer-port buffer-port-set!
@@ -56,19 +56,20 @@
                   ;; initial buffer size is. The overhead (length
                   ;; field) should probably be taken into account.
                   ;; Depends on implementation details...
-                  (p port (make-bytevector (- 256 8) 0) 0 0)))))
+                  (p port (make-bytevector (- 256 2)) 0 0)))))
 
-  ;; TODO: more clever
   (define (grow! buf morelen)
+    (define (extend have need)
+      (if (> have need) have (extend (* 2 have) need)))
     (when (> (+ morelen (buffer-bottom buf))
              (bytevector-length (buffer-data buf)))
       ;; Extend the buffer size
       (let* ((old (buffer-data buf))
-             (new (make-bytevector (* (bytevector-length old) 2) 0)))
+             (new (make-bytevector (extend (bytevector-length old)
+                                           (+ morelen (buffer-bottom buf))))))
         (buffer-data-set! buf new)
         (bytevector-copy! old 0
-                          new 0 (buffer-bottom buf))
-        (grow! buf morelen))))
+                          new 0 (buffer-bottom buf)))))
   
   (define (buffer-read! buf n)
     (when (> n 0)
