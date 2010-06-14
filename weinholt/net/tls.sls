@@ -40,7 +40,7 @@
 
 ;; TODO: go through the implementation pitfalls in the RFC.
 
-(library (weinholt net tls (0 0 20100613))
+(library (weinholt net tls (0 0 20100614))
   (export make-tls-wrapper
           flush-tls-output
           put-tls-record get-tls-record
@@ -284,7 +284,12 @@
                (put-bytevector out blocks))))))
 
   (define (tls-conn-has-unprocessed-data? conn)
-    (cond ((not (zero? (buffer-length (tls-conn-hsbuf conn))))
+    (cond ((and (not (zero? (buffer-length (tls-conn-hsbuf conn))))
+                (not (zero? (buffer-top (tls-conn-hsbuf conn)))))
+           ;; If the length isn't zero, then there is unprocessed
+           ;; data. If the top is zero, then there must've been an
+           ;; incomplete handshake sent, and we must read more data
+           ;; before anything fun can happen.
            (print ";Handshake protocol has " (buffer-length (tls-conn-hsbuf conn))
                   " bytes unprocessed")
            TLS-PROTOCOL-HANDSHAKE)
@@ -303,6 +308,7 @@
 
   (define (get-tls-record* conn)
     (let ((b (tls-conn-inbuf conn)))
+      (buffer-reset! b)
       (buffer-read! b (format-size "!uCSS"))
       (let-values (((type version len) (unpack "!uCSS" (buffer-data b))))
         (print ";;; record type: " type
@@ -618,9 +624,8 @@
 
       (cond ((> length (buffer-length b))
              (print ";Fragmented handshake (" (buffer-length b) " of " length ")")
-             (print b)
              (buffer-seek! b -4)
-             (get-tls-record conn))
+             (get-tls-record* conn))
             ((= type TLS-HANDSHAKE-SERVER-HELLO)
              ;; The server replied (presumably, check this later) to
              ;; the CLIENT-HELLO message.
