@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -17,7 +17,7 @@
 
 ;; The Digital Signature Algorithm from FIPS Pub 186.
 
-(library (weinholt crypto dsa (0 0 20090919))
+(library (weinholt crypto dsa (0 0 20100615))
   (export make-dsa-public-key dsa-public-key?
           dsa-public-key-p
           dsa-public-key-q
@@ -35,6 +35,7 @@
           dsa-private-key-from-bytevector
           dsa-private-key-from-pem-file
 
+          dsa-signature-from-int
           dsa-verify-signature
           dsa-create-signature)
   (import (prefix (weinholt struct der (0 0)) der:)
@@ -83,13 +84,17 @@
                "Bad version on private DSA key" (car data)))
       (apply make-dsa-private-key (cdr data))))
 
-
   (define (dsa-private-key-from-pem-file filename)
     (let-values (((type data) (get-delimited-base64 (open-input-file filename))))
       (unless (string=? type "DSA PRIVATE KEY")
         (assertion-violation 'dsa-private-key-from-pem-file
                              "The file is not a 'DSA PRIVATE KEY' PEM file" filename))
       (dsa-private-key-from-bytevector data)))
+
+  ;; The int is normally from an X.509 certificate and this procedure
+  ;; returns r and s in a list.
+  (define (dsa-signature-from-int int)
+    (der:translate (der:decode (uint->bytevector int)) (Dss-Sig-Value)))
 
   (define (dsa-verify-signature Hm pubkey r s)
     (and (< 0 r (dsa-public-key-q pubkey))

@@ -20,9 +20,9 @@
 ;; The decoding routines are implemented manually, but should maybe be
 ;; automatically generated from the ASN.1 types in the RFC.
 
-(library (weinholt crypto x509 (0 0 20100613))
-  (export certificate<-bytevector
-          public-key<-certificate
+(library (weinholt crypto x509 (0 0 20100615))
+  (export certificate-from-bytevector
+          certificate-public-key
           decipher-certificate-signature
           validate-certificate-path
           CA-path CA-file CA-procedure
@@ -40,6 +40,7 @@
           (weinholt crypto md5)
           (weinholt crypto rsa)
           (weinholt crypto sha-1)
+          (weinholt crypto sha-2)
           (prefix (weinholt struct der (0 0)) der:)
           (weinholt struct pack)
           (weinholt text base64))
@@ -166,17 +167,24 @@
 
   (define (symbol<-oid oid)
     (define oids
-      '(((0 9 2342 19200300 100 1 25) . domainComponent)
+      '( ;; http://www.iana.org/assignments/dssc/dssc.xhtml
         ((1 2 840 10040 4 1) . dsa)
-        ((1 2 840 10040 4 3) . dsaWithSha1)
+        ((1 2 840 10040 4 3) . sha1WithDSA)
         ((1 2 840 113549 1 1 1) . rsaEncryption)
-        ((1 2 840 113549 1 1 2) . md2WithRSAEncryption) ;will not be implemented
-        ((1 2 840 113549 1 1 4) . md5withRSAEncryption)
+        ((1 2 840 113549 1 1 2) . md2WithRSAEncryption) ;wontfix
+        ((1 2 840 113549 1 1 4) . md5withRSAEncryption) ;wontfix
         ((1 2 840 113549 1 1 5) . sha1WithRSAEncryption)
+        ((1 2 840 113549 1 1 11) . sha256WithRSAEncryption)
+        ((1 2 840 113549 1 1 12) . sha384WithRSAEncryption)
+        ((1 2 840 113549 1 1 13) . sha512WithRSAEncryption)
+
+        ((1 3 36 3 3 1 2) . rsaSignatureWithripemd160) ;maybe fix?
+        ((1 3 36 3 2 1) . ripemd160) ;maybe fix?
+
+        ((0 9 2342 19200300 100 1 25) . domainComponent)
         ((1 2 840 113549 1 9 1) . emailAddress)
 
         ((1 3 6 1 5 5 7 1 1) . authorityInfoAccess)
-        ((1 3 14 3 2 26) . sha1)
         ((2 5 4 3) . commonName)
         ((2 5 4 6) . countryName)
         ((2 5 4 7) . localityName)
@@ -194,11 +202,32 @@
         ((2 5 29 19) . basicConstraints)
         ((2 5 29 31) . cRLDistributionPoints)
         ((2 5 29 32) . certificatePolicies)
-        ((2 5 29 35) . authorityKeyIdentifier)))
+        ((2 5 29 35) . authorityKeyIdentifier)
+        ((2 5 29 37) . extKeyUsage)
+
+        ;; http://www.iana.org/assignments/hash-function-text-names/hash-function-text-names.xhtml
+        ((1 2 840 113549 2 2) . md2)    ;wontfix
+        ((1 2 840 113549 2 5) . md5)    ;wontfix
+        ((1 3 14 3 2 26) . sha-1)
+        #;((2 16 840 1 101 3 4 2 4) . sha-224)
+        ((2 16 840 1 101 3 4 2 1) . sha-256)
+        ((2 16 840 1 101 3 4 2 2) . sha-384)
+        ((2 16 840 1 101 3 4 2 3) . sha-512)))
     (cond ((assoc oid oids) => cdr)
           (else (string->symbol (string-append
                                  "oid-"
                                  (string-join (map number->string oid) "."))))))
+
+  (define (dsa-algorithm? alg)
+    (eq? alg 'sha1WithDSA))
+  (define (rsa-algorithm? alg)
+    (memq alg '(md2WithRSAEncryption
+                md5withRSAEncryption
+                sha1WithRSAEncryption
+                sha256WithRSAEncryption
+                sha384WithRSAEncryption
+                sha512WithRSAEncryption
+                rsaSignatureWithripemd160)))
 
   (define-record-type certificate
     (fields tbs-data                    ;Bytevector with the tbs-certificate
@@ -218,10 +247,10 @@
             subject-unique-id           ;unused
             extensions))
 
-  (define certificate<-bytevector
+  (define certificate-from-bytevector
     (case-lambda
       ((bv)
-       (certificate<-bytevector bv 0 (bytevector-length bv)))
+       (certificate-from-bytevector bv 0 (bytevector-length bv)))
       ((bv start end)
        (let* ((parse-tree (der:decode bv start end))
               (cert-data (der:translate parse-tree (Certificate)
@@ -289,7 +318,7 @@
                    "unimplemented signature algorithm" (car algo))))))
       (else value)))
 
-  (define (public-key<-certificate cert)
+  (define (certificate-public-key cert)
     (tbs-certificate-subject-public-key-info (certificate-tbs-certificate cert)))
 
 ;;; Certificate signatures etc
@@ -345,13 +374,24 @@
              (certificate-signature-algorithm signed-cert)
              (tbs-certificate-signature-algorithm
               (certificate-tbs-certificate signed-cert))))
-    (let ((key (public-key<-certificate signer-cert)))
+    (let ((key (certificate-public-key signer-cert)))
       (cond ((rsa-public-key? key)
-             ;; XXX: verify the signature algorithm specifies RSA
+             (unless (rsa-algorithm? (certificate-signature-algorithm signed-cert))
+               (error 'decipher-certificate-signature
+                      "RSA key but invalid signature algorithm"
+                      (certificate-signature-algorithm signed-cert)))
              (let ((digest (rsa-pkcs1-decrypt-digest
                             (certificate-signature-value signed-cert) key)))
                (list (translate-algorithm (car digest))
                      (cadr digest))))
+            ((dsa-public-key? key)
+             (unless (dsa-algorithm? (certificate-signature-algorithm signed-cert))
+               (error 'decipher-certificate-signature
+                      "DSA key but invalid signature algorithm"
+                      (certificate-signature-algorithm signed-cert)))
+             (list (certificate-signature-algorithm signed-cert)
+                   (dsa-signature-from-int
+                    (certificate-signature-value signed-cert))))
             (else
              (error 'decipher-certificate-signature
                     "Unimplemented public key algorithm" key)))))
@@ -366,7 +406,7 @@
                    (lambda (p)
                      (let-values (((type bv) (get-delimited-base64 p)))
                        (cond ((and (string=? type "CERTIFICATE")
-                                   (certificate<-bytevector bv))
+                                   (certificate-from-bytevector bv))
                               =>
                               (lambda (cert)
                                 (if (dn=? issuer
@@ -402,13 +442,27 @@
            (time<=? time (date->time-utc (cadr validity))))))
 
   (define (signature-ok? signed signer)
+    (define (check algorithm md->bv md sig)
+      (unless (eq? algorithm (certificate-signature-algorithm signed))
+        (error 'validate-certificate-path
+               "Signature algorithm does not match with deciphered digest"
+               algorithm (certificate-signature-algorithm signed)))
+      (bytevector=? sig (md->bv (md (certificate-tbs-data signed)))))
     (let ((signature (decipher-certificate-signature signed signer)))
       (case (car signature)
-        ((sha1)
-         ;; XXX: verify the signature algorithm specifies sha1
-         (bytevector=? (sha-1->bytevector
-                        (sha-1 (certificate-tbs-data signed)))
-                       (cadr signature)))
+        ((sha-1) (check 'sha1WithRSAEncryption sha-1->bytevector
+                        sha-1 (cadr signature)))
+        ((sha-256) (check 'sha256WithRSAEncryption sha-256->bytevector
+                          sha-256 (cadr signature)))
+        ((sha-384) (check 'sha384WithRSAEncryption sha-384->bytevector
+                          sha-384 (cadr signature)))
+        ((sha-512) (check 'sha512WithRSAEncryption sha-512->bytevector
+                          sha-512 (cadr signature)))
+        ((sha1WithDSA)
+         (apply dsa-verify-signature
+                (sha-1->bytevector (sha-1 (certificate-tbs-data signed)))
+                (certificate-public-key signer)
+                (cadr signature)))      ;r and s
         (else (error 'validate-certificate-path
                      "Unimplemented signature algorithm"
                      (car signature))))))
@@ -445,9 +499,9 @@
   (define validate-certificate-path
     (case-lambda
       ((path)
-       (validate-certificate-path path #f (current-time) #f))
+       (validate-certificate-path path #f #f #f))
       ((path common-name)
-       (validate-certificate-path path common-name (current-time) #f))
+       (validate-certificate-path path common-name #f #f))
       ((path common-name time)
        (validate-certificate-path path common-name time #f))
       ((path common-name time root-cert)
@@ -456,7 +510,8 @@
        (let ((root-cert (or root-cert
                             (get-root-certificate
                              (tbs-certificate-issuer
-                              (certificate-tbs-certificate (car path)))))))
+                              (certificate-tbs-certificate (car path))))))
+             (time (or time (current-time))))
          (let lp ((path path)
                   (maxlen (length path))
                   (signer root-cert))
@@ -514,7 +569,7 @@
             (cond ((eof-object? bv)
                    '())
                   ((string=? type "CERTIFICATE")
-                   (cons (certificate<-bytevector bv)
+                   (cons (certificate-from-bytevector bv)
                          (lp)))
                   (else (lp))))))))
 
@@ -526,7 +581,7 @@
       (print "- Serial number: " (tbs-certificate-serial-number cert))
       (print "- Signature algorithm: " (tbs-certificate-signature-algorithm cert))
       (print "- Subject Public Key: ")
-      (print (public-key<-certificate c))
+      (print (certificate-public-key c))
       (display "- Issuer: ") (write (tbs-certificate-issuer cert)) (newline)
       (let ((v (tbs-certificate-validity cert)))
         (print "- Not valid before: " (date->string (car v)))

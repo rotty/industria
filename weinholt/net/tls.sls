@@ -40,7 +40,7 @@
 
 ;; TODO: go through the implementation pitfalls in the RFC.
 
-(library (weinholt net tls (0 0 20100614))
+(library (weinholt net tls (0 0 20100615))
   (export make-tls-wrapper
           flush-tls-output
           put-tls-record get-tls-record
@@ -662,17 +662,17 @@
                (buffer-seek! b 3)
                (let lp ((certs '()))
                  (cond ((= certs-end (buffer-top b))
-                        (tls-conn-server-key-set! conn (public-key<-certificate
+                        (tls-conn-server-key-set! conn (certificate-public-key
                                                         (last certs)))
                         (tls-conn-remote-certs-set! conn certs)
                         (done!)
                         'handshake-certificate)
                        (else
                         (let* ((cert-len (read-u24 b 0))
-                               (cert (certificate<-bytevector (buffer-data b)
-                                                              (+ 3 (buffer-top b))
-                                                              (+ 3 (buffer-top b)
-                                                                 cert-len))))
+                               (cert (certificate-from-bytevector (buffer-data b)
+                                                                  (+ 3 (buffer-top b))
+                                                                  (+ 3 (buffer-top b)
+                                                                     cert-len))))
                           (print ";Cert of length " cert-len)
                           (print "#;cert " (bytevector-copy* (buffer-data b)
                                                              (+ 3 (buffer-top b))
