@@ -33,6 +33,7 @@ or the FDA and quite likely aren't allowed for government work.
 * crypto crc::         Cyclic Redundancy Codes
 * crypto des::         Data Encryption Standard
 * crypto dsa::         Digital Signature Algorithm
+* crypto entropy::     Entropy and randomness
 * crypto md5::         Message-Digest algorithm 5
 * crypto password::    Password hashing
 * crypto sha-1::       Secure Hash Algorithm 1
@@ -487,6 +488,12 @@ Privacy Enhanced Mail (PEM) format and contain an ASN.1 DER encoded
 private DSA key.
 @end deffn
 
+@deffn Procedure dsa-signature-from-int integer
+Parses the @var{integer} as an ASN.1 encoded DSA signature. The return
+value is a list with the @var{r} and @var{s} values that make up a DSA
+signature.
+@end deffn
+
 @deffn Procedure dsa-create-signature hash private-key
 The @var{hash} is the message digest (as a bytevector) of the data you
 want to sign. The @var{hash} and the @var{private-key} are used to
@@ -512,6 +519,36 @@ Version history:
 @end itemize
 
 
+@c ======================================================================
+@node crypto entropy
+@subsection Entropy and randomness
+The @code{(weinholt crypto entropy)} library is meant to help with
+generating random data. It tries to use the system's
+@code{/dev/urandom} device if possible, otherwise it uses SRFI-27.
+
+Please see the note at the beginning of the chapter.
+
+@deffn Procedure bytevector-randomize! target [target-start k]
+Writes @var{k} random bytes to the bytevector @var{target} starting at
+index @var{target-start}.
+@end deffn
+
+@deffn Procedure make-random-bytevector k
+Returns a bytevector of length @var{k} with random content.
+
+@example
+(import (weinholt crypto entropy))
+(make-random-bytevector 8)
+@result{} #vu8(68 229 38 253 58 70 198 161)
+@end example
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
+@end itemize
 
 @c ======================================================================
 @node crypto md5
@@ -689,3 +726,8 @@ Version history:
 @item
 @code{(0 0)} -- Initial version.
 @end itemize
+
+@c ======================================================================
+@c @node crypto x509
+@c @subsection X.509 Public-Key Infrastructure
+@c TODO:
