@@ -40,7 +40,7 @@
 
 ;; TODO: go through the implementation pitfalls in the RFC.
 
-(library (weinholt net tls (0 0 20100615))
+(library (weinholt net tls (0 0 20100616))
   (export make-tls-wrapper
           flush-tls-output
           put-tls-record get-tls-record
@@ -69,12 +69,11 @@
           (weinholt net buffer)
           (weinholt struct pack))
 
-  (define TLS-VERSION-1.2 #x0303)
-  (define TLS-VERSION-1.1 #x0302)
-  (define TLS-VERSION-1.0 #x0301)
+  (define TLS-VERSION-1.2 #x0303)       ;RFC5246
+  (define TLS-VERSION-1.1 #x0302)       ;RFC4346
+  (define TLS-VERSION-1.0 #x0301)       ;RFC2246
   (define SSL-VERSION-3.0 #x0300)       ;not gonna be supported
-  (define TLS-VERSION TLS-VERSION-1.0)
-  ;; TODO: fix the IV thing and upgrade to 1.1
+  (define TLS-VERSION TLS-VERSION-1.1)
   ;; TODO: implement tls-prf-sha256 and aes and upgrade to version 1.2
   (define tls-client-version-bytevector
     (pack "!S" TLS-VERSION))
@@ -94,7 +93,7 @@
 
   (define-syntax print
     (syntax-rules ()
-      #;
+      
       ((_ . args)
        (begin
          (for-each display (list . args))
@@ -228,6 +227,9 @@
   (define TLS-PROTOCOL-HANDSHAKE 22)
   (define TLS-PROTOCOL-APPLICATION-DATA 23)
 
+  (define (explicit-IV? conn)
+    (>= (tls-conn-version conn) TLS-VERSION-1.1))
+
   (define (flush-tls-output conn)
     (flush-output-port (tls-conn-out conn)))
 
@@ -237,28 +239,31 @@
     (print ";;; sending a record of type " type)
     (let ((out (tls-conn-out conn))
           (len (bytevectors-length data)))
-      (put-u8 out type)
-      ;; TLS version
-      (put-u8 out (bitwise-arithmetic-shift-right (tls-conn-version conn) 8))
-      (put-u8 out (fxand #xff (tls-conn-version conn)))
 
-      (cond ((>= len (+ (expt 2 14) 2048))
+      (cond ((> len (expt 2 14))
              (error 'put-tls-record "TODO: overlong record" len))
             ((= (tls-conn-client-cipher conn) TLS-NULL-WITH-NULL-NULL)
-             (put-u8 out (fxand #xff (bitwise-arithmetic-shift-right len 8)))
-             (put-u8 out (fxand #xff len))
+             (put-bytevector out (pack "!uCSS" type (tls-conn-version conn) len))
              (for-each (lambda (bv) (put-bytevector out bv)) data))
-            (else
-             (let* ((blocks-len (fx+ len 21))  ;content+sha-1+padbyte
+            ((= (tls-conn-client-cipher conn) TLS-RSA-WITH-3DES-EDE-CBC-SHA)
+             (let* ((blocks-len (fx+ len 21)) ;content+sha-1+padbyte
                     ;; TODO: more than the minimum padding
                     (padding (- (fxand (fx+ blocks-len 7) -8)
                                 blocks-len))
                     (padded-len (+ blocks-len padding))
-                    (blocks (make-bytevector padded-len padding)))
-
+                    (blocks (make-bytevector padded-len padding))) ;TODO: static buffer
+               (cond ((explicit-IV? conn)
+                      (put-bytevector out (pack "!uCSS" type (tls-conn-version conn)
+                                                (+ padded-len 8)))
+                      (bytevector-randomize! (tls-conn-client-write-IV conn))
+                      (put-bytevector out (tls-conn-client-write-IV conn)))
+                     (else
+                      (put-bytevector out (pack "!uCSS" type (tls-conn-version conn)
+                                                padded-len))))
+               (print "#;record-IV " (tls-conn-client-write-IV conn))
                (print "#;outgoing-plaintext " data)
                ;; TODO: if the sequence numbers exceed 2^64-1, renegotiate
-
+               
                (sha-1-copy-hash! (apply hmac-sha-1
                                         (tls-conn-client-write-mac-secret conn)
                                         (pack "!uQCSS" (tls-conn-seq-write conn)
@@ -277,11 +282,10 @@
                                    (tls-conn-client-write-key conn)
                                    (tls-conn-client-write-IV conn)
                                    0 padded-len)
-
                (print "#;outgoing-ciphertext " blocks)
-               (put-u8 out (fxand #xff (bitwise-arithmetic-shift-right padded-len 8)))
-               (put-u8 out (fxand #xff padded-len))
-               (put-bytevector out blocks))))))
+               (put-bytevector out blocks)))
+            (else
+             (assert #f)))))
 
   (define (tls-conn-has-unprocessed-data? conn)
     (cond ((and (not (zero? (buffer-length (tls-conn-hsbuf conn))))
@@ -325,13 +329,20 @@
   (define (decipher-record conn b type len)
     (cond ((= (tls-conn-server-cipher conn) TLS-RSA-WITH-3DES-EDE-CBC-SHA)
            (print ";Deciphering 3DES encrypted record")
+           (when (explicit-IV? conn)
+             (bytevector-copy! (buffer-data b) (buffer-top b)
+                               (tls-conn-server-write-IV conn) 0
+                               (bytevector-length (tls-conn-server-write-IV conn))))
            (tdea-cbc-decipher! (buffer-data b)
                                (tls-conn-server-write-key conn)
                                (tls-conn-server-write-IV conn)
                                (buffer-top b)
                                len)
+           (when (explicit-IV? conn)
+             (buffer-seek! b (bytevector-length (tls-conn-server-write-IV conn))))
            (let ((padding (bytevector-u8-ref (buffer-data b) (- (buffer-bottom b) 1))))
-             ;; FIXME: verify the MAC even if the padding is crazy
+             ;; FIXME: verify the MAC even if the padding is crazy.
+             ;; verify the padding characters.
              (print "#;padding " padding)
              (buffer-bottom-set! b (- (buffer-bottom b) padding 1)) ;remove padding
              (let ((mac (subbytevector (buffer-data b) (- (buffer-bottom b) 20)
@@ -596,6 +607,7 @@
   (define (put-tls-handshake-finished conn)
     ;; PRF(master_secret, finished_label, MD5(handshake_messages) +
     ;;                         SHA-1(handshake_messages)) [0..11];
+    (assert (not (= (tls-conn-client-cipher conn) TLS-NULL-WITH-NULL-NULL)))
     (put-tls-handshake conn TLS-HANDSHAKE-FINISHED
                        (list ((tls-conn-prf conn) 12
                               (tls-conn-master-secret conn)
@@ -755,7 +767,7 @@
 ;;; Application data protocol
 
   (define (put-tls-application-data conn data)
-    (assert (not (= (tls-conn-server-cipher conn) TLS-NULL-WITH-NULL-NULL)))
+    (assert (not (= (tls-conn-client-cipher conn) TLS-NULL-WITH-NULL-NULL)))
     (put-tls-record conn TLS-PROTOCOL-APPLICATION-DATA
                     (list data)))
 
