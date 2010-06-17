@@ -530,9 +530,11 @@ lets you verify the remote server's identity.
 @cindex TLS
 @cindex SSL
 
-Only the client part of TLS 1.0 and 1.1 are implemented, and the only
-cipher suite implemented uses the super slow 3DES library. This whole
-thing is kind of experimental and I'd appreciate feedback.
+This library currently only provides a TLS client. Both TLS 1.0 and
+TLS 1.1 are supported. The cipher suites provide AES and 3DES (if AES
+is not available on the server).
+
+This whole thing is kind of experimental and I'd appreciate feedback.
 
 @deffn Procedure tls-connect hostname portname [client-certificates]
 Initiates a TCP connection to the given @var{hostname} and

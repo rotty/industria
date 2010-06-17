@@ -38,9 +38,10 @@
 
 ;; http://www.ietf.org/dyn/wg/charter/tls-charter.html
 
-;; TODO: go through the implementation pitfalls in the RFC.
+;; TODO: go through the implementation pitfalls in the RFC. check all
+;; the MUSTs.
 
-(library (weinholt net tls (0 0 20100616))
+(library (weinholt net tls (0 0 20100617))
   (export make-tls-wrapper
           flush-tls-output
           put-tls-record get-tls-record
@@ -60,40 +61,21 @@
           (srfi :19 time)
           (srfi :27 random-bits)
           (weinholt bytevectors)
+          (weinholt crypto aes)
           (weinholt crypto des)
           (weinholt crypto entropy)
-          (weinholt crypto sha-1)
           (weinholt crypto md5)
           (weinholt crypto rsa)
+          (weinholt crypto sha-1)
           (weinholt crypto x509)
           (weinholt net buffer)
           (weinholt struct pack))
 
-  (define TLS-VERSION-1.2 #x0303)       ;RFC5246
-  (define TLS-VERSION-1.1 #x0302)       ;RFC4346
-  (define TLS-VERSION-1.0 #x0301)       ;RFC2246
-  (define SSL-VERSION-3.0 #x0300)       ;not gonna be supported
-  (define TLS-VERSION TLS-VERSION-1.1)
-  ;; TODO: implement tls-prf-sha256 and aes and upgrade to version 1.2
-  (define tls-client-version-bytevector
-    (pack "!S" TLS-VERSION))
-
-  ;; A few cipher suites
-  (define TLS-NULL-WITH-NULL-NULL #x0000)
-  (define TLS-RSA-WITH-NULL-MD5 #x0001)
-  (define TLS-RSA-WITH-NULL-SHA #x0002)
-  (define TLS-RSA-WITH-NULL-SHA256 #x003B)
-  (define TLS-RSA-WITH-RC4-128-MD5 #x0004)
-  (define TLS-RSA-WITH-RC4-128-SHA #x0005)
-  (define TLS-RSA-WITH-3DES-EDE-CBC-SHA #x000A) ;only one implemented
-  (define TLS-RSA-WITH-AES-128-CBC-SHA #x002F)
-  (define TLS-RSA-WITH-AES-256-CBC-SHA #x0035)
-  (define TLS-RSA-WITH-AES-128-CBC-SHA256 #x003C)
-  (define TLS-RSA-WITH-AES-256-CBC-SHA256 #x003D)
+;;; First the utilities
 
   (define-syntax print
     (syntax-rules ()
-      
+      #;
       ((_ . args)
        (begin
          (for-each display (list . args))
@@ -116,7 +98,90 @@
   (define (u16be-list->bytevector x)
     (uint-list->bytevector x (endianness big) 2))
 
+  (define (pad-length len blocksize)
+    (fx- (fxand (fx+ len (fx- blocksize 1))
+                (fx- blocksize))
+         len))
+
+;;; Version numbers
+
+  ;; In TLS 1.1 the format of encrypted records changes to include an
+  ;; explicit IV for CBC ciphers.
+
+  (define TLS-VERSION-1.2 #x0303)       ;RFC5246 (not yet supported)
+  (define TLS-VERSION-1.1 #x0302)       ;RFC4346
+  (define TLS-VERSION-1.0 #x0301)       ;RFC2246
+  (define SSL-VERSION-3.0 #x0300)       ;not gonna be supported
+  (define TLS-VERSION TLS-VERSION-1.1)
+  ;; TODO: upgrade to version 1.2. Must first find a server that
+  ;; implements it...
+  (define tls-client-version-bytevector
+    (pack "!S" TLS-VERSION))
+
+;;; A few cipher suites
+
+  (define-record-type cs
+    (fields name id kex cipher mac
+            key-length iv-size block-size expand-ekey expand-dkey
+            mac-length mac-key-length)
+    (protocol
+     (lambda (p)
+       (lambda (name id kex cipher mac)
+         (let-values (((key-length iv-size block-size
+                                   expand-ekey expand-dkey)
+                       (case cipher
+                         ((#f)
+                          (values 0 0 #f
+                                  'no-keys
+                                  'no-keys))
+                         ((rc4-128)
+                          (values 16 0 #f
+                                  'rc4-not-implemented
+                                  'rc4-not-implemented))
+                         ((tdea)
+                          (values 24 8 8
+                                  tdea-permute-key
+                                  tdea-permute-key))
+                         ((aes-128-cbc)
+                          (values 16 16 16
+                                  expand-aes-key
+                                  (lambda (k)
+                                    (reverse-aes-schedule
+                                     (expand-aes-key k)))))
+                         ((aes-256-cbc)
+                          (values 32 16 16
+                                  expand-aes-key
+                                  (lambda (k)
+                                    (reverse-aes-schedule
+                                     (expand-aes-key k)))))))
+                      ((mac-length mac-key-length)
+                       (case mac
+                         ((#f) (values 0 0))
+                         ((md5) (values 16 16))
+                         ((sha-1) (values 20 20))
+                         ((sha-256) (values 32 32)))))
+           (p name id kex cipher mac
+              key-length iv-size block-size expand-ekey expand-dkey
+              mac-length mac-key-length))))))
+
+  ;; All the supported cipher suites in order of priority. The NULL
+  ;; cipher must be first.
+  (define supported-cipher-suites
+    (list
+     (make-cs 'TLS-NULL-WITH-NULL-NULL #x0000 #f #f #f)
+     (make-cs 'TLS-RSA-WITH-AES-128-CBC-SHA #x002F 'rsa 'aes-128-cbc 'sha-1)
+     (make-cs 'TLS-RSA-WITH-AES-256-CBC-SHA #x0035 'rsa 'aes-256-cbc 'sha-1)
+     ;; TODO: version 1.2:
+     #;(make-cs 'TLS-RSA-WITH-AES-128-CBC-SHA256 #x003C 'rsa 'aes-128-cbc 'sha-256)
+     #;(make-cs 'TLS-RSA-WITH-AES-256-CBC-SHA256 #x003D 'rsa 'aes-256-cbc 'sha-256)
+     (make-cs 'TLS-RSA-WITH-3DES-EDE-CBC-SHA #x000A 'rsa 'tdea 'sha-1)
+     #;(make-cs 'TLS-RSA-WITH-RC4-128-SHA #x0005 'rsa 'rc4-128 'sha-1)
+     #;(make-cs 'TLS-RSA-WITH-RC4-128-MD5 #x0004 'rsa 'rc4-128 'md5)))
+
+;;;
+
   (define (tls-prf-sha256 bytes secret label seeds)
+    ;; TODO: version 1.2
     (error 'tls-prf-sha256 "not implemented"))
 
   (define (p-hash hash->bytevector hmac hash-length length secret seeds)
@@ -149,26 +214,31 @@
         (bytevector-u8-set! ret i (fxxor (bytevector-u8-ref p1 i)
                                          (bytevector-u8-ref p2 i))))))
 
+  (define (tls-conn-prf conn)
+    (if (< (tls-conn-version conn) TLS-VERSION-1.2)
+        tls-prf-md5-sha1
+        tls-prf-sha256))
+
   (define-record-type tls-conn
-    (fields (mutable client-cipher)
+    (fields (mutable remote-certs)      ;end-entity is last
+            (mutable client-cipher)
             (mutable server-cipher)
-            (mutable compression)
-            (mutable mac-key)
+            (mutable next-cipher)
+
             (mutable seq-read)
             (mutable seq-write)
             (mutable version)
-            (mutable remote-certs)      ;end-entity is last
-            (mutable server-key)
-            (mutable server-random)
-            (mutable client-random)
-            (mutable prf)
+
             (mutable master-secret)
+            (mutable client-random)
             (mutable client-write-mac-secret)
             (mutable client-write-key)
             (mutable client-write-IV)
+            (mutable server-random)
             (mutable server-write-mac-secret)
             (mutable server-write-key)
             (mutable server-write-IV)
+
             (immutable handshakes-md5)
             (immutable handshakes-sha-1)
             (immutable server-name)
@@ -180,24 +250,24 @@
   (define (make-tls-wrapper in out server-name)
     (let ((random-source (make-random-source)))
       (random-source-randomize! random-source)
-      (make-tls-conn TLS-NULL-WITH-NULL-NULL
-                     TLS-NULL-WITH-NULL-NULL
-                     #f
-                     #f
+      (make-tls-conn '()
+                     (car supported-cipher-suites)
+                     (car supported-cipher-suites)
+                     (car supported-cipher-suites)
+
                      0 0
                      TLS-VERSION
-                     '()
-                     'no-server-key-yet
-                     'no-server-random
-                     'no-client-random
-                     'no-prf-yet
+
                      'no-master-secret-yet
+                     'no-client-random
                      'no-client-write-mac-secret-yet
                      'no-client-write-key-yet
                      'no-client-write-IV-yet
+                     'no-server-random
                      'no-server-write-mac-secret-yet
                      'no-server-write-key-yet
                      'no-server-write-IV-yet
+
                      (make-md5)
                      (make-sha-1)
                      server-name
@@ -239,53 +309,68 @@
     (print ";;; sending a record of type " type)
     (let ((out (tls-conn-out conn))
           (len (bytevectors-length data)))
-
       (cond ((> len (expt 2 14))
              (error 'put-tls-record "TODO: overlong record" len))
-            ((= (tls-conn-client-cipher conn) TLS-NULL-WITH-NULL-NULL)
+            ((not (cs-cipher (tls-conn-client-cipher conn)))
              (put-bytevector out (pack "!uCSS" type (tls-conn-version conn) len))
              (for-each (lambda (bv) (put-bytevector out bv)) data))
-            ((= (tls-conn-client-cipher conn) TLS-RSA-WITH-3DES-EDE-CBC-SHA)
-             (let* ((blocks-len (fx+ len 21)) ;content+sha-1+padbyte
+            ;; Pad, MAC and encrypt
+            (else
+             (let* ((cipher (tls-conn-client-cipher conn))
+                    (blocks-len (+ len (cs-mac-length cipher) 1))
                     ;; TODO: more than the minimum padding
-                    (padding (- (fxand (fx+ blocks-len 7) -8)
-                                blocks-len))
+                    (padding (pad-length blocks-len (cs-block-size cipher)))
                     (padded-len (+ blocks-len padding))
                     (blocks (make-bytevector padded-len padding))) ;TODO: static buffer
                (cond ((explicit-IV? conn)
                       (put-bytevector out (pack "!uCSS" type (tls-conn-version conn)
-                                                (+ padded-len 8)))
+                                                (+ padded-len (cs-iv-size cipher))))
                       (bytevector-randomize! (tls-conn-client-write-IV conn))
                       (put-bytevector out (tls-conn-client-write-IV conn)))
                      (else
                       (put-bytevector out (pack "!uCSS" type (tls-conn-version conn)
                                                 padded-len))))
                (print "#;record-IV " (tls-conn-client-write-IV conn))
-               (print "#;outgoing-plaintext " data)
-               ;; TODO: if the sequence numbers exceed 2^64-1, renegotiate
-               
-               (sha-1-copy-hash! (apply hmac-sha-1
-                                        (tls-conn-client-write-mac-secret conn)
-                                        (pack "!uQCSS" (tls-conn-seq-write conn)
-                                              type (tls-conn-version conn) len)
-                                        data)
-                                 blocks len)
+               (print "#;outgoing-plaintext " (bv->string
+                                               (bytevector-concatenate data)))
+               ;; MAC
+               (let ((header (pack "!uQCSS" (tls-conn-seq-write conn)
+                                   type (tls-conn-version conn) len)))
+                 (case (cs-mac cipher)
+                   ((sha-1)
+                    (sha-1-copy-hash! (apply hmac-sha-1
+                                             (tls-conn-client-write-mac-secret conn)
+                                             header data)
+                                      blocks len))
+                   (else
+                    (error 'put-tls-record
+                           "You forgot to put in the new MAC algorithm!"
+                           (cs-mac cipher)))))
 
+               ;; TODO: if the sequence numbers exceed 2^64-1, renegotiate
                (tls-conn-seq-write-set! conn (+ (tls-conn-seq-write conn) 1))
-               (let ((plaintext (bytevector-concatenate data)))
+               (let ((plaintext (bytevector-concatenate data))) ;TODO: static buffer
                  (bytevector-copy! plaintext 0
                                    blocks 0
                                    (bytevector-length plaintext)))
 
-               ;; Encipher with 3DES-CBC
-               (tdea-cbc-encipher! blocks
-                                   (tls-conn-client-write-key conn)
-                                   (tls-conn-client-write-IV conn)
-                                   0 padded-len)
-               (print "#;outgoing-ciphertext " blocks)
-               (put-bytevector out blocks)))
-            (else
-             (assert #f)))))
+               ;; Encipher
+               (case (cs-cipher cipher)
+                 ((tdea)
+                  (tdea-cbc-encipher! blocks
+                                      (tls-conn-client-write-key conn)
+                                      (tls-conn-client-write-IV conn)
+                                      0 padded-len))
+                 ((aes-128-cbc aes-256-cbc)
+                  (aes-cbc-encrypt! blocks 0 blocks 0 padded-len
+                                    (tls-conn-client-write-key conn)
+                                    (tls-conn-client-write-IV conn)))
+                 (else
+                  (error 'put-tls-record
+                         "You forgot to put in the new cipher algorithm!"
+                         (cs-cipher cipher))))
+               (print "#;outgoing-ciphertext " (bv->string blocks))
+               (put-bytevector out blocks))))))
 
   (define (tls-conn-has-unprocessed-data? conn)
     (cond ((and (not (zero? (buffer-length (tls-conn-hsbuf conn))))
@@ -298,7 +383,7 @@
                   " bytes unprocessed")
            TLS-PROTOCOL-HANDSHAKE)
           (else #f)))
-  
+
   (define (get-tls-record conn)
     (buffer-reset! (tls-conn-inbuf conn))
     (cond ((tls-conn-has-unprocessed-data? conn) =>
@@ -327,39 +412,70 @@
         (handle-fragment conn b type))))
 
   (define (decipher-record conn b type len)
-    (cond ((= (tls-conn-server-cipher conn) TLS-RSA-WITH-3DES-EDE-CBC-SHA)
-           (print ";Deciphering 3DES encrypted record")
-           (when (explicit-IV? conn)
-             (bytevector-copy! (buffer-data b) (buffer-top b)
-                               (tls-conn-server-write-IV conn) 0
-                               (bytevector-length (tls-conn-server-write-IV conn))))
-           (tdea-cbc-decipher! (buffer-data b)
-                               (tls-conn-server-write-key conn)
-                               (tls-conn-server-write-IV conn)
-                               (buffer-top b)
-                               len)
-           (when (explicit-IV? conn)
-             (buffer-seek! b (bytevector-length (tls-conn-server-write-IV conn))))
-           (let ((padding (bytevector-u8-ref (buffer-data b) (- (buffer-bottom b) 1))))
-             ;; FIXME: verify the MAC even if the padding is crazy.
-             ;; verify the padding characters.
-             (print "#;padding " padding)
-             (buffer-bottom-set! b (- (buffer-bottom b) padding 1)) ;remove padding
-             (let ((mac (subbytevector (buffer-data b) (- (buffer-bottom b) 20)
-                                       (buffer-bottom b))))
-               (buffer-bottom-set! b (- (buffer-bottom b) 20)) ;remove MAC
-               (unless (bytevector=? mac
-                                     (sha-1->bytevector
-                                      (hmac-sha-1
-                                       (tls-conn-server-write-mac-secret conn)
-                                       (pack "!uQCSS" (tls-conn-seq-read conn)
-                                             type (tls-conn-version conn)
-                                             (buffer-length b))
-                                       (subbytevector (buffer-data b)
-                                                      (buffer-top b)
-                                                      (buffer-bottom b)))))
-                 (error 'get-tls-record "bad mac" (tls-conn-server-name conn)))
-               (tls-conn-seq-read-set! conn (+ (tls-conn-seq-read conn) 1)))))))
+    (let ((cipher (tls-conn-server-cipher conn)))
+      (cond ((cs-cipher cipher)
+             (print ";Deciphering " (cs-cipher cipher) " encrypted record")
+             (print "#;incoming-ciphertext "
+                    (bv->string
+                     (bytevector-copy* (buffer-data b) (buffer-top b)
+                                       len)))
+             (when (explicit-IV? conn)
+               (bytevector-copy! (buffer-data b) (buffer-top b)
+                                 (tls-conn-server-write-IV conn) 0
+                                 (cs-iv-size cipher)))
+             (case (cs-cipher cipher)
+               ((tdea)
+                (tdea-cbc-decipher! (buffer-data b)
+                                    (tls-conn-server-write-key conn)
+                                    (tls-conn-server-write-IV conn)
+                                    (buffer-top b)
+                                    len))
+               ((aes-128-cbc aes-256-cbc)
+                (aes-cbc-decrypt! (buffer-data b) (buffer-top b)
+                                  (buffer-data b) (buffer-top b)
+                                  len
+                                  (tls-conn-server-write-key conn)
+                                  (tls-conn-server-write-IV conn)))
+               (else
+                (error 'decipher-record
+                       "You forgot to put in the new cipher algorithm!"
+                       (cs-cipher cipher))))
+             (print "#;incoming-plaintext "
+                    (bv->string
+                     (bytevector-copy* (buffer-data b) (buffer-top b)
+                                       len)))
+             (when (explicit-IV? conn)
+               (buffer-seek! b (cs-iv-size cipher)))
+             (let ((padding (bytevector-u8-ref (buffer-data b)
+                                               (- (buffer-bottom b) 1))))
+               ;; FIXME: verify the MAC even if the padding is crazy.
+               ;; FIXME: verify the padding characters.
+               (print "#;padding " padding)
+               (buffer-shorten! b (+ padding 1)) ;remove padding
+               (let ((mac (subbytevector (buffer-data b) (- (buffer-bottom b)
+                                                            (cs-mac-length cipher))
+                                         (buffer-bottom b))))
+                 (buffer-shorten! b (cs-mac-length cipher)) ;remove mac
+                 (let* ((header (pack "!uQCSS" (tls-conn-seq-read conn)
+                                      type (tls-conn-version conn)
+                                      (buffer-length b)))
+                        ;; TODO: MAC the data without consing
+                        (data (subbytevector (buffer-data b)
+                                             (buffer-top b)
+                                             (buffer-bottom b)))
+                        (vmac
+                         (case (cs-mac cipher)
+                           ((sha-1)
+                            (sha-1->bytevector
+                             (hmac-sha-1 (tls-conn-server-write-mac-secret conn)
+                                         header data)))
+                           (else
+                            (error 'decipher-record
+                                   "You forgot to put in the new MAC algorithm!"
+                                   (cs-mac cipher))))))
+                   (unless (bytevector=? mac vmac)
+                     (error 'get-tls-record "bad mac" (tls-conn-server-name conn))))
+                 (tls-conn-seq-read-set! conn (+ (tls-conn-seq-read conn) 1))))))))
 
   (define (handle-fragment conn b type)
     ;; At the start of the buffer b is a plaintext fragment.
@@ -416,22 +532,25 @@
            (description (read-u8 b 1))
            (desc* (or (assq description alert-descriptions)
                       (cons description 'unknown-alert-description))))
-      (cond ((= level 2)
-             (close-tls conn)
-             (condition
-              (make-error)
-              (make-i/o-error)
-              (make-i/o-port-error (buffer-port (tls-conn-inbuf conn)))
-              (make-message-condition "TLS alert (fatal, port closed)")
-              (make-irritants-condition (list desc*))))
-            ((= level 1)
-             (condition
-              (make-warning)
-              (make-i/o-port-error (buffer-port (tls-conn-inbuf conn)))
-              (make-message-condition "TLS alert (warning)")
-              (make-irritants-condition (list desc*))))
-            ;; TODO: other levels give errors...
-            )))
+      (case level
+        ((2)
+         (close-tls conn)
+         (condition
+          (make-error)
+          (make-i/o-error)
+          (make-i/o-port-error (buffer-port (tls-conn-inbuf conn)))
+          (make-message-condition "TLS alert (fatal, so the port has been closed)")
+          (make-irritants-condition (list desc*))))
+        ((1)
+         (condition
+          (make-warning)
+          (make-i/o-port-error (buffer-port (tls-conn-inbuf conn)))
+          (make-message-condition "TLS alert (warning)")
+          (make-irritants-condition (list desc*))))
+        (else
+         ;; TODO: send an error
+         (close-tls conn)
+         (error 'get-tls-alert-record "Bad alert level sent" level)))))
 
   (define (put-tls-alert-record conn level description)
     (assert (memv level '(1 2)))
@@ -477,7 +596,7 @@
 
   (define (put-tls-handshake-client-hello conn)
     (define session-id '#vu8())
-    (define cipher-suites (list TLS-RSA-WITH-3DES-EDE-CBC-SHA))
+    (define cipher-suites (map cs-id (cdr supported-cipher-suites)))
     (define compression-methods '(0))   ;null compression
     (let ((crandom (make-random-bytevector (+ 4 28))))
       ;; Client time + random bytes
@@ -528,61 +647,40 @@
                            (list (extract))))))
 
   (define (put-tls-handshake-client-key-exchange conn)
-    (let* ((premaster-secret (make-random-bytevector 48))
-           (keylen (rsa-public-key-byte-length (tls-conn-server-key conn)))
-           (bv (make-bytevector (+ 2 keylen))))
+    (let ((premaster-secret (make-random-bytevector 48)))
       ;; Construct the premaster secret with our version number and 46
       ;; random bytes. Everything hinges on this being unpredictable...
       (bytevector-u16-set! premaster-secret 0 TLS-VERSION (endianness big))
-
-      (bytevector-u16-set! bv 0 keylen (endianness big))
-      (bytevector-uint-set! bv 2
-                            (rsa-pkcs1-encrypt premaster-secret
-                                               (tls-conn-server-key conn))
-                            (endianness big) keylen)
-      (print ";plaintext premaster secret: " (bv->string premaster-secret))
-      (print ";client random: " (bv->string (tls-conn-client-random conn)))
-      (print ";server random: " (bv->string (tls-conn-server-random conn)))
-
       (tls-conn-master-secret-set! conn ((tls-conn-prf conn) 48
                                          premaster-secret
                                          (string->utf8 "master secret")
                                          (list (tls-conn-client-random conn)
                                                (tls-conn-server-random conn))))
-
+      (print ";plaintext premaster secret: " (bv->string premaster-secret))
+      (print ";client random: " (bv->string (tls-conn-client-random conn)))
+      (print ";server random: " (bv->string (tls-conn-server-random conn)))
       (print ";master secret: " (bv->string (tls-conn-master-secret conn)))
 
       ;; Generate cryptographical material from the master key
-      (let* ((hash-size 20)             ;sha-1
-             (key-size 24)              ;3des-cbc
-             (IV-size 8)                ;3des-cbc
+      (let* ((cipher (tls-conn-next-cipher conn))
+             (hash-size (cs-mac-length cipher))
+             (key-size (cs-key-length cipher))
+             (IV-size (cs-iv-size cipher))
              (key-block ((tls-conn-prf conn) (* 2 (+ hash-size key-size IV-size))
                          (tls-conn-master-secret conn)
                          (string->utf8 "key expansion")
                          (list (tls-conn-server-random conn)
-                               (tls-conn-client-random conn)))))
-
-        (print ";key block: " (bv->string key-block))
-
-        (tls-conn-client-write-mac-secret-set! conn (bytevector-copy*
-                                                     key-block 0 hash-size))
-        (tls-conn-server-write-mac-secret-set! conn (bytevector-copy*
-                                                     key-block hash-size hash-size))
-        (let ((client-write-key (bytevector-copy* key-block (* 2 hash-size) key-size))
-              (server-write-key (bytevector-copy* key-block
-                                                  (+ key-size (* 2 hash-size)) key-size)))
-          (tls-conn-client-write-key-set! conn (tdea-permute-key client-write-key))
-          (tls-conn-server-write-key-set! conn (tdea-permute-key server-write-key))
-          (tls-conn-client-write-IV-set! conn (bytevector-copy* key-block
-                                                                (+ (* 2 key-size)
-                                                                   (* 2 hash-size))
-                                                                IV-size))
-          (tls-conn-server-write-IV-set! conn (bytevector-copy* key-block
-                                                                (+ IV-size
-                                                                   (* 2 key-size)
-                                                                   (* 2 hash-size))
-                                                                IV-size))
-
+                               (tls-conn-client-random conn))))
+             (keyp (open-bytevector-input-port key-block)))
+        (tls-conn-client-write-mac-secret-set! conn (get-bytevector-n keyp hash-size))
+        (tls-conn-server-write-mac-secret-set! conn (get-bytevector-n keyp hash-size))
+        (let* ((client-write-key (get-bytevector-n keyp key-size))
+               (server-write-key (get-bytevector-n keyp key-size)))
+          (tls-conn-client-write-key-set! conn ((cs-expand-ekey cipher) client-write-key))
+          (tls-conn-server-write-key-set! conn ((cs-expand-dkey cipher) server-write-key))
+          (tls-conn-client-write-IV-set! conn (get-bytevector-n keyp IV-size))
+          (tls-conn-server-write-IV-set! conn (get-bytevector-n keyp IV-size))
+          (print ";key block: " (bv->string key-block))
           (print ";client-write-mac-secret: "
                  (bv->string (tls-conn-client-write-mac-secret conn)))
           (print ";server-write-mac-secret: "
@@ -591,12 +689,21 @@
           (print ";server-write-key: " (bv->string server-write-key))
           (print ";client-write-IV: " (bv->string (tls-conn-client-write-IV conn)))
           (print ";server-write-IV: " (bv->string (tls-conn-server-write-IV conn)))
+          (bytevector-fill! key-block 0) ;can clear keyp
+          (close-port keyp)))
 
-          (bytevector-fill! key-block 0)
-          (bytevector-fill! premaster-secret 0)
-
-          (put-tls-handshake conn TLS-HANDSHAKE-CLIENT-KEY-EXCHANGE
-                             (list bv))))))
+      ;; Encrypt the premaster-secret and send it to the remote.
+      (let* ((server-key (certificate-public-key
+                          (last (tls-conn-remote-certs conn))))
+             (keylen (rsa-public-key-byte-length server-key))
+             (bv (make-bytevector (+ 2 keylen))))
+        (bytevector-u16-set! bv 0 keylen (endianness big))
+        (bytevector-uint-set! bv 2
+                              (rsa-pkcs1-encrypt premaster-secret server-key)
+                              (endianness big) keylen)
+        (bytevector-fill! premaster-secret 0)
+        (put-tls-handshake conn TLS-HANDSHAKE-CLIENT-KEY-EXCHANGE
+                           (list bv)))))
 
   (define (put-tls-handshake-certificate-verify conn)
     ;; This is the message to prove that the client has the private
@@ -607,7 +714,7 @@
   (define (put-tls-handshake-finished conn)
     ;; PRF(master_secret, finished_label, MD5(handshake_messages) +
     ;;                         SHA-1(handshake_messages)) [0..11];
-    (assert (not (= (tls-conn-client-cipher conn) TLS-NULL-WITH-NULL-NULL)))
+    (assert (cs-cipher (tls-conn-client-cipher conn)))
     (put-tls-handshake conn TLS-HANDSHAKE-FINISHED
                        (list ((tls-conn-prf conn) 12
                               (tls-conn-master-secret conn)
@@ -645,11 +752,6 @@
              (print ";Server says hello.")
              (tls-conn-version-set! conn (read-u16 b 0))
              (print ";Version " (number->string (tls-conn-version conn) 16))
-             (cond ((= (tls-conn-version conn) TLS-VERSION-1.2)
-                    (tls-conn-prf-set! conn tls-prf-sha256))
-                   (else
-                    (tls-conn-prf-set! conn tls-prf-md5-sha1)))
-
              (print ";Server time: " (read-u32 b 2))
 
              (tls-conn-server-random-set! conn
@@ -662,7 +764,12 @@
              (print ";Session length: "  (read-u8 b 0))
              (buffer-seek! b (+ 1 (read-u8 b 0))) ;skip session
 
-             (print ";Cipher suite: " (read-u16 b 0))
+             (let* ((id (read-u16 b 0))
+                    (cs (car
+                         (memp (lambda (cs) (= (cs-id cs) id))
+                               (cdr supported-cipher-suites)))))
+               (tls-conn-next-cipher-set! conn cs)
+               (print ";Cipher suite: " cs))
              (print ";Compression method: " (read-u8 b 2))
              (done!)
              'handshake-server-hello)
@@ -674,8 +781,6 @@
                (buffer-seek! b 3)
                (let lp ((certs '()))
                  (cond ((= certs-end (buffer-top b))
-                        (tls-conn-server-key-set! conn (certificate-public-key
-                                                        (last certs)))
                         (tls-conn-remote-certs-set! conn certs)
                         (done!)
                         'handshake-certificate)
@@ -748,15 +853,14 @@
 
   (define (put-tls-change-cipher-spec conn)
     (put-tls-record conn TLS-PROTOCOL-CHANGE-CIPHER-SPEC '(#vu8(1)))
-    (tls-conn-client-cipher-set! conn TLS-RSA-WITH-3DES-EDE-CBC-SHA))
+    (tls-conn-client-cipher-set! conn (tls-conn-next-cipher conn)))
 
   (define (get-tls-change-cipher-spec conn)
     (cond ((and (= (buffer-length (tls-conn-inbuf conn)) 1)
                 (= (read-u8 (tls-conn-inbuf conn) 0) 1)
-                (= (tls-conn-server-cipher conn)
-                   TLS-NULL-WITH-NULL-NULL)) ;a precaution
+                (not (cs-cipher (tls-conn-server-cipher conn)))) ;a precaution
            (print ";Switching to encrypted records")
-           (tls-conn-server-cipher-set! conn TLS-RSA-WITH-3DES-EDE-CBC-SHA)
+           (tls-conn-server-cipher-set! conn (tls-conn-next-cipher conn))
            'change-cipher-spec)
           (else
            ;; TODO
@@ -767,12 +871,12 @@
 ;;; Application data protocol
 
   (define (put-tls-application-data conn data)
-    (assert (not (= (tls-conn-client-cipher conn) TLS-NULL-WITH-NULL-NULL)))
+    (assert (cs-cipher (tls-conn-client-cipher conn)))
     (put-tls-record conn TLS-PROTOCOL-APPLICATION-DATA
                     (list data)))
 
   (define (get-tls-application-data conn)
-    (assert (not (= (tls-conn-server-cipher conn) TLS-NULL-WITH-NULL-NULL)))
+    (assert (cs-cipher (tls-conn-server-cipher conn)))
     (let* ((b (tls-conn-inbuf conn))
            (appdata (bytevector-copy* (buffer-data b)
                                       (buffer-top b)
