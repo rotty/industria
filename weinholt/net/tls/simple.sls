@@ -19,7 +19,7 @@
 
 ;; TODO: avoid all this extra copying
 
-(library (weinholt net tls simple (1 0 20100613))
+(library (weinholt net tls simple (1 0 20100617))
   (export tls-connect start-tls)
   (import (rnrs)
           (weinholt bytevectors)
@@ -135,8 +135,10 @@
          (define (close)
            (cond (other-closed?
                   (put-tls-alert-record s 1 0)
-                  (flush-tls-output s)
-                  (close-output-port out)
+                  (guard (con
+                          ((i/o-error? con) #f))
+                    (flush-tls-output s)
+                    (close-output-port out))
                   (close-input-port in))
                  (else
                   ;; This is so that each port can be closed independently.
