@@ -122,6 +122,22 @@ Never encrypt more than once using the same @var{key-schedule} and
 read up on CTR mode.
 @end deffn
 
+@deffn Procedure aes-cbc-encrypt! source source-start target target-start k key-schedule iv
+Encrypts @var{k} bytes in the bytevector @var{source} starting at
+@var{source-start} with AES in CBC mode and writes the result to
+@var{target} at @var{target-start}.
+
+The argument @var{k} must be an integer multiple of 16, which is the block length.
+
+The @var{iv} bytevector is an Initial Vector. It should be 16 bytes
+long, initialized to random bytes. This procedure updates the @var{iv}
+after processing a block.
+@end deffn
+
+@deffn Procedure aes-cbc-decrypt! source source-start target target-start k key-schedule iv
+The inverse of @code{aes-cbc-encrypt!}.
+@end deffn
+
 @noindent
 Version history:
 @itemize

@@ -1,6 +1,6 @@
 #!/usr/bin/env scheme-script
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -16,7 +16,8 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!r6rs
 
-(import (weinholt crypto aes)
+(import (weinholt bytevectors)
+        (weinholt crypto aes)
         (srfi :78 lightweight-testing)
         (rnrs))
 
@@ -339,5 +340,64 @@
                  #xf4 #x43 #xe3 #xca #x4d #x62 #xb5 #x9a #xca #x84 #xe9 #x90 #xca #xca #xf5 #xc5 
                  #x2b #x09 #x30 #xda #xa2 #x3d #xe9 #x4c #xe8 #x70 #x17 #xba #x2d #x84 #x98 #x8d 
                  #xdf #xc9 #xc5 #x8d #xb6 #x7a #xad #xa6 #x13 #xc2 #xdd #x08 #x45 #x79 #x41 #xa6))
+
+;;; CBC tests from RFC3602
+
+(define (cbc128 key iv pt)
+  (let ((ret (make-bytevector (bytevector-length pt)))
+        (scr (make-bytevector (bytevector-length pt))))
+    (aes-cbc-encrypt! pt 0 ret 0 (bytevector-length ret)
+                      (expand-aes-key (uint->bytevector key))
+                      (uint->bytevector iv))
+    (aes-cbc-decrypt! ret 0 scr 0 (bytevector-length ret)
+                      (reverse-aes-schedule (expand-aes-key (uint->bytevector key)))
+                      (uint->bytevector iv))
+    (list (bytevector=? scr pt)
+          (bytevector->uint ret))))
+
+;; #1
+(check (cbc128 #x06a9214036b8a15b512e03d534120006
+               #x3dafba429d9eb430b422da802c9fac41
+               (string->utf8 "Single block msg"))
+       => '(#t #xe353779c1079aeb82708942dbe77181a))
+
+;; #2
+(check (cbc128 #xc286696d887c9aa0611bbb3e2025a45a
+               #x562e17996d093d28ddb3ba695a2e6f58
+               #vu8(#x00 #x01 #x02 #x03 #x04 #x05 #x06 #x07 #x08 #x09 #x0a #x0b #x0c #x0d #x0e #x0f #x10 #x11
+                         #x12 #x13 #x14 #x15 #x16 #x17 #x18 #x19 #x1a #x1b #x1c #x1d #x1e #x1f))
+       => '(#t #xd296cd94c2cccf8a3a863028b5e1dc0a7586602d253cfff91b8266bea6d61ab1))
+
+;; #3
+(check (cbc128 #x6c3ea0477630ce21a2ce334aa746c2cd
+               #xc782dc4c098c66cbd9cd27d825682c81
+               (string->utf8 "This is a 48-byte message (exactly 3 AES blocks)"))
+       => '(#t #xd0a02b3836451753d493665d33f0e8862dea54cdb293abc7506939276772f8d5021c19216bad525c8579695d83ba2684))
+
+;; #4
+(check (cbc128 #x56e47a38c5598974bc46903dba290349
+               #x8ce82eefbea0da3c44699ed7db51b7d9
+               #vu8(#xa0 #xa1 #xa2 #xa3 #xa4 #xa5 #xa6 #xa7 #xa8 #xa9 #xaa #xab #xac #xad #xae
+                         #xaf #xb0 #xb1 #xb2 #xb3 #xb4 #xb5 #xb6 #xb7 #xb8 #xb9 #xba #xbb #xbc
+                         #xbd #xbe #xbf #xc0 #xc1 #xc2 #xc3 #xc4 #xc5 #xc6 #xc7 #xc8 #xc9 #xca
+                         #xcb #xcc #xcd #xce #xcf #xd0 #xd1 #xd2 #xd3 #xd4 #xd5 #xd6 #xd7 #xd8
+                         #xd9 #xda #xdb #xdc #xdd #xde #xdf))
+       => '(#t #xc30e32ffedc0774e6aff6af0869f71aa0f3af07a9a31a9c684db207eb0ef8e4e35907aa632c3ffdf868bb7b29d3d46ad83ce9f9a102ee99d49a53e87f4c3da55))
+
+
+;; CBC in-place
+
+(let ((key (uint->bytevector #x6c3ea0477630ce21a2ce334aa746c2cd))
+      (iv (uint->bytevector #xc782dc4c098c66cbd9cd27d825682c81))
+      (pt (string->utf8 "This is a 48-byte message (exactly 3 AES blocks)"))
+      (ct (uint->bytevector #xd0a02b3836451753d493665d33f0e8862dea54cdb293abc7506939276772f8d5021c19216bad525c8579695d83ba2684)))
+  (aes-cbc-encrypt! pt 0 pt 0 (bytevector-length pt)
+                    (expand-aes-key key)
+                    (bytevector-copy iv))
+  (check pt => ct)
+  (aes-cbc-decrypt! pt 0 pt 0 (bytevector-length pt)
+                    (reverse-aes-schedule (expand-aes-key key))
+                    (bytevector-copy iv))
+  (check (utf8->string pt) => "This is a 48-byte message (exactly 3 AES blocks)"))
 
 (check-report)

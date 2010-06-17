@@ -1,6 +1,6 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
 ;; Advanced Encryption Standard (AES), FIPS-197.
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -20,51 +20,7 @@
 ;; by AES (the block length is 16 bytes, keys are 128, 192 or 256 bits
 ;; long with 10, 12 and 14 rounds respectively).
 
-;;; Usage
-
-;; (expand-aes-key bytevector)
-;;     Returns an AES key schedule value suitable for aes-encrypt!.
-;;     The bytevector must be 16, 24, or 32 bytes long. The type of
-;;     the return value is unspecified.
-
-;; (aes-encrypt! source source-start target target-start key-schedule)
-;;     Takes the eight bytes at source + source-start, encrypts them in
-;;     ECB mode, and puts the result at target + target-start.
-
-;; (reverse-aes-schedule key-schedule)
-;;     Returns a reversed key schedule which is suitable for aes-decrypt!.
-
-;; (aes-decrypt! source source-start target target-start key-schedule)
-;;     The inverse of aes-encrypt!.
-
-;; (clear-aes-schedule! key-schedule)
-;;     Clears the AES key schedule value so that it no longer contains
-;;     cryptographic material. Please note that there is no guarantee
-;;     that the key material will actually be gone from memory. It
-;;     might remain in temporary numbers or other values.
-
-;;; Examples
-
-;; (let ((out (make-bytevector 16))
-;;       (sched (expand-aes-key (string->utf8 "ABCDEFGHIJKLMNOP"))))
-;;   (aes-encrypt! (string->utf8 "R6RS über alles")
-;;                 0 out 0 sched)
-;;   out)
-;; =>
-;; #vu8(43 144 162 123 165 123 210 173 245 78 156 23 149 203 8 139)
-
-;; (let ((out (make-bytevector 16))
-;;       (sched (reverse-aes-schedule
-;;               (expand-aes-key (string->utf8 "ABCDEFGHIJKLMNOP")))))
-;;   (aes-decrypt! #vu8(43 144 162 123 165 123 210 173 245 78 156 23 149 203 8 139)
-;;                 0 out 0 sched)
-;;   (utf8->string out))
-;; =>
-;; "R6RS über alles"
-
-;;; Version history
-
-;; (1 0 20090911) - Initial version.
+;; For usage etc see the manual.
 
 ;;; Implementation details
 
@@ -119,11 +75,12 @@
 ;; }
 ;; http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.58.2363
 
-(library (weinholt crypto aes (1 0 20090918))
+(library (weinholt crypto aes (1 0 20100617))
   (export expand-aes-key aes-encrypt!
           reverse-aes-schedule aes-decrypt!
           clear-aes-schedule!
-          aes-ctr!)
+          aes-ctr!
+          aes-cbc-encrypt! aes-cbc-decrypt!)
   (import (for (weinholt crypto aes private) expand)
           (for (only (srfi :1 lists) iota) expand)
           (only (srfi :1 lists) split-at concatenate)
@@ -493,6 +450,38 @@
         (bytevector-u8-set! target t (fxxor (bytevector-u8-ref block i)
                                             (bytevector-u8-ref source s))))))
 
+;;; CBC mode
 
-  
-  )
+  (define (aes-cbc-encrypt! source source-start target target-start len sched iv)
+    (unless (fxzero? (fxmod len 16))
+      (error 'aes-cbc-encrypt!
+             "The length has to be an integer multiple of 16" len))
+    (do ((ss source-start (fx+ ss 16))
+         (ts target-start (fx+ ts 16))
+         (len len (fx- len 16)))
+        ((fx<? len 16))
+      (do ((i 0 (fx+ i 1)))
+          ((fx=? i 16))
+        (bytevector-u8-set! iv i
+                            (fxxor (bytevector-u8-ref iv i)
+                                   (bytevector-u8-ref source (fx+ ss i)))))
+      (aes-encrypt! iv 0 target ts sched)
+      (bytevector-copy! target ts iv 0 16)))
+
+  (define (aes-cbc-decrypt! source source-start target target-start len sched iv)
+    (unless (fxzero? (fxmod len 16))
+      (error 'aes-cbc-decrypt!
+             "The length has to be an integer multiple of 16" len))
+    (do ((buf (make-bytevector 16))
+         (ss source-start (fx+ ss 16))
+         (ts target-start (fx+ ts 16))
+         (len len (fx- len 16)))
+        ((fx<? len 16))
+      (aes-decrypt! source ss buf 0 sched)
+      (do ((i 0 (fx+ i 1)))
+          ((fx=? i 16))
+        (bytevector-u8-set! buf i
+                            (fxxor (bytevector-u8-ref iv i)
+                                   (bytevector-u8-ref buf i))))
+      (bytevector-copy! source ss iv 0 16)
+      (bytevector-copy! buf 0 target ts 16))))
