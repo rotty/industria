@@ -32,15 +32,16 @@
 
 ;; TODO: proper conditions
 
-(library (weinholt net buffer (1 0 20100614))
+(library (weinholt net buffer (1 0 20100617))
   (export make-buffer
           buffer-read! buffer-copy!
           buffer-port buffer-port-set!
           buffer-data buffer-data-set!
           buffer-top buffer-top-set!
           buffer-bottom buffer-bottom-set!
+          buffer-length
 
-          buffer-reset! buffer-seek! buffer-length
+          buffer-reset! buffer-seek! buffer-shorten!
           read-u8 read-u16 read-u24 read-u32)
   (import (rnrs)
           (weinholt struct pack))
@@ -97,8 +98,13 @@
 
   (define (buffer-seek! buf offset)
     (when (> (+ (buffer-top buf) offset) (buffer-bottom buf))
-      (error 'read-generic "attempt to seek past bottom of buffer"))
+      (error 'buffer-seek! "attempt to seek past bottom of buffer"))
     (buffer-top-set! buf (+ (buffer-top buf) offset)))
+  
+  (define (buffer-shorten! buf n)
+    (when (> (buffer-top buf) (- (buffer-bottom buf) n))
+      (error 'buffer-shorten! "attempt to chop off past buffer top"))
+    (buffer-bottom-set! buf (- (buffer-bottom buf) n)))
 
   (define (buffer-length b)
     (- (buffer-bottom b) (buffer-top b)))
