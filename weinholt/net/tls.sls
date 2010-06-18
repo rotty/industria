@@ -41,7 +41,7 @@
 ;; TODO: go through the implementation pitfalls in the RFC. check all
 ;; the MUSTs.
 
-(library (weinholt net tls (0 0 20100617))
+(library (weinholt net tls (0 0 20100618))
   (export make-tls-wrapper
           flush-tls-output
           put-tls-record get-tls-record
@@ -62,6 +62,7 @@
           (srfi :27 random-bits)
           (weinholt bytevectors)
           (weinholt crypto aes)
+          (weinholt crypto arcfour)
           (weinholt crypto des)
           (weinholt crypto entropy)
           (weinholt crypto md5)
@@ -99,9 +100,11 @@
     (uint-list->bytevector x (endianness big) 2))
 
   (define (pad-length len blocksize)
-    (fx- (fxand (fx+ len (fx- blocksize 1))
-                (fx- blocksize))
-         len))
+    (if (fixnum? blocksize)
+        (fx- (fxand (fx+ len (fx- blocksize 1))
+                    (fx- blocksize))
+             len)
+        0))
 
 ;;; Version numbers
 
@@ -136,8 +139,8 @@
                                   'no-keys))
                          ((rc4-128)
                           (values 16 0 #f
-                                  'rc4-not-implemented
-                                  'rc4-not-implemented))
+                                  expand-arcfour-key
+                                  expand-arcfour-key))
                          ((tdea)
                           (values 24 8 8
                                   tdea-permute-key
@@ -171,12 +174,13 @@
      (make-cs 'TLS-NULL-WITH-NULL-NULL #x0000 #f #f #f)
      (make-cs 'TLS-RSA-WITH-AES-128-CBC-SHA #x002F 'rsa 'aes-128-cbc 'sha-1)
      (make-cs 'TLS-RSA-WITH-AES-256-CBC-SHA #x0035 'rsa 'aes-256-cbc 'sha-1)
+     (make-cs 'TLS-RSA-WITH-RC4-128-SHA #x0005 'rsa 'rc4-128 'sha-1)
+     (make-cs 'TLS-RSA-WITH-RC4-128-MD5 #x0004 'rsa 'rc4-128 'md5)
      ;; TODO: version 1.2:
      #;(make-cs 'TLS-RSA-WITH-AES-128-CBC-SHA256 #x003C 'rsa 'aes-128-cbc 'sha-256)
      #;(make-cs 'TLS-RSA-WITH-AES-256-CBC-SHA256 #x003D 'rsa 'aes-256-cbc 'sha-256)
-     (make-cs 'TLS-RSA-WITH-3DES-EDE-CBC-SHA #x000A 'rsa 'tdea 'sha-1)
-     #;(make-cs 'TLS-RSA-WITH-RC4-128-SHA #x0005 'rsa 'rc4-128 'sha-1)
-     #;(make-cs 'TLS-RSA-WITH-RC4-128-MD5 #x0004 'rsa 'rc4-128 'md5)))
+     ;; 3DES is last because it's so very slow
+     (make-cs 'TLS-RSA-WITH-3DES-EDE-CBC-SHA #x000A 'rsa 'tdea 'sha-1)))
 
 ;;;
 
@@ -317,7 +321,8 @@
             ;; Pad, MAC and encrypt
             (else
              (let* ((cipher (tls-conn-client-cipher conn))
-                    (blocks-len (+ len (cs-mac-length cipher) 1))
+                    (blocks-len (+ len (cs-mac-length cipher)
+                                   (if (cs-block-size cipher) 1 0)))
                     ;; TODO: more than the minimum padding
                     (padding (pad-length blocks-len (cs-block-size cipher)))
                     (padded-len (+ blocks-len padding))
@@ -342,13 +347,18 @@
                                              (tls-conn-client-write-mac-secret conn)
                                              header data)
                                       blocks len))
+                   ((md5)
+                    (md5-copy-hash! (apply hmac-md5
+                                           (tls-conn-client-write-mac-secret conn)
+                                           header data)
+                                    blocks len))
                    (else
                     (error 'put-tls-record
                            "You forgot to put in the new MAC algorithm!"
                            (cs-mac cipher)))))
-
                ;; TODO: if the sequence numbers exceed 2^64-1, renegotiate
                (tls-conn-seq-write-set! conn (+ (tls-conn-seq-write conn) 1))
+
                (let ((plaintext (bytevector-concatenate data))) ;TODO: static buffer
                  (bytevector-copy! plaintext 0
                                    blocks 0
@@ -365,6 +375,9 @@
                   (aes-cbc-encrypt! blocks 0 blocks 0 padded-len
                                     (tls-conn-client-write-key conn)
                                     (tls-conn-client-write-IV conn)))
+                 ((rc4-128)
+                  (arcfour! blocks 0 blocks 0 padded-len
+                            (tls-conn-client-write-key conn)))
                  (else
                   (error 'put-tls-record
                          "You forgot to put in the new cipher algorithm!"
@@ -436,6 +449,11 @@
                                   len
                                   (tls-conn-server-write-key conn)
                                   (tls-conn-server-write-IV conn)))
+               ((rc4-128)
+                (arcfour! (buffer-data b) (buffer-top b)
+                          (buffer-data b) (buffer-top b)
+                          len
+                          (tls-conn-server-write-key conn)))
                (else
                 (error 'decipher-record
                        "You forgot to put in the new cipher algorithm!"
@@ -450,8 +468,9 @@
                                                (- (buffer-bottom b) 1))))
                ;; FIXME: verify the MAC even if the padding is crazy.
                ;; FIXME: verify the padding characters.
-               (print "#;padding " padding)
-               (buffer-shorten! b (+ padding 1)) ;remove padding
+               (when (cs-block-size cipher)
+                 (print "#;padding " padding)
+                 (buffer-shorten! b (+ padding 1))) ;remove padding
                (let ((mac (subbytevector (buffer-data b) (- (buffer-bottom b)
                                                             (cs-mac-length cipher))
                                          (buffer-bottom b))))
@@ -469,6 +488,10 @@
                             (sha-1->bytevector
                              (hmac-sha-1 (tls-conn-server-write-mac-secret conn)
                                          header data)))
+                           ((md5)
+                            (md5->bytevector
+                             (hmac-md5 (tls-conn-server-write-mac-secret conn)
+                                       header data)))
                            (else
                             (error 'decipher-record
                                    "You forgot to put in the new MAC algorithm!"
@@ -583,6 +606,24 @@
        (md5-update! (tls-conn-handshakes-md5 conn) bv start (+ start count))
        (sha-1-update! (tls-conn-handshakes-sha-1 conn) bv start (+ start count)))))
 
+  ;; Extensions (RFC4366) are formatted in this extensive manner.
+  ;; http://www.iana.org/assignments/tls-extensiontype-values
+  (define TLS-EXTENSION-SERVER-NAME 0)
+  (define TLS-EXTENSION-SERVER-NAME-HOSTNAME 0)
+  (define (extensions . x)
+    (bytevector-concatenate (cons (pack "!S" (bytevectors-length x)) x)))
+  (define (extension type data)
+    (bytevector-append (pack "!SS" type (bytevector-length data)) data))
+  (define (server-name-list names)
+    (extension TLS-EXTENSION-SERVER-NAME
+               (bytevector-append (pack "!S" (bytevectors-length names))
+                                  (bytevector-concatenate names))))
+  (define (server-name name)
+    (let ((n (string->utf8 name)))
+      (bytevector-append (pack "!uCS" TLS-EXTENSION-SERVER-NAME-HOSTNAME
+                               (bytevector-length n))
+                         n)))
+  
   (define (put-tls-handshake conn type data)
     ;; Takes data from a handshake protocol and passes it to the
     ;; record protocol.
@@ -604,29 +645,19 @@
                            (bitwise-and #xffffffff (time-second (current-time)))
                            (endianness big))
       (tls-conn-client-random-set! conn crandom)
-
-      ;; Extensions (RFC4366).
-      ;; http://www.iana.org/assignments/tls-extensiontype-values
-
-      (let ((server-name (string->utf8 (tls-conn-server-name conn))))
-        (put-tls-handshake
-         conn TLS-HANDSHAKE-CLIENT-HELLO
-         (list tls-client-version-bytevector
-               crandom
-               (pack "C" (bytevector-length session-id))
-               session-id
-               (pack "!S" (* 2 (length cipher-suites)))
-               (u16be-list->bytevector cipher-suites)
-               (u8-list->bytevector (cons (length compression-methods)
-                                          compression-methods))
-               (pack "!uS SS CS"
-                     (+ (format-size "!uSSCS") (bytevector-length server-name))
-                     0 ;server_name. FIXME: don't send IPs, etc
-                     (+ (format-size "!uCS") (bytevector-length server-name))
-                     0 ;HostName
-                     (+ 1 (bytevector-length server-name)))
-               server-name)))))
-
+      (put-tls-handshake
+       conn TLS-HANDSHAKE-CLIENT-HELLO
+       (list tls-client-version-bytevector
+             crandom
+             (pack "C" (bytevector-length session-id))
+             session-id
+             (u16be-list->bytevector (cons (* 2 (length cipher-suites))
+                                           cipher-suites))
+             (u8-list->bytevector (cons (length compression-methods)
+                                        compression-methods))
+             (extensions (server-name-list
+                          (list (server-name (tls-conn-server-name conn)))))))))
+  
   ;; `certs' are bytevectors and the last cert is the client's own
   ;; certificate. So the order is the same as for
   ;; tls-conn-remote-certs.

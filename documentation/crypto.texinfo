@@ -188,7 +188,7 @@ XORs them with bytes from the @var{keystream}, and writes them to
 @deffn Procedure arcfour-discard! keystream n
 Discards @var{n} bytes from the keystream @var{keystream}. It is
 recommended that the beginning of the keystream is discarded. Some
-protocols, e.g.@: arcfour128, require it.
+protocols, e.g.@: RFC 4345, require it.
 @end deffn
 
 @deffn Procedure clear-arcfour-keystream! keystream
