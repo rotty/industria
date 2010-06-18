@@ -29,6 +29,7 @@ or the FDA and quite likely aren't allowed for government work.
 
 @menu
 * crypto aes::         Advanced Encryption Standard
+* crypto arcfour::     ARCFOUR stream cipher
 * crypto blowfish::    The Blowfish cipher
 * crypto crc::         Cyclic Redundancy Codes
 * crypto des::         Data Encryption Standard
@@ -144,6 +145,41 @@ Version history:
 @item
 @code{(1 0)} -- Initial version.
 @end itemize
+
+@c ======================================================================
+@node crypto arcfour
+@subsection ARCFOUR stream cipher
+The @code{(weinholt crypto arcfour)} library provides the well-known
+ARCFOUR stream cipher. It is the fastest of the ciphers provided by
+this library collection.
+
+Since this is a stream cipher there is no block length.
+
+@deffn Procedure expand-arcfour-key key
+Expands the bytevector @var{key} into an ARCFOUR keystream value. The
+return value has an unspecified type and is suitable for use with the
+other procedures exported by this library.
+
+Never use the same key to encrypt two different plaintexts.
+@end deffn
+
+@deffn Procedure arcfour! source source-start target target-start k keystream
+Reads @var{k} bytes from @var{source} starting at @var{source-start},
+XORs them with bytes from the @var{keystream}, and writes them to
+@var{target} starting at @var{target-start}. If @var{source} and
+@var{target} are the same object then it is required that
+@var{target-start} @math{@le} @var{source-start}.
+@end deffn
+
+@deffn Procedure arcfour-discard! keystream n
+Discards @var{n} bytes from the keystream @var{keystream}. It is
+recommended that the beginning of the keystream is discarded. Some
+protocols, e.g.@: arcfour128, require it.
+@end deffn
+
+@deffn Procedure clear-arcfour-keystream! keystream
+Removes all key material from the @var{keystream}.
+@end deffn
 
 @c ======================================================================
 @node crypto blowfish
