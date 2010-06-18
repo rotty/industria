@@ -169,6 +169,20 @@ XORs them with bytes from the @var{keystream}, and writes them to
 @var{target} starting at @var{target-start}. If @var{source} and
 @var{target} are the same object then it is required that
 @var{target-start} be less then or equal to @var{source-start}.
+
+@example
+(import (weinholt crypto arcfour))
+(let ((buf #vu8(90 60 247 233 181 200 38 52 121 82 133 
+                98 244 159 12 97 90 157 43 183 249 170
+                73 244 126))
+      (keystream (expand-arcfour-key
+                  (string->utf8 "hardly a secret"))))
+  (arcfour-discard! keystream 3000)
+  (arcfour! buf 0 buf 0 (bytevector-length buf) keystream)
+  (clear-arcfour-keystream! keystream)
+  (utf8->string buf))
+@result{} "I AM POKEY THE PENGUIN!!!"
+@end example
 @end deffn
 
 @deffn Procedure arcfour-discard! keystream n
