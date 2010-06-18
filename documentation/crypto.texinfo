@@ -168,7 +168,7 @@ Reads @var{k} bytes from @var{source} starting at @var{source-start},
 XORs them with bytes from the @var{keystream}, and writes them to
 @var{target} starting at @var{target-start}. If @var{source} and
 @var{target} are the same object then it is required that
-@var{target-start} @math{@le} @var{source-start}.
+@var{target-start} be less then or equal to @var{source-start}.
 @end deffn
 
 @deffn Procedure arcfour-discard! keystream n
