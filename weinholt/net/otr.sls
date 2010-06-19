@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -20,17 +20,13 @@
 ;; http://www.cypherpunks.ca/otr/Protocol-v2-3.1.0.html
 
 ;; TODO: fix the state transitions (most are probably missing)
-;; TODO: better interface for the outgoing messages etc
-;; TODO: Petite Chez has trouble with the AKE (bad sigs).
 ;; TODO: Ypsilon is very slow on D-H key generation.
 ;; TODO: should it be possible to establish a session with someone
 ;; using our own DSA key?
 ;; TODO: finishing sessions.
-;; TODO: clean up the messages that the library user gets
-;; TODO: drop the ! on some of the exported procedures?
 ;; TODO: let the library user decide what errors to send
 
-(library (weinholt net otr (0 0 20091121))
+(library (weinholt net otr (0 0 20100619))
   (export otr-message?
           otr-update!
           otr-send-encrypted!
@@ -119,10 +115,10 @@
   (define (get-public-dsa-key port)
     ;; Read a public DSA key from the X in reveal-signature or
     ;; signature messages.
-    (let ((p (bytevector->uint (get-bytevector port (get-unpack port "!L"))))
-          (q (bytevector->uint (get-bytevector port (get-unpack port "!L"))))
-          (g (bytevector->uint (get-bytevector port (get-unpack port "!L"))))
-          (y (bytevector->uint (get-bytevector port (get-unpack port "!L")))))
+    (let* ((p (bytevector->uint (get-bytevector port (get-unpack port "!L"))))
+           (q (bytevector->uint (get-bytevector port (get-unpack port "!L"))))
+           (g (bytevector->uint (get-bytevector port (get-unpack port "!L"))))
+           (y (bytevector->uint (get-bytevector port (get-unpack port "!L")))))
       (make-dsa-public-key p q g y)))
 
   (define (get-public-key p)
