@@ -21,7 +21,7 @@
 
 ;; TODO: output
 
-(library (weinholt struct der (0 0 20100528))
+(library (weinholt struct der (0 0 20100620))
   (export decode translate
           data-type
           data-start-index
@@ -171,6 +171,35 @@
                                  "+0000")
                   "~y~m~d~H~M~SZ~z"))
 
+  (define (get-GeneralizedTime bv start length)
+    ;; YYYYMMDDhhmmssZ  YYYYMMDDhhmmss.s+Z
+    (define (parse time)
+      ;; FIXME: check for invalid encodings
+      (define (time-fraction time)
+        ;; Returns the fraction. SRFI-19 has nanosecond precision, so at
+        ;; most 9 decimals are useful.
+        (substring time (string-length "YYYYMMDDhhmmss.")
+                   (min (string-length "YYYYMMDDhhmmss.123456789")
+                        (- (string-length time) 1))))
+      (define (fraction->nanoseconds frac)
+        (* (string->number frac 10)
+           (expt 10 (- 9 (string-length frac)))))
+      (let ((nsec                         ;nanoseconds
+             (if (= (string-length time)
+                    (string-length "YYYYMMDDhhmmssZ"))
+                 0
+                 (fraction->nanoseconds (time-fraction time))))
+            ;; date without fractional seconds
+            (d (string->date (string-append (substring time 0 (string-length
+                                                               "YYYYMMDDhhmmss"))
+                                            "Z+0000")
+                             "~Y~m~d~H~M~SZ~z")))
+        ;; add the nanoseconds
+        (time-utc->date (add-duration (date->time-utc d)
+                                      (make-time 'time-duration nsec 0))
+                        0)))
+    (parse (get-IA5String bv start length)))
+  
   (define (get-oid bv start length relative?)
     (define (get i)
       (if (= i (+ start length))
@@ -236,7 +265,7 @@
        (videotex-string #f #f)
        (ia5-string ,get-IA5String #f)
        (utc-time ,get-UTCTime #f)
-       (generalized-time #f #f)         ;FIXME: implement this
+       (generalized-time ,get-GeneralizedTime #f)
        (graphic-string ,get-GraphicString #f)
        (visible-string ,get-VisibleString #f)
        (general-string ,get-GeneralString #f)
