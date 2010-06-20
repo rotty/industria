@@ -17,10 +17,6 @@
 
 ;; Transport Layer Security. RFC5246.
 
-;; This library is under development and currently only works as a
-;; quite slow client. It uses RSA to negotiate a master secret, 3DES
-;; to encode data and SHA-1 to protect integrity.
-
 ;; The security of TLS in essence works like this: the server sends a
 ;; list of certificates, each signed by the next. The last certificate
 ;; is signed by a root certificate which you are supposed to have
@@ -41,7 +37,7 @@
 ;; TODO: go through the implementation pitfalls in the RFC. check all
 ;; the MUSTs.
 
-(library (weinholt net tls (0 0 20100618))
+(library (weinholt net tls (0 0 20100620))
   (export make-tls-wrapper
           flush-tls-output
           put-tls-record get-tls-record
@@ -100,6 +96,7 @@
     (uint-list->bytevector x (endianness big) 2))
 
   (define (pad-length len blocksize)
+    ;; TODO: more than the minimum padding
     (if (fixnum? blocksize)
         (fx- (fxand (fx+ len (fx- blocksize 1))
                     (fx- blocksize))
@@ -248,6 +245,7 @@
             (immutable server-name)
             (immutable inbuf)           ;buffer for record input
             (immutable out)             ;output port
+            (immutable outb)            ;output buffer
             (immutable hsbuf)))         ;handshake buffer
 
   ;; Make a new TLS connection state.
@@ -277,6 +275,7 @@
                      server-name
                      (make-buffer in)
                      out
+                     (make-bytevector (+ (expt 2 14) 2048))
                      (make-buffer 'handshakes))))
 
   (define (close-tls conn)
@@ -323,10 +322,9 @@
              (let* ((cipher (tls-conn-client-cipher conn))
                     (blocks-len (+ len (cs-mac-length cipher)
                                    (if (cs-block-size cipher) 1 0)))
-                    ;; TODO: more than the minimum padding
                     (padding (pad-length blocks-len (cs-block-size cipher)))
                     (padded-len (+ blocks-len padding))
-                    (blocks (make-bytevector padded-len padding))) ;TODO: static buffer
+                    (blocks (tls-conn-outb conn)))
                (cond ((explicit-IV? conn)
                       (put-bytevector out (pack "!uCSS" type (tls-conn-version conn)
                                                 (+ padded-len (cs-iv-size cipher))))
@@ -338,9 +336,14 @@
                (print "#;record-IV " (tls-conn-client-write-IV conn))
                (print "#;outgoing-plaintext " (bv->string
                                                (bytevector-concatenate data)))
+               (do ((i len (+ i 1)))
+                   ((= i padded-len))
+                 (bytevector-u8-set! blocks i padding)) ;pad
                ;; MAC
                (let ((header (pack "!uQCSS" (tls-conn-seq-write conn)
                                    type (tls-conn-version conn) len)))
+                 ;; TODO: if the sequence number would exceed 2^64-1, renegotiate.
+                 (tls-conn-seq-write-set! conn (+ (tls-conn-seq-write conn) 1))
                  (case (cs-mac cipher)
                    ((sha-1)
                     (sha-1-copy-hash! (apply hmac-sha-1
@@ -356,21 +359,13 @@
                     (error 'put-tls-record
                            "You forgot to put in the new MAC algorithm!"
                            (cs-mac cipher)))))
-               ;; TODO: if the sequence numbers exceed 2^64-1, renegotiate
-               (tls-conn-seq-write-set! conn (+ (tls-conn-seq-write conn) 1))
-
-               (let ((plaintext (bytevector-concatenate data))) ;TODO: static buffer
-                 (bytevector-copy! plaintext 0
-                                   blocks 0
-                                   (bytevector-length plaintext)))
-
+               ;; Copy in the plaintext
+               (do ((data data (cdr data))
+                    (i 0 (+ i (bytevector-length (car data)))))
+                   ((null? data))
+                 (bytevector-copy! (car data) 0 blocks i (bytevector-length (car data))))
                ;; Encipher
                (case (cs-cipher cipher)
-                 ((tdea)
-                  (tdea-cbc-encipher! blocks
-                                      (tls-conn-client-write-key conn)
-                                      (tls-conn-client-write-IV conn)
-                                      0 padded-len))
                  ((aes-128-cbc aes-256-cbc)
                   (aes-cbc-encrypt! blocks 0 blocks 0 padded-len
                                     (tls-conn-client-write-key conn)
@@ -378,12 +373,18 @@
                  ((rc4-128)
                   (arcfour! blocks 0 blocks 0 padded-len
                             (tls-conn-client-write-key conn)))
+                 ((tdea)
+                  (tdea-cbc-encipher! blocks
+                                      (tls-conn-client-write-key conn)
+                                      (tls-conn-client-write-IV conn)
+                                      0 padded-len))
                  (else
                   (error 'put-tls-record
                          "You forgot to put in the new cipher algorithm!"
                          (cs-cipher cipher))))
-               (print "#;outgoing-ciphertext " (bv->string blocks))
-               (put-bytevector out blocks))))))
+               (print "#;outgoing-ciphertext " (bv->string
+                                                (subbytevector blocks 0 padded-len)))
+               (put-bytevector out blocks 0 padded-len))))))
 
   (define (tls-conn-has-unprocessed-data? conn)
     (cond ((and (not (zero? (buffer-length (tls-conn-hsbuf conn))))
@@ -437,12 +438,6 @@
                                  (tls-conn-server-write-IV conn) 0
                                  (cs-iv-size cipher)))
              (case (cs-cipher cipher)
-               ((tdea)
-                (tdea-cbc-decipher! (buffer-data b)
-                                    (tls-conn-server-write-key conn)
-                                    (tls-conn-server-write-IV conn)
-                                    (buffer-top b)
-                                    len))
                ((aes-128-cbc aes-256-cbc)
                 (aes-cbc-decrypt! (buffer-data b) (buffer-top b)
                                   (buffer-data b) (buffer-top b)
@@ -454,6 +449,12 @@
                           (buffer-data b) (buffer-top b)
                           len
                           (tls-conn-server-write-key conn)))
+               ((tdea)
+                (tdea-cbc-decipher! (buffer-data b)
+                                    (tls-conn-server-write-key conn)
+                                    (tls-conn-server-write-IV conn)
+                                    (buffer-top b)
+                                    len))
                (else
                 (error 'decipher-record
                        "You forgot to put in the new cipher algorithm!"
@@ -857,6 +858,8 @@
                (error 'get-tls-handshake "Bad verify_data in HANDSHAKE-FINISHED"))
              (hash!)
              (done!)
+             (bytevector-fill! (tls-conn-master-secret conn) 0)
+             (tls-conn-master-secret-set! conn 'master-secret-forgotten)
              'handshake-finished)
 
             ((= type TLS-HANDSHAKE-HELLO-REQUEST)
@@ -871,16 +874,7 @@
 
 ;;; Change cipher spec protocol
 
-  ;; This protocol is used to install the new cipher specification,
-  ;; which has been negotiated with the handshake protocol. The
-  ;; protocol is supposed to be used to first enable encryption, but
-  ;; the RFC says it should also be possible to rehandshake. There was
-  ;; a small problem with that idea:
-
-  ;; http://isc.sans.edu/diary.html?storyid=7534
-
-  ;; TODO: implement the extension or whatever that allows secure
-  ;; renegotiation.
+  ;; TODO: RFC 5746
 
   (define (put-tls-change-cipher-spec conn)
     (put-tls-record conn TLS-PROTOCOL-CHANGE-CIPHER-SPEC '(#vu8(1)))
