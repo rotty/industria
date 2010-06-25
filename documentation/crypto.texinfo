@@ -554,10 +554,10 @@ Privacy Enhanced Mail (PEM) format and contain an ASN.1 DER encoded
 private DSA key.
 @end deffn
 
-@deffn Procedure dsa-signature-from-int integer
-Parses the @var{integer} as an ASN.1 encoded DSA signature. The return
-value is a list with the @var{r} and @var{s} values that make up a DSA
-signature.
+@deffn Procedure dsa-signature-from-bytevector bv
+Parses the bytevector @var{bv} as an ASN.1 DER encoded DSA signature.
+The return value is a list with the @var{r} and @var{s} values that
+make up a DSA signature.
 @end deffn
 
 @deffn Procedure dsa-create-signature hash private-key

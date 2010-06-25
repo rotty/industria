@@ -20,13 +20,14 @@
 ;; The decoding routines are implemented manually, but should maybe be
 ;; automatically generated from the ASN.1 types in the RFC.
 
-(library (weinholt crypto x509 (0 0 20100615))
+(library (weinholt crypto x509 (0 0 20100625))
   (export certificate-from-bytevector
           certificate-public-key
           decipher-certificate-signature
           validate-certificate-path
           CA-path CA-file CA-procedure
 
+          certificate-key-usage
           certificate-tbs-data
 
           print-certificate)
@@ -307,15 +308,17 @@
        (let ((algo (translate-algorithm (car value))))
          (case algo
            ((rsaEncryption)
-            (rsa-public-key-from-bytevector (uint->bytevector (cadr value))))
+            (rsa-public-key-from-bytevector (der:bit-string->bytevector
+                                             (cadr value))))
            ((dsa)
-            (let ((key (der:translate (der:decode (uint->bytevector (cadr value)))
+            (let ((key (der:translate (der:decode (der:bit-string->bytevector
+                                                   (cadr value)))
                                       (DSAPublicKey)))
                   (params (der:translate (cadar value) (Dss-Parms))))
               (make-dsa-public-key (car params) (cadr params) (caddr params) key)))
            (else
             (error 'certificate-bytevector
-                   "unimplemented signature algorithm" (car algo))))))
+                   "Unimplemented public key algorithm" algo)))))
       (else value)))
 
   (define (certificate-public-key cert)
@@ -359,6 +362,33 @@
              (der:translate (der:decode (caddr ext)) (BasicConstraints))))
           (else '(#f #f))))             ;default
 
+  ;; Return #f or a list of the symbolic names for the bits. RFC 5280
+  ;; explains their meaning.
+  (define (certificate-key-usage cert)
+    (define (bits->symbols ku)
+      (define bitnames
+        '(digitalSignature
+          nonRepudiation ;aka contentCommitment
+          keyEncipherment
+          dataEncipherment
+          keyAgreement
+          keyCertSign
+          cRLSign
+          encipherOnly
+          decipherOnly))
+      (do ((i 0 (fx+ i 1))
+           (names bitnames (cdr names))
+           (bits '() (if (der:bit-string-bit-set? ku i)
+                         (cons (car names) bits)
+                         bits)))
+          ((null? names) (reverse bits))))
+    (cond ((find-extension cert 'keyUsage)
+           =>
+           (lambda (ext)
+             (bits->symbols (der:translate (der:decode (caddr ext))
+                                           (KeyUsage)))))
+          (else #f)))
+
   (define (decipher-certificate-signature signed-cert signer-cert)
     (unless (dn=? (tbs-certificate-subject (certificate-tbs-certificate signer-cert))
                   (tbs-certificate-issuer  (certificate-tbs-certificate signed-cert)))
@@ -381,7 +411,9 @@
                       "RSA key but invalid signature algorithm"
                       (certificate-signature-algorithm signed-cert)))
              (let ((digest (rsa-pkcs1-decrypt-digest
-                            (certificate-signature-value signed-cert) key)))
+                            (der:bit-string->integer
+                             (certificate-signature-value signed-cert))
+                            key)))
                (list (translate-algorithm (car digest))
                      (cadr digest))))
             ((dsa-public-key? key)
@@ -390,8 +422,9 @@
                       "DSA key but invalid signature algorithm"
                       (certificate-signature-algorithm signed-cert)))
              (list (certificate-signature-algorithm signed-cert)
-                   (dsa-signature-from-int
-                    (certificate-signature-value signed-cert))))
+                   (dsa-signature-from-bytevector
+                    (der:bit-string->bytevector
+                     (certificate-signature-value signed-cert)))))
             (else
              (error 'decipher-certificate-signature
                     "Unimplemented public key algorithm" key)))))
@@ -415,10 +448,10 @@
                                     cert
                                     (lp (+ index 1)))))
                              (else (lp (+ index 1))))))))
-                (else
-                 ;; TODO: try the CA-file
-                 ;; Build a hashtable indexed by issuer
-                 #f))))))
+                ((file-exists? (CA-file))
+                 ;; TODO:
+                 #f)
+                (else #f))))))
 
   (define (self-issued? cert)
     (let ((tbs (certificate-tbs-certificate cert)))
@@ -495,7 +528,9 @@
   ;; issued by a trusted certificate and the last certificate is the
   ;; end-entity (e.g. the server). Trust anchor information is passed
   ;; either via the CA-path and CA-file parameters or the root-cert
-  ;; argument.
+  ;; argument. If this returns ok you should call
+  ;; certificate-key-usage and see if what you want to use the cert
+  ;; for is allowed.
   (define validate-certificate-path
     (case-lambda
       ((path)
@@ -518,6 +553,8 @@
            (cond ((not signer)
                   'root-certificate-not-found)
                  ((not (signature-ok? (car path) signer))
+                  ;; TODO: fails when the root certificate signed
+                  ;; itself using md2WithRSAEncryption.
                   'bad-signature)
                  ((not (time-ok? (car path) time))
                   'expired)
@@ -529,9 +566,11 @@
                   'unhandled-critical-extension)
                  ;; TODO: check subtrees
                  ((not (null? (cdr path)))
-                  ;; Prepare for the next certificate
+                  ;; Prepare for the next certificate. (car path) is
+                  ;; now the root certificate or an intermediate.
                   (let ((self-issued (self-issued? (car path)))
-                        (bc (basic-constraints (car path))))
+                        (bc (basic-constraints (car path)))
+                        (ku (certificate-key-usage (car path))))
                     (let ((ca? (car bc))
                           (maxlen-constraint (cadr bc)))
                       (cond ((and (not ca?) (not (cert=? root-cert (car path))))
@@ -542,8 +581,8 @@
                              'intermediate-is-not-ca)
                             ((and (not self-issued) (<= maxlen 0))
                              'maximum-path-length-exceeded)
-                            ;; TODO: verify keyUsage:keyCertSign
-                            ;; TODO: handle keyUsage
+                            ((and ku (not (memq 'keyCertSign ku)))
+                             'intermediate-without-keyCertSign)
                             (else
                              (lp (cdr path)
                                  (min (if self-issued maxlen (- maxlen 1))
@@ -554,7 +593,6 @@
                            (common-name-ok? (car path) common-name)
                            (alternative-name-ok? (car path) common-name)))
                   'bad-common-name)
-                 ;; TODO: handle keyUsage
                  (else
                   'ok)))))))
 
@@ -593,26 +631,7 @@
                   (case (symbol<-oid (car x))
                     ((keyUsage)
                      (display "key usage: ")
-                     (let ((ku (der:translate (der:decode (caddr x))
-                                              (KeyUsage))))
-                       (display "#b")
-                       (display (number->string ku 2))
-                       (display " ")
-                       (do ((i 0 (+ i 1))
-                            (names '(digitalSignature
-                                     nonRepudiation
-                                     keyEncipherment
-                                     dataEncipherment
-                                     keyAgreement
-                                     keyCertSign
-                                     cRLSign
-                                     encipherOnly
-                                     decipherOnly)
-                                   (cdr names))
-                            (bits '() (if (bitwise-bit-set? ku i)
-                                          (cons (car names) bits)
-                                          bits)))
-                           ((null? names) (display (reverse bits))))))
+                     (display (certificate-key-usage c)))
                     ((basicConstraints)
                      (display "basic constraints: ")
                      (let ((bc (der:translate (der:decode (caddr x))

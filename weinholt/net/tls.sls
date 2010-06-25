@@ -37,7 +37,7 @@
 ;; TODO: go through the implementation pitfalls in the RFC. check all
 ;; the MUSTs.
 
-(library (weinholt net tls (0 0 20100620))
+(library (weinholt net tls (0 0 20100625))
   (export make-tls-wrapper
           flush-tls-output
           put-tls-record get-tls-record
@@ -97,10 +97,9 @@
 
   (define (pad-length len blocksize)
     ;; TODO: more than the minimum padding
+    ;; Assumes block sizes are a power of two
     (if (fixnum? blocksize)
-        (fx- (fxand (fx+ len (fx- blocksize 1))
-                    (fx- blocksize))
-             len)
+        (fxand (fx- len) (fx- blocksize 1))
         0))
 
 ;;; Version numbers
@@ -725,6 +724,14 @@
           (close-port keyp)))
 
       ;; Encrypt the premaster-secret and send it to the remote.
+      (cond ((certificate-key-usage (last (tls-conn-remote-certs conn)))
+             =>
+             (lambda (ku)
+               (unless (memq 'keyEncipherment ku)
+                 (close-tls conn)       ;TODO: send an error
+                 (error 'put-tls-handshake
+                        "The remote certificate does not work for enciphering keys"
+                        (tls-conn-server-name conn))))))
       (let* ((server-key (certificate-public-key
                           (last (tls-conn-remote-certs conn))))
              (keylen (rsa-public-key-byte-length server-key))

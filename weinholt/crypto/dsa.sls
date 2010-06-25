@@ -17,7 +17,7 @@
 
 ;; The Digital Signature Algorithm from FIPS Pub 186.
 
-(library (weinholt crypto dsa (0 0 20100615))
+(library (weinholt crypto dsa (0 0 20100625))
   (export make-dsa-public-key dsa-public-key?
           dsa-public-key-p
           dsa-public-key-q
@@ -35,7 +35,7 @@
           dsa-private-key-from-bytevector
           dsa-private-key-from-pem-file
 
-          dsa-signature-from-int
+          dsa-signature-from-bytevector
           dsa-verify-signature
           dsa-create-signature)
   (import (prefix (weinholt struct der (0 0)) der:)
@@ -93,8 +93,8 @@
 
   ;; The int is normally from an X.509 certificate and this procedure
   ;; returns r and s in a list.
-  (define (dsa-signature-from-int int)
-    (der:translate (der:decode (uint->bytevector int)) (Dss-Sig-Value)))
+  (define (dsa-signature-from-bytevector bv)
+    (der:translate (der:decode bv) (Dss-Sig-Value)))
 
   (define (dsa-verify-signature Hm pubkey r s)
     (and (< 0 r (dsa-public-key-q pubkey))

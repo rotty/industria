@@ -21,12 +21,15 @@
 
 ;; TODO: output
 
-(library (weinholt struct der (0 0 20100620))
+(library (weinholt struct der (0 0 20100625))
   (export decode translate
           data-type
           data-start-index
           data-length
-          data-value)
+          data-value
+          
+          bit-string-length bit-string-unused bit-string->bytevector
+          bit-string->integer bit-string-bit-set?)
   (import (rnrs)
           (only (srfi :1 lists) take)
           (srfi :19 time)
@@ -42,6 +45,24 @@
          (newline)))
       ((_ . args) (values))))
 
+;;; Bit strings
+  
+  (define-record-type bit-string
+    (fields length unused >bytevector))
+
+  (define (bit-string->integer bs)
+    (bitwise-arithmetic-shift-right
+     (bytevector-uint-ref (bit-string->bytevector bs) 0 (endianness big)
+                          (bit-string-length bs))
+     (bit-string-unused bs)))
+
+  (define (bit-string-bit-set? bs i)
+    (let ((byte (fxarithmetic-shift-right i 3))
+          (index (fxand i 7)))
+      (and (fx<? byte (bit-string-length bs))
+           (fxbit-set? (bytevector-u8-ref (bit-string->bytevector bs) byte)
+                       (fx- 7 index)))))
+  
 ;;; The code that follows reads DER encoded data from bytevectors and
 ;;; turns it into a parse tree.
 
@@ -159,11 +180,12 @@
     ;; bits at the end are unused.
     (if (= length 1)
         0
-        (let ((unused (bytevector-u8-ref bv start))
-              (i (bytevector-uint-ref bv (+ start 1) (endianness big) (- length 1))))
+        (let ((unused (bytevector-u8-ref bv start)))
           (when (> unused 7)
             (error 'get-bit-string "too many trailing bits in bit-string"))
-          (bitwise-arithmetic-shift-right i unused))))
+          (make-bit-string (- length 1)
+                           unused
+                           (get-octet-string bv (+ start 1) (- length 1))))))
 
   (define (get-UTCTime bv start length)
     ;; YYMMDDHHMMSSZ
