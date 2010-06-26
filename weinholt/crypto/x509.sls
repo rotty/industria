@@ -20,7 +20,7 @@
 ;; The decoding routines are implemented manually, but should maybe be
 ;; automatically generated from the ASN.1 types in the RFC.
 
-(library (weinholt crypto x509 (0 0 20100625))
+(library (weinholt crypto x509 (0 0 20100626))
   (export certificate-from-bytevector
           certificate-public-key
           decipher-certificate-signature
@@ -33,7 +33,8 @@
           print-certificate)
   (import (rnrs)
           (only (srfi :13 strings) string-join
-                string-pad)
+                string-pad string-prefix? string-suffix-ci?
+                string-count)
           (srfi :19 time)
           (srfi :39 parameters)
           (weinholt bytevectors)
@@ -187,6 +188,7 @@
 
         ((1 3 6 1 5 5 7 1 1) . authorityInfoAccess)
         ((2 5 4 3) . commonName)
+        ((2 5 4 5) . serialNumber)
         ((2 5 4 6) . countryName)
         ((2 5 4 7) . localityName)
         ((2 5 4 8) . stateOrProvinceName)
@@ -333,10 +335,25 @@
   ;; FIXME: This doesn't really work, because the name must be
   ;; converted to ascii (punycode) first, etc. Or it might be an IP
   ;; address in a non-canonical form, I suppose. See section 7.1.
-  ;; Wildcards are missing.
-  (define (common-name-matches? pattern cn)
+  (define (common-name-matches? cn pattern)
+    ;; `pattern' is from the certificate.
     (and (string? cn)
-         (string-ci=? pattern cn)))
+         (cond ((and (string-prefix? "*" pattern)
+                     (> (string-count pattern #\.) 1))
+                ;; Support one * at the start of a certificate's
+                ;; commonName or subjectAltName (partial support for
+                ;; RFC2818). Require that the pattern has more than
+                ;; one dot. Interesting reading on wildcards:
+                ;; http://nils.toedtmann.net/pub/subjectAltName.txt
+                ;; TODO: use Mozilla's effective_tld_names.dat?
+                (and (string-suffix-ci? (substring pattern 1 (string-length pattern))
+                                        cn)
+                     ;; Match only a single part:
+                     (zero? (string-count cn #\. 0
+                                          (- (string-length cn)
+                                             (- (string-length pattern) 1))))))
+               (else
+                (string-ci=? pattern cn)))))
 
   (define (find-extension cert extension)
     (let ((cert (certificate-tbs-certificate cert)))
