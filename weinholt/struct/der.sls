@@ -141,7 +141,9 @@
                                (char<=? #\a c #\z)
                                (char<=? #\A c #\Z)
                                (memq c '(#\space #\' #\( #\) #\+ #\,
-                                         #\- #\. #\/ #\: #\= #\?))))
+                                         #\- #\. #\/ #\: #\= #\?
+                                         ;; not really permitted:
+                                         #\*))))
                          chars)
           (error 'get-PrintableString "invalid character"))
         (list->string chars))))
