@@ -37,7 +37,7 @@
 ;; TODO: go through the implementation pitfalls in the RFC. check all
 ;; the MUSTs.
 
-(library (weinholt net tls (0 0 20100625))
+(library (weinholt net tls (0 0 20100627))
   (export make-tls-wrapper
           flush-tls-output
           put-tls-record get-tls-record
@@ -60,13 +60,16 @@
           (weinholt crypto aes)
           (weinholt crypto arcfour)
           (weinholt crypto des)
+          (weinholt crypto dsa)
           (weinholt crypto entropy)
+          (weinholt crypto math)        ;TODO: dh
           (weinholt crypto md5)
           (weinholt crypto rsa)
           (weinholt crypto sha-1)
           (weinholt crypto x509)
           (weinholt net buffer)
-          (weinholt struct pack))
+          (weinholt struct pack)
+          (weinholt text base64))
 
 ;;; First the utilities
 
@@ -96,7 +99,7 @@
     (uint-list->bytevector x (endianness big) 2))
 
   (define (pad-length len blocksize)
-    ;; TODO: more than the minimum padding
+    ;; TODO: more than the minimum padding.
     ;; Assumes block sizes are a power of two
     (if (fixnum? blocksize)
         (fxand (fx- len) (fx- blocksize 1))
@@ -165,20 +168,52 @@
 
   ;; All the supported cipher suites in order of priority. The NULL
   ;; cipher must be first.
+  ;; http://www.iana.org/assignments/tls-parameters/tls-parameters.txt
   (define supported-cipher-suites
     (list
-     (make-cs 'TLS-NULL-WITH-NULL-NULL #x0000 #f #f #f)
-     (make-cs 'TLS-RSA-WITH-AES-128-CBC-SHA #x002F 'rsa 'aes-128-cbc 'sha-1)
-     (make-cs 'TLS-RSA-WITH-AES-256-CBC-SHA #x0035 'rsa 'aes-256-cbc 'sha-1)
-     (make-cs 'TLS-RSA-WITH-RC4-128-SHA #x0005 'rsa 'rc4-128 'sha-1)
-     (make-cs 'TLS-RSA-WITH-RC4-128-MD5 #x0004 'rsa 'rc4-128 'md5)
+     (make-cs 'NULL-WITH-NULL-NULL #x0000 #f #f #f)
+     ;; Ephemeral Diffie-Hellman gives Perfect Forward Secrecy.
+     ;; (make-cs 'DH-DSS-WITH-AES-128-CBC-SHA #x0030 'dh-dss 'aes-128-cbc 'sha-1)
+     ;; (make-cs 'DH-RSA-WITH-AES-128-CBC-SHA #x0031 'dh-rsa 'aes-128-cbc 'sha-1)
+     (make-cs 'DHE-DSS-WITH-AES-128-CBC-SHA #x0032 'dhe-dss 'aes-128-cbc 'sha-1)
+     (make-cs 'DHE-RSA-WITH-AES-128-CBC-SHA #x0033 'dhe-rsa 'aes-128-cbc 'sha-1)
+     ;; (make-cs 'DH-DSS-WITH-AES-256-CBC-SHA #x0036 'dh-dss 'aes-256-cbc 'sha-1)
+     ;; (make-cs 'DH-RSA-WITH-AES-256-CBC-SHA #x0037 'dh-rsa 'aes-256-cbc 'sha-1)
+     (make-cs 'DHE-DSS-WITH-AES-256-CBC-SHA #x0038 'dhe-dss 'aes-256-cbc 'sha-1)
+     (make-cs 'DHE-RSA-WITH-AES-256-CBC-SHA #x0039 'dhe-rsa 'aes-256-cbc 'sha-1)
+
      ;; TODO: version 1.2:
-     #;(make-cs 'TLS-RSA-WITH-AES-128-CBC-SHA256 #x003C 'rsa 'aes-128-cbc 'sha-256)
-     #;(make-cs 'TLS-RSA-WITH-AES-256-CBC-SHA256 #x003D 'rsa 'aes-256-cbc 'sha-256)
+     ;; (make-cs 'DH-DSS-WITH-AES-128-CBC-SHA256 #x003E 'dh-dss 'aes-128-cbc 'sha-256)
+     ;; (make-cs 'DH-RSA-WITH-AES-128-CBC-SHA256 #x003F 'dh-rsa 'aes-128-cbc 'sha-256)
+     ;; (make-cs 'DHE-DSS-WITH-AES-128-CBC-SHA256 #x0040 'dhe-dss 'aes-128-cbc 'sha-256)
+     ;; (make-cs 'DHE-RSA-WITH-AES-128-CBC-SHA256 #x0067 'dhe-rsa 'aes-128-cbc 'sha-256)
+     ;; (make-cs 'DH-DSS-WITH-AES-256-CBC-SHA256 #x0068 'dh-dss 'aes-256-cbc 'sha-256)
+     ;; (make-cs 'DH-RSA-WITH-AES-256-CBC-SHA256 #x0069 'dh-rsa 'aes-256-cbc 'sha-256)
+     ;; (make-cs 'DHE-DSS-WITH-AES-256-CBC-SHA256 #x006A 'dhe-dss 'aes-256-cbc 'sha-256)
+     ;; (make-cs 'DHE-RSA-WITH-AES-256-CBC-SHA256 #x006B 'dhe-rsa 'aes-256-cbc 'sha-256)
+
+     (make-cs 'RSA-WITH-AES-128-CBC-SHA #x002F 'rsa 'aes-128-cbc 'sha-1)
+     (make-cs 'RSA-WITH-AES-256-CBC-SHA #x0035 'rsa 'aes-256-cbc 'sha-1)
+     (make-cs 'RSA-WITH-RC4-128-SHA #x0005 'rsa 'rc4-128 'sha-1)
+     (make-cs 'RSA-WITH-RC4-128-MD5 #x0004 'rsa 'rc4-128 'md5)
+     ;; TODO: version 1.2:
+     ;; (make-cs 'RSA-WITH-AES-128-CBC-SHA256 #x003C 'rsa 'aes-128-cbc 'sha-256)
+     ;; (make-cs 'RSA-WITH-AES-256-CBC-SHA256 #x003D 'rsa 'aes-256-cbc 'sha-256)
      ;; 3DES is last because it's so very slow
-     (make-cs 'TLS-RSA-WITH-3DES-EDE-CBC-SHA #x000A 'rsa 'tdea 'sha-1)))
+     ;; (make-cs 'DH-DSS-WITH-3DES-EDE-CBC-SHA #x000D 'dh-dss 'tdea 'sha-1)
+     ;; (make-cs 'DH-RSA-WITH-3DES-EDE-CBC-SHA #x0010 'dh-rsa 'tdea 'sha-1)
+     (make-cs 'DHE-DSS-WITH-3DES-EDE-CBC-SHA #x0013 'dhe-dss 'tdea 'sha-1)
+     (make-cs 'DHE-RSA-WITH-3DES-EDE-CBC-SHA #x0016 'dhe-rsa 'tdea 'sha-1)
+     (make-cs 'RSA-WITH-3DES-EDE-CBC-SHA #x000A 'rsa 'tdea 'sha-1)))
 
 ;;;
+
+  (define (check-key-usage conn bitname)
+    ;; Return #f if there is a key usage extension and the given bit
+    ;; is not set.
+    (cond ((certificate-key-usage (last (tls-conn-remote-certs conn)))
+           => (lambda (ku) (memq bitname ku)))
+          (else #t)))
 
   (define (tls-prf-sha256 bytes secret label seeds)
     ;; TODO: version 1.2
@@ -238,6 +273,10 @@
             (mutable server-write-mac-secret)
             (mutable server-write-key)
             (mutable server-write-IV)
+            ;; Server Diffie-Hellman parameters
+            (mutable server-DH-p)
+            (mutable server-DH-g)
+            (mutable server-DH-Ys)
 
             (immutable handshakes-md5)
             (immutable handshakes-sha-1)
@@ -268,6 +307,7 @@
                      'no-server-write-mac-secret-yet
                      'no-server-write-key-yet
                      'no-server-write-IV-yet
+                     'no-server-DH-params-yet #f #f
 
                      (make-md5)
                      (make-sha-1)
@@ -281,7 +321,6 @@
     ;; TODO: clear the connection state
     (close-port (tls-conn-out conn))
     (close-port (buffer-port (tls-conn-inbuf conn))))
-
 
 ;;; Record protocol
 
@@ -623,7 +662,7 @@
       (bytevector-append (pack "!uCS" TLS-EXTENSION-SERVER-NAME-HOSTNAME
                                (bytevector-length n))
                          n)))
-  
+
   (define (put-tls-handshake conn type data)
     ;; Takes data from a handshake protocol and passes it to the
     ;; record protocol.
@@ -657,7 +696,7 @@
                                         compression-methods))
              (extensions (server-name-list
                           (list (server-name (tls-conn-server-name conn)))))))))
-  
+
   ;; `certs' are bytevectors and the last cert is the client's own
   ;; certificate. So the order is the same as for
   ;; tls-conn-remote-certs.
@@ -678,60 +717,29 @@
                            (list (extract))))))
 
   (define (put-tls-handshake-client-key-exchange conn)
+    (case (cs-kex (tls-conn-next-cipher conn))
+      ((rsa)
+       (put-tls-handshake-client-key-exchange-rsa conn))
+      ((dhe-rsa dhe-dss)
+       (put-tls-handshake-client-key-exchange-dhe conn))
+      (else
+       (error 'put-tls-handshake-client-key-exchange
+              "You forgot to put in the new key exchange algorithm!"
+              (cs-kex (tls-conn-next-cipher conn))))))
+
+  (define (put-tls-handshake-client-key-exchange-rsa conn)
+    (print ";Client RSA Key-Exchange")
     (let ((premaster-secret (make-random-bytevector 48)))
       ;; Construct the premaster secret with our version number and 46
       ;; random bytes. Everything hinges on this being unpredictable...
       (bytevector-u16-set! premaster-secret 0 TLS-VERSION (endianness big))
-      (tls-conn-master-secret-set! conn ((tls-conn-prf conn) 48
-                                         premaster-secret
-                                         (string->utf8 "master secret")
-                                         (list (tls-conn-client-random conn)
-                                               (tls-conn-server-random conn))))
-      (print ";plaintext premaster secret: " (bv->string premaster-secret))
-      (print ";client random: " (bv->string (tls-conn-client-random conn)))
-      (print ";server random: " (bv->string (tls-conn-server-random conn)))
-      (print ";master secret: " (bv->string (tls-conn-master-secret conn)))
-
-      ;; Generate cryptographical material from the master key
-      (let* ((cipher (tls-conn-next-cipher conn))
-             (hash-size (cs-mac-length cipher))
-             (key-size (cs-key-length cipher))
-             (IV-size (cs-iv-size cipher))
-             (key-block ((tls-conn-prf conn) (* 2 (+ hash-size key-size IV-size))
-                         (tls-conn-master-secret conn)
-                         (string->utf8 "key expansion")
-                         (list (tls-conn-server-random conn)
-                               (tls-conn-client-random conn))))
-             (keyp (open-bytevector-input-port key-block)))
-        (tls-conn-client-write-mac-secret-set! conn (get-bytevector-n keyp hash-size))
-        (tls-conn-server-write-mac-secret-set! conn (get-bytevector-n keyp hash-size))
-        (let* ((client-write-key (get-bytevector-n keyp key-size))
-               (server-write-key (get-bytevector-n keyp key-size)))
-          (tls-conn-client-write-key-set! conn ((cs-expand-ekey cipher) client-write-key))
-          (tls-conn-server-write-key-set! conn ((cs-expand-dkey cipher) server-write-key))
-          (tls-conn-client-write-IV-set! conn (get-bytevector-n keyp IV-size))
-          (tls-conn-server-write-IV-set! conn (get-bytevector-n keyp IV-size))
-          (print ";key block: " (bv->string key-block))
-          (print ";client-write-mac-secret: "
-                 (bv->string (tls-conn-client-write-mac-secret conn)))
-          (print ";server-write-mac-secret: "
-                 (bv->string (tls-conn-server-write-mac-secret conn)))
-          (print ";client-write-key: " (bv->string client-write-key))
-          (print ";server-write-key: " (bv->string server-write-key))
-          (print ";client-write-IV: " (bv->string (tls-conn-client-write-IV conn)))
-          (print ";server-write-IV: " (bv->string (tls-conn-server-write-IV conn)))
-          (bytevector-fill! key-block 0) ;can clear keyp
-          (close-port keyp)))
-
+      (generate-keys conn premaster-secret)
       ;; Encrypt the premaster-secret and send it to the remote.
-      (cond ((certificate-key-usage (last (tls-conn-remote-certs conn)))
-             =>
-             (lambda (ku)
-               (unless (memq 'keyEncipherment ku)
-                 (close-tls conn)       ;TODO: send an error
-                 (error 'put-tls-handshake
-                        "The remote certificate does not work for enciphering keys"
-                        (tls-conn-server-name conn))))))
+      (unless (check-key-usage conn 'keyEncipherment)
+        (close-tls conn)                ;TODO: send an error
+        (error 'put-tls-handshake
+               "The remote public key does not work for enciphering keys"
+               (tls-conn-server-name conn)))
       (let* ((server-key (certificate-public-key
                           (last (tls-conn-remote-certs conn))))
              (keylen (rsa-public-key-byte-length server-key))
@@ -743,6 +751,84 @@
         (bytevector-fill! premaster-secret 0)
         (put-tls-handshake conn TLS-HANDSHAKE-CLIENT-KEY-EXCHANGE
                            (list bv)))))
+
+  (define (put-tls-handshake-client-key-exchange-dhe conn)
+    (define (make-secret g n bits tries)
+      ;;also in net/irc/fish and net/otr, should be in crypto/dh maybe?
+      (unless (< tries 1000)
+        (error 'make-secret "unable to make a secret"))
+      (let* ((y (bytevector->uint (make-random-bytevector (div (+ bits 7) 8))))
+             (Y (expt-mod g y n)))
+        ;; See RFC 2631. Probably not clever enough.
+        (if (and (<= 2 Y (- n 1))
+                 (= 1 (expt-mod Y (/ (- n 1) 2) n)))
+            (values y Y)
+            (make-secret g n bits (+ tries 1)))))
+
+    ;; TODO: if the client certificate contains a D-H key, this
+    ;; message must be empty.
+    (print ";Client Diffie-Hellman Key-Exchange")
+    (print "#;p-length " (bitwise-length (tls-conn-server-DH-p conn)))
+    (let-values (((y Yc) (make-secret (tls-conn-server-DH-g conn)
+                                      (tls-conn-server-DH-p conn)
+                                      (bitwise-length (tls-conn-server-DH-p conn))
+                                      42)))
+      ;; FIXME: what is the minimum length, etc?
+      (let ((Z (uint->bytevector (expt-mod (tls-conn-server-DH-Ys conn)
+                                           y
+                                           (tls-conn-server-DH-p conn))))
+            (Yc* (uint->bytevector Yc)))
+        (generate-keys conn Z)
+        (bytevector-fill! Z 0)          ;XXX: not effective
+        (tls-conn-server-DH-p-set! conn #f)
+        (tls-conn-server-DH-g-set! conn #f)
+        (tls-conn-server-DH-Ys-set! conn #f)
+        ;; Send our public Diffie-Hellman value to the remote
+        (print "#;Yc " (bv->string Yc*))
+        (put-tls-handshake conn TLS-HANDSHAKE-CLIENT-KEY-EXCHANGE
+                           (list (pack "!S" (bytevector-length Yc*))
+                                 Yc*)))))
+
+  ;; Generate cryptographical material from the premaster-secret
+  (define (generate-keys conn premaster-secret)
+    (tls-conn-master-secret-set! conn ((tls-conn-prf conn) 48
+                                       premaster-secret
+                                       (string->utf8 "master secret")
+                                       (list (tls-conn-client-random conn)
+                                             (tls-conn-server-random conn))))
+    (print ";plaintext premaster secret: " (bv->string premaster-secret))
+    (print ";client random: " (bv->string (tls-conn-client-random conn)))
+    (print ";server random: " (bv->string (tls-conn-server-random conn)))
+    (print ";master secret: " (bv->string (tls-conn-master-secret conn)))
+    (let* ((cipher (tls-conn-next-cipher conn))
+           (hash-size (cs-mac-length cipher))
+           (key-size (cs-key-length cipher))
+           (IV-size (cs-iv-size cipher))
+           (key-block ((tls-conn-prf conn) (* 2 (+ hash-size key-size IV-size))
+                       (tls-conn-master-secret conn)
+                       (string->utf8 "key expansion")
+                       (list (tls-conn-server-random conn)
+                             (tls-conn-client-random conn))))
+           (keyp (open-bytevector-input-port key-block)))
+      (tls-conn-client-write-mac-secret-set! conn (get-bytevector-n keyp hash-size))
+      (tls-conn-server-write-mac-secret-set! conn (get-bytevector-n keyp hash-size))
+      (let* ((client-write-key (get-bytevector-n keyp key-size))
+             (server-write-key (get-bytevector-n keyp key-size)))
+        (tls-conn-client-write-key-set! conn ((cs-expand-ekey cipher) client-write-key))
+        (tls-conn-server-write-key-set! conn ((cs-expand-dkey cipher) server-write-key))
+        (tls-conn-client-write-IV-set! conn (get-bytevector-n keyp IV-size))
+        (tls-conn-server-write-IV-set! conn (get-bytevector-n keyp IV-size))
+        (print ";key block: " (bv->string key-block))
+        (print ";client-write-mac-secret: "
+               (bv->string (tls-conn-client-write-mac-secret conn)))
+        (print ";server-write-mac-secret: "
+               (bv->string (tls-conn-server-write-mac-secret conn)))
+        (print ";client-write-key: " (bv->string client-write-key))
+        (print ";server-write-key: " (bv->string server-write-key))
+        (print ";client-write-IV: " (bv->string (tls-conn-client-write-IV conn)))
+        (print ";server-write-IV: " (bv->string (tls-conn-server-write-IV conn)))
+        (bytevector-fill! key-block 0) ;can clear keyp
+        (close-port keyp))))
 
   (define (put-tls-handshake-certificate-verify conn)
     ;; This is the message to prove that the client has the private
@@ -820,9 +906,7 @@
                (buffer-seek! b 3)
                (let lp ((certs '()))
                  (cond ((= certs-end (buffer-top b))
-                        (tls-conn-remote-certs-set! conn certs)
-                        (done!)
-                        'handshake-certificate)
+                        (tls-conn-remote-certs-set! conn certs))
                        (else
                         (let* ((cert-len (read-u24 b 0))
                                (cert (certificate-from-bytevector (buffer-data b)
@@ -830,11 +914,24 @@
                                                                   (+ 3 (buffer-top b)
                                                                      cert-len))))
                           (print ";Cert of length " cert-len)
-                          (print "#;cert " (bytevector-copy* (buffer-data b)
-                                                             (+ 3 (buffer-top b))
-                                                             cert-len))
+                          (print        ;cert in PEM format for debugging
+                           (call-with-string-output-port
+                             (lambda (p)
+                               (put-delimited-base64 p "CERTIFICATE"
+                                                     (bytevector-copy*
+                                                      (buffer-data b)
+                                                      (+ 3 (buffer-top b))
+                                                      cert-len)))))
                           (buffer-seek! b (+ cert-len 3))
-                          (lp (cons cert certs))))))))
+                          (lp (cons cert certs)))))))
+             (done!)
+             'handshake-certificate)
+
+            ((= type TLS-HANDSHAKE-SERVER-KEY-EXCHANGE)
+             (hash!)
+             (get-tls-handshake-server-key-exchange conn b length)
+             (done!)
+             'handshake-server-key-exchange)
 
             ((= type TLS-HANDSHAKE-SERVER-HELLO-DONE)
              (hash!)
@@ -842,6 +939,7 @@
              'handshake-server-hello-done)
 
             ((= type TLS-HANDSHAKE-CERTIFICATE-REQUEST)
+             ;; TODO: parse the request
              (hash!)
              (done!)
              'handshake-certificate-request)
@@ -878,6 +976,62 @@
             (else
              (error 'get-tls-handshake-record
                     "an unknown handshake type arrived" type)))))
+
+  (define (get-tls-handshake-server-key-exchange conn b length)
+    (define who get-tls-handshake-server-key-exchange)
+    ;; The server wants to use DHE key exchange.
+    (define (get-int p)
+      (bytevector->uint (get-bytevector-n p (get-unpack p "!S"))))
+    (print ";Server Key Exchange")
+    (case (cs-kex (tls-conn-next-cipher conn))
+      ((dhe-dss dhe-rsa)
+       (unless (check-key-usage conn 'digitalSignature)
+         (close-tls conn)                ;TODO: send an error
+         (error who "The remote key cannot make signatures"
+                (tls-conn-server-name conn)))
+       (let ((msg (open-bytevector-input-port (buffer-data b))))
+         (set-port-position! msg (buffer-top b))
+         ;; Read ServerDHParams
+         (let* ((p (get-int msg)) (g (get-int msg)) (Ys (get-int msg))
+                (splen (- (port-position msg) (buffer-top b)))
+                (esig (get-bytevector-n msg (get-unpack msg "!S"))))
+           (print "#;p " p " #;g " g " #;Ys " Ys
+                  " #;esig #x" (bv->string esig))
+           (set-port-position! msg (buffer-top b))
+           ;; TODO: different in TLS v1.2
+           (let* ((tosign (list (tls-conn-client-random conn)
+                                (tls-conn-server-random conn)
+                                (get-bytevector-n msg splen)))
+                  (server-key (certificate-public-key
+                               (last (tls-conn-remote-certs conn)))))
+             (close-port msg)
+             (case (cs-kex (tls-conn-next-cipher conn))
+               ((dhe-rsa)               ;RSA
+                (let* ((digest (bytevector-append
+                                (md5->bytevector (apply md5 tosign))
+                                (sha-1->bytevector (apply sha-1 tosign))))
+                       (esig (bytevector->uint esig))
+                       (dsig (rsa-pkcs1-decrypt-signature esig server-key)))
+                  (print "#;digest " (bv->string digest))
+                  (print "#;dsig   " (bv->string dsig))
+                  (unless (bytevector=? digest dsig)
+                    (error who "bad RSA signature" digest dsig))))
+               ((dhe-dss)               ;DSA
+                (let ((digest (sha-1->bytevector (apply sha-1 tosign)))
+                      (r/s (dsa-signature-from-bytevector esig)))
+                  (print "#;digest " (bv->string digest))
+                  (print "#;r/s " r/s)
+                  (unless (apply dsa-verify-signature digest server-key r/s)
+                    (error who "bad DSA signature" digest esig)))))
+             ;; Ok, so the owner of the key really did send these D-H
+             ;; parameters. Now it's safe to use them.
+             (tls-conn-server-DH-p-set! conn p)
+             (tls-conn-server-DH-g-set! conn g)
+             (tls-conn-server-DH-Ys-set! conn Ys)))))
+      ((rsa dh_dss dh_rsa) #f)
+      (else
+       (error who "You forgot to put in the new key exchange algorithm!"
+              (cs-kex (tls-conn-next-cipher conn))))))
 
 ;;; Change cipher spec protocol
 

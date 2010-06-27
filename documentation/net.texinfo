@@ -531,8 +531,9 @@ lets you verify the remote server's identity.
 @cindex SSL
 
 This library currently only provides a TLS client. Both TLS 1.0 and
-TLS 1.1 are supported. The cipher suites provide AES and 3DES (if AES
-is not available on the server).
+TLS 1.1 are supported. The RSA, DHE-RSA (Ephemeral Diffie-Hellman) and
+DHE-DSA key exchange algorithms are supported, as well as AES, ARCFOUR
+and 3DES ciphers.
 
 This whole thing is kind of experimental and I'd appreciate feedback.
 
