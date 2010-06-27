@@ -24,7 +24,7 @@
 
 ;; But look at RFC 2313, it's easier to read...
 
-(library (weinholt crypto rsa (0 0 20100613))
+(library (weinholt crypto rsa (0 0 20100627))
   (export rsa-public-key?
           rsa-public-key-from-bytevector
           rsa-public-key-length
@@ -32,9 +32,11 @@
           rsa-decrypt
           rsa-encrypt
           rsa-pkcs1-encrypt
+          rsa-pkcs1-decrypt-signature
           rsa-pkcs1-decrypt-digest)
   (import (rnrs)
           (srfi :27 random-bits)
+          (weinholt bytevectors)
           (weinholt crypto math)
           (prefix (weinholt struct der (0 0)) der:))
 
@@ -100,7 +102,9 @@
   (define (rsa-public-key-from-bytevector bv)
     (apply make-rsa-public-key (der:translate (der:decode bv)
                                               (RSAPublicKey))))
-  
+
+  ;; TODO: RSA blinding (Boneh, D., Brumley, D., "Remote timing
+  ;; attacks are practical", USENIX Security Symposium 2003.)
   (define (rsa-encrypt plaintext key)
     (if (rsa-public-key? key)
         (expt-mod plaintext
@@ -144,12 +148,10 @@
                                         (bytevector-length eb))
                    key)))
 
-  (define (rsa-pkcs1-decrypt-digest signature key)
+  (define (rsa-pkcs1-decrypt-signature signature key)
     ;; Encrypt the signature with a public key. If it comes out
     ;; alright, the signature was signed with the corresponding
-    ;; private key. For X.509-certificates this means the signature
-    ;; came from the issuer, but anyone can copy a decryptable
-    ;; signature, so the message digest also has to be checked.
+    ;; private key.
     (let* ((sig (rsa-encrypt signature key))
            (len (fxdiv (fxand -8 (fx+ 7 (bitwise-length sig)))
                        8))
@@ -159,10 +161,19 @@
         ((#x01)
          (do ((i 1 (fx+ i 1)))
              ((fxzero? (bytevector-u8-ref bvsig i))
-              (der:translate (der:decode bvsig (fx+ i 1) len)
-                             (DigestInfo)))
+              (subbytevector bvsig (fx+ i 1) len))
            (unless (fx=? #xff (bytevector-u8-ref bvsig i))
              (error 'rsa-pkcs-decrypt-signature "bad signature"))))
         (else
-         (error 'rsa-pkcs1-decrypt-signature "bad signature"))))))
+         (error 'rsa-pkcs1-decrypt-signature "bad signature")))))
+
+  (define (rsa-pkcs1-decrypt-digest signature key)
+    ;; Encrypt the signature with a public key. If it comes out
+    ;; alright, the signature was signed with the corresponding
+    ;; private key. For X.509-certificates this means the signature
+    ;; came from the issuer, but anyone can copy a decryptable
+    ;; signature, so the message digest also has to be checked.
+    (der:translate (der:decode
+                    (rsa-pkcs1-decrypt-signature signature key))
+                   (DigestInfo))))
 
