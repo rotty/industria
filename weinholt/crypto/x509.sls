@@ -20,7 +20,7 @@
 ;; The decoding routines are implemented manually, but should maybe be
 ;; automatically generated from the ASN.1 types in the RFC.
 
-(library (weinholt crypto x509 (0 0 20100626))
+(library (weinholt crypto x509 (0 0 20100627))
   (export certificate-from-bytevector
           certificate-public-key
           decipher-certificate-signature
@@ -559,59 +559,66 @@
       ((path common-name time root-cert)
        ;; XXX: Policy mappings and the permitted/excluded subtrees
        ;; stuff is not (yet) implemented.
-       (let ((root-cert (or root-cert
-                            (get-root-certificate
-                             (tbs-certificate-issuer
-                              (certificate-tbs-certificate (car path))))))
-             (time (or time (current-time))))
-         (let lp ((path path)
-                  (maxlen (length path))
-                  (signer root-cert))
-           (cond ((not signer)
-                  'root-certificate-not-found)
-                 ((not (signature-ok? (car path) signer))
-                  ;; TODO: fails when the root certificate signed
-                  ;; itself using md2WithRSAEncryption.
-                  'bad-signature)
-                 ((not (time-ok? (car path) time))
-                  'expired)
-                 ((revoked? (car path))
-                  'revoked)
-                 ((not (cross-signed? (car path) signer))
-                  'bad-issuer)
-                 ((not (critical-extensions-handled? (car path)))
-                  'unhandled-critical-extension)
-                 ;; TODO: check subtrees
-                 ((not (null? (cdr path)))
-                  ;; Prepare for the next certificate. (car path) is
-                  ;; now the root certificate or an intermediate.
-                  (let ((self-issued (self-issued? (car path)))
-                        (bc (basic-constraints (car path)))
-                        (ku (certificate-key-usage (car path))))
-                    (let ((ca? (car bc))
-                          (maxlen-constraint (cadr bc)))
-                      (cond ((and (not ca?) (not (cert=? root-cert (car path))))
-                             ;; Some root CAs don't have basic
-                             ;; constraints at all. Be forgiving to
-                             ;; them. But any CA not at the root will
-                             ;; need one.
-                             'intermediate-is-not-ca)
-                            ((and (not self-issued) (<= maxlen 0))
-                             'maximum-path-length-exceeded)
-                            ((and ku (not (memq 'keyCertSign ku)))
-                             'intermediate-without-keyCertSign)
-                            (else
-                             (lp (cdr path)
-                                 (min (if self-issued maxlen (- maxlen 1))
-                                      (or maxlen-constraint maxlen))
-                                 (car path)))))))
-                 ;; This is the last certificate in the path
-                 ((not (or (not common-name)
-                           (common-name-ok? (car path) common-name)
-                           (alternative-name-ok? (car path) common-name)))
-                  'bad-common-name)
-                 (else
-                  'ok)))))))
+       (guard (cnd
+               (else
+                ;; TODO: return better error messages when know error
+                ;; causes appear.
+                (display cnd (current-error-port))
+                (newline (current-error-port))
+                'internal-error))
+         (let ((root-cert (or root-cert
+                              (get-root-certificate
+                               (tbs-certificate-issuer
+                                (certificate-tbs-certificate (car path))))))
+               (time (or time (current-time))))
+           (let lp ((path path)
+                    (maxlen (length path))
+                    (signer root-cert))
+             (cond ((not signer)
+                    'root-certificate-not-found)
+                   ((not (signature-ok? (car path) signer))
+                    ;; TODO: fails when the root certificate signed
+                    ;; itself using md2WithRSAEncryption.
+                    'bad-signature)
+                   ((not (time-ok? (car path) time))
+                    'expired)
+                   ((revoked? (car path))
+                    'revoked)
+                   ((not (cross-signed? (car path) signer))
+                    'bad-issuer)
+                   ((not (critical-extensions-handled? (car path)))
+                    'unhandled-critical-extension)
+                   ;; TODO: check subtrees
+                   ((not (null? (cdr path)))
+                    ;; Prepare for the next certificate. (car path) is
+                    ;; now the root certificate or an intermediate.
+                    (let ((self-issued (self-issued? (car path)))
+                          (bc (basic-constraints (car path)))
+                          (ku (certificate-key-usage (car path))))
+                      (let ((ca? (car bc))
+                            (maxlen-constraint (cadr bc)))
+                        (cond ((and (not ca?) (not (cert=? root-cert (car path))))
+                               ;; Some root CAs don't have basic
+                               ;; constraints at all. Be forgiving to
+                               ;; them. But any CA not at the root will
+                               ;; need one.
+                               'intermediate-is-not-ca)
+                              ((and (not self-issued) (<= maxlen 0))
+                               'maximum-path-length-exceeded)
+                              ((and ku (not (memq 'keyCertSign ku)))
+                               'intermediate-without-keyCertSign)
+                              (else
+                               (lp (cdr path)
+                                   (min (if self-issued maxlen (- maxlen 1))
+                                        (or maxlen-constraint maxlen))
+                                   (car path)))))))
+                   ;; This is the last certificate in the path
+                   ((not (or (not common-name)
+                             (common-name-ok? (car path) common-name)
+                             (alternative-name-ok? (car path) common-name)))
+                    'bad-common-name)
+                   (else
+                    'ok))))))))
 
   ;; Verify a certificate chain. The chain is a list of certificates
   ;; where the first certificate is the end-entity that should
