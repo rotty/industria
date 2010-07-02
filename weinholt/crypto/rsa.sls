@@ -24,7 +24,7 @@
 
 ;; But look at RFC 2313, it's easier to read...
 
-(library (weinholt crypto rsa (0 0 20100627))
+(library (weinholt crypto rsa (0 0 20100702))
   (export rsa-public-key?
           rsa-public-key-from-bytevector
           rsa-public-key-length
@@ -95,7 +95,7 @@
     (let ((bitlen (rsa-public-key-length key)))
       (fxdiv (fxand (fx+ bitlen 7) -8) 8)))
 
-  (define (public<-private key)
+  (define (dsa-private->public key)
     (make-rsa-public-key (rsa-private-key-modulus key)
                          (rsa-private-key-public-exponent key)))
 
@@ -103,8 +103,9 @@
     (apply make-rsa-public-key (der:translate (der:decode bv)
                                               (RSAPublicKey))))
 
-  ;; TODO: RSA blinding (Boneh, D., Brumley, D., "Remote timing
-  ;; attacks are practical", USENIX Security Symposium 2003.)
+  ;; TODO: When doing private key operations, use RSA blinding (Boneh,
+  ;; D., Brumley, D., "Remote timing attacks are practical", USENIX
+  ;; Security Symposium 2003.)
   (define (rsa-encrypt plaintext key)
     (if (rsa-public-key? key)
         (expt-mod plaintext
@@ -131,6 +132,12 @@
       (bytevector-u8-set! eb 0 #x00)
       (bytevector-u8-set! eb 1 #x02)    ;public key operation
 
+      (unless (> (- end-of-PS 2) 8)
+        ;; Recommendation from RFC 3447 7.2: padding should be at
+        ;; least eight octets long.
+        (error 'rsa-pkcs1-encrypt
+               "The plaintext is too long for the key"))
+
       ;; Pad with random non-zero bytes
       (do ((i 2 (+ i 1)))
           ((= i end-of-PS))
@@ -152,16 +159,13 @@
     ;; Encrypt the signature with a public key. If it comes out
     ;; alright, the signature was signed with the corresponding
     ;; private key.
-    (let* ((sig (rsa-encrypt signature key))
-           (len (fxdiv (fxand -8 (fx+ 7 (bitwise-length sig)))
-                       8))
-           (bvsig (make-bytevector len)))
-      (bytevector-uint-set! bvsig 0 sig (endianness big) len)
+    (let ((bvsig (uint->bytevector (rsa-encrypt signature key))))
       (case (bytevector-u8-ref bvsig 0)
         ((#x01)
          (do ((i 1 (fx+ i 1)))
              ((fxzero? (bytevector-u8-ref bvsig i))
-              (subbytevector bvsig (fx+ i 1) len))
+              (subbytevector bvsig (fx+ i 1)
+                             (bytevector-length bvsig)))
            (unless (fx=? #xff (bytevector-u8-ref bvsig i))
              (error 'rsa-pkcs-decrypt-signature "bad signature"))))
         (else
@@ -173,7 +177,11 @@
     ;; private key. For X.509-certificates this means the signature
     ;; came from the issuer, but anyone can copy a decryptable
     ;; signature, so the message digest also has to be checked.
-    (der:translate (der:decode
-                    (rsa-pkcs1-decrypt-signature signature key))
-                   (DigestInfo))))
+    (let* ((bvsig (rsa-pkcs1-decrypt-signature signature key))
+           (dersig (der:decode bvsig)))
+      (unless (= (der:data-length dersig) (bytevector-length bvsig))
+        ;; Recommendation from RFC 5246 D.4.
+        (error 'rsa-pkcs1-decrypt-digest
+               "Bad signature: additional data after hash value"))
+      (der:translate dersig (DigestInfo)))))
 
