@@ -1,0 +1,110 @@
+#!/usr/bin/env scheme-script
+;; -*- mode: scheme; coding: utf-8 -*-
+;; Demo program to verify OpenPGP signatures
+;; Copyright © 2010 Göran Weinholt <goran@weinholt.se>
+;;
+;; This program is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+;;
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+;;
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#!r6rs
+
+(import (rnrs)
+        (only (srfi :13 strings) string-index-right)
+        (srfi :19 time)
+        (srfi :26 cut)
+        (srfi :98 os-environment-variables)
+        (weinholt crypto openpgp (1))
+        (xitomatl AS-match))
+
+(define (default-keyring)
+  (let ((fn (string-append (get-environment-variable "HOME") "/.gnupg/pubring.gpg")))
+    (if (file-exists? fn) fn "to use an empty one")))
+
+(define (checksig sigfile datafile keyfile)
+  (display (string-append
+            "Signature file: " sigfile "\n"
+            "Data file: " datafile "\n"
+            "Keyring file: " keyfile "\n\n"))
+  (display "Reading keyring...")
+  (let ((keyring
+         (if (file-exists? keyfile)
+             (call-with-port (open-file-input-port keyfile)
+               get-openpgp-keyring)
+             (make-eqv-hashtable))))
+    (newline)
+    ;; Verify all signatures in the sigfile
+    (let ((p (open-input-file sigfile))
+          (dp (open-file-input-port datafile)))
+      (let lp ()
+        (let ((sig (get-openpgp-detached-signature/ascii p)))
+          (cond ((eof-object? sig)
+                 (display "No more signatures.\n"))
+                (else
+                 (display "Verifying signature...\n")
+                 (set-port-position! dp 0)
+                 (let-values (((result key)
+                               (verify-openpgp-signature sig keyring dp)))
+                   (display (string-append "Signature made with "
+                                           (symbol->string (openpgp-signature-hash-algorithm sig))
+                                           " at time "
+                                           (date->string (openpgp-signature-creation-time sig)
+                                                         "~4")
+                                           "\nusing the "
+                                           (symbol->string (openpgp-signature-public-key-algorithm sig))
+                                           " key with ID "
+                                           (number->string (openpgp-signature-issuer sig) 16) ".\n"))
+                   (case result
+                     ((missing-key)
+                      (display
+                       (string-append
+                        "This key is not in the keyring. You could try this: \n"
+                        "gpg --keyserver subkeys.pgp.net --recv-key " (number->string key 16)
+                        "\n")))
+                     (else
+                      (display
+                       (if (eq? result 'good-signature)
+                           "\x1b;[1;32mThis is a good signature.\x1b;[0m\n"
+                           "\x1b;[1;31m*************** BAD SIGNATURE ***************\x1b;[0m\n"))
+                      ;; Now to check the key
+                      (display "Verifying key...\n")
+                      (display (string-append "Fingerprint: " (openpgp-public-key-fingerprint key)
+                                              "\n"))
+                      (display "TODO: verify self-signatures, expiry, revocation, user ids\n")
+                      (let ((key (hashtable-ref keyring (openpgp-public-key-id key) #f)))
+                        (for-each (lambda (x) (display x) (newline)) key))
+                      (newline))))
+                 (lp))))))))
+
+(match (command-line)
+  ((_ sigfile)
+   (checksig sigfile (cond ((string-index-right sigfile #\.)
+                            => (lambda (i) (substring sigfile 0 i)))
+                           (else
+                            (display "Can't guess the data filename.\n"
+                                     (current-error-port))
+                            (exit 1)))
+             (default-keyring)))
+  ((_ sigfile datafile)
+   (checksig sigfile datafile (default-keyring)))
+  ((_ sigfile datafile keyring)
+   (checksig sigfile datafile keyring))
+  ((name)
+   (display (string-append
+            "Usage: " name " signature-file [data-file] [keyring-file] ...\n\
+\n\
+Checks the detached OpenPGP signatures in SIGNATURE-FILE against
+the data in DATA-FILE. If DATA-FILE is not specified the default
+is to drop the last part of the SIGNATURE-FILE filename.
+If KEYRING-FILE file is not specified the default is
+" (default-keyring) ".\n")
+           (current-error-port))
+  (exit 1)))
