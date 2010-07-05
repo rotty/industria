@@ -24,12 +24,28 @@
 ;;      Shaw, R. Thayer. November 2007. (Format: TXT=203706 bytes) (Obsoletes
 ;;      RFC1991, RFC2440) (Updated by RFC5581) (Status: PROPOSED STANDARD)
 
-(library (weinholt crypto openpgp (0 0 20100703))
-  (export openpgp-keyring-from-file get-openpgp-keyring
+;; TODO: radix64 reader, not just base64
 
-          detached-openpgp-signature-from-file
+(library (weinholt crypto openpgp (1 0 20100705))
+  (export get-openpgp-keyring
+          get-openpgp-detached-signature/ascii
+          verify-openpgp-signature
+
+          openpgp-signature?
           openpgp-signature-issuer
-          verify-openpgp-signature)
+          (rename (openpgp-signature-pkalg
+                   openpgp-signature-public-key-algorithm)
+                  (openpgp-signature-halg
+                   openpgp-signature-hash-algorithm))
+          openpgp-signature-creation-time
+
+          openpgp-user-id?
+          openpgp-user-attribute?
+
+          openpgp-public-key?
+          openpgp-public-key-fingerprint
+          openpgp-public-key-id
+          )
   (import (rnrs)
           (srfi :19 time)
           (weinholt bytevectors)
@@ -80,7 +96,7 @@
   ;; 9        -- Symmetrically Encrypted Data Packet
   ;; 10       -- Marker Packet
   ;; 11       -- Literal Data Packet
-  ;; 12       -- Trust Packet
+  (define PACKET-TRUST 12)
   (define PACKET-USER-ID 13)
   (define PACKET-PUBLIC-SUBKEY 14)
   (define PACKET-USER-ATTRIBUTE 17)
@@ -123,7 +139,7 @@
 
   (define HASH-MD5 1)
   (define HASH-SHA-1 2)
-  (define HASH-RIPE-MD/160 3)
+  (define HASH-RIPE-MD160 3)
   (define HASH-SHA-256 8)
   (define HASH-SHA-384 9)
   (define HASH-SHA-512 10)
@@ -132,7 +148,7 @@
   (define (hash-algorithm id)
     (cond ((= id HASH-MD5) 'md5)
           ((= id HASH-SHA-1) 'sha-1)
-          ((= id HASH-RIPE-MD/160) 'ripe-md/160)
+          ((= id HASH-RIPE-MD160) 'ripe-md160)
           ((= id HASH-SHA-256) 'sha-256)
           ((= id HASH-SHA-384) 'sha-384)
           ((= id HASH-SHA-512) 'sha-512)
@@ -158,7 +174,6 @@
   ;;  6 = Regular Expression
   (define SUBPACKET-REVOCABLE 7)
   (define SUBPACKET-KEY-ETIME 9)
-  ;; 10 = Placeholder for backward compatibility
   (define SUBPACKET-PREFERRED-SYMMETRIC-ALGORITHMS 11)
   ;; 12 = Revocation Key
   (define SUBPACKET-ISSUER 16)
@@ -176,6 +191,22 @@
   ;; 31 = Signature Target
   (define SUBPACKET-EMBEDDED-SIGNATURE 32)
 
+  (define SIGNATURE-BINARY #x00)
+  (define SIGNATURE-TEXT #x01)
+  (define SIGNATURE-STANDALONE #x02)
+  (define SIGNATURE-GENERIC-CERT #x10)
+  (define SIGNATURE-PERSONA-CERT #x11)
+  (define SIGNATURE-CASUAL-CERT #x12)
+  (define SIGNATURE-POSITIVE-CERT #x13)
+  (define SIGNATURE-SUBKEY-BINDING #x18)
+  (define SIGNATURE-PRIMARY-KEY-BINDING #x19)
+  (define SIGNATURE-DIRECT #x1f)
+  (define SIGNATURE-KEY-REVOCATION #x20)
+  (define SIGNATURE-SUBKEY-REVOCATION #x28)
+  (define SIGNATURE-CERT-REVOCATION #x30)
+  (define SIGNATURE-TIMESTAMP #x40)
+  (define SIGNATURE-THIRD-PARTY #x50)
+  
 ;;; Parsing
 
   (define (get-mpi p)
@@ -221,6 +252,8 @@
          (get-signature pp))
         ((= tag PACKET-PUBLIC-KEY)
          (get-public-key pp #f))
+        ((= tag PACKET-TRUST)
+         'openpgp-trust)                ;non-standard format?
         ((= tag PACKET-USER-ID)
          (get-user-id pp len))
         ((= tag PACKET-PUBLIC-SUBKEY)
@@ -247,25 +280,36 @@
           ;; XXX: is the issuer always in the unhashed subpackets?
           (else #f)))
 
-  (define (get-detached-signature/ascii p)
-    ;; TODO: radix64 reader
+  (define (openpgp-signature-creation-time sig)
+    (cond ((assq 'signature-ctime (openpgp-signature-hashed-subpackets sig))
+           => (lambda (x) (unixtime (cdr x))))
+          ;; XXX: should be an error?
+          (else #f)))
+
+  ;; Read one ASCII armored detached OpenPGP signature
+  (define (get-openpgp-detached-signature/ascii p)
+    (define who 'get-openpgp-detached-signatures/ascii)
     (let-values (((type data) (get-delimited-base64 p)))
-      (unless (string=? type "PGP SIGNATURE")
-        (error 'get-detached-signature
-               "Expected PGP SIGNATURE" type))
-      (let ((pkt (get-packet (open-bytevector-input-port data))))
-        (unless (openpgp-signature? pkt)
-          (error 'get-detached-signature
-                 "Expected an OpenPGP signature" pkt))
-        pkt)))
+      (cond ((eof-object? data) data)
+            ((string=? type "PGP SIGNATURE")
+             (let ((pkt (get-packet (open-bytevector-input-port data))))
+               (unless (openpgp-signature? pkt)
+                 (error who "Expected an OpenPGP signature" pkt))
+               pkt))
+            (else
+             (error who "Expected PGP SIGNATURE" type)))))
 
   ;; FIXME: some easy way to see which key made the signature, so the
   ;; user id can be displayed. will probably change the return value.
-  (define (verify-openpgp-signature keyring sig dataport)
+  ;; returns (good-signature (#<openpgp-public-key etc etc> ...)
+  ;; returns (missing-key key-id)
+  ;; FIXME: let user check for revoked keys
+  (define (verify-openpgp-signature sig keyring dataport)
     (define who 'verify-openpgp-signature)
-    (define (check-digest key digest)
+    (define (check-digest pgpkey digest)
+      (print "Computed message digest: " digest)
       (let ((value (openpgp-signature-value sig))
-            (key (openpgp-public-key-value key)))
+            (key (openpgp-public-key-value pgpkey)))
         (cond ((dsa-public-key? key)
                (let ((digest
                       (subbytevector digest
@@ -274,34 +318,48 @@
                                            (dsa-public-key-q key))
                                           8))))
                  (if (apply dsa-verify-signature digest key value)
-                     'good-signature
-                     'bad-signature)))
+                     (values 'good-signature pgpkey)
+                     (values 'bad-signature pgpkey))))
               ((rsa-public-key? key)
                (let ((digest* (rsa-pkcs1-decrypt-digest value key)))
                  ;; TODO: check the signature algorithm, i.e. that the
                  ;; object ID in (car digest*) matches
                  ;; (openpgp-signature-halg sig).
+                 (print "Decrypted RSA signature: " digest*)
                  (if (bytevector=? (cadr digest*) digest)
-                     'good-signature
-                     'bad-signature)))
+                     (values 'good-signature pgpkey)
+                     (values 'bad-signature pgpkey))))
               (else
                (error who "Unimplemented public key algorithm"
                       key)))))
-    (define (verify key make-md md-update! md-finish! md->bytevector)
+    (define (verify pgpkey make-md md-update! md-finish! md->bytevector)
       (let ((md (make-md)))
-        ;; FIXME: check the signature type
-        ;; TODO: newline conversion for textual signatures
-        (let ((buf (make-bytevector (* 1024 16))))
-          (let lp ()
-            (unless (port-eof? dataport)
-              (let ((n (get-bytevector-n! dataport buf 0 (bytevector-length buf))))
-                (md-update! md buf 0 n)
-                (lp)))))
-        (md-update! md (openpgp-signature-append-data sig))
+        (let ((buf (make-bytevector (* 1024 16)))
+              (type (openpgp-signature-type sig)))
+          (cond
+            ((= type SIGNATURE-BINARY)
+             (let lp ()
+               (unless (port-eof? dataport)
+                 (let ((n (get-bytevector-n! dataport buf 0 (bytevector-length buf))))
+                   (md-update! md buf 0 n)
+                   (lp)))))
+            ((= type SIGNATURE-TEXT)
+             ;; TODO: newline conversion for textual signatures
+             (error who "TODO: canonical text document signature"))
+            (else
+             (print "Signature made using invalid signature type")
+             (values 'bad-signature pgpkey))))
+        (for-each (lambda (bv) (md-update! md bv))
+                  (openpgp-signature-append-data sig))
         (md-finish! md)
-        (check-digest key (md->bytevector md))))
+        (guard (cnd
+                (else
+                 (print "Error while verifying signature: " cnd)
+                 ;; Note: identical to the return values from
+                 ;; check-digest.
+                 (values 'bad-signature pgpkey)))
+          (check-digest pgpkey (md->bytevector md)))))
     (let ((issuer (openpgp-signature-issuer sig)))
-      ;; FIXME: check for revoked keys
       (cond ((hashtable-ref keyring issuer #f) =>
              (lambda (keydata)
                ;; Find the primary key or subkey that made the
@@ -313,29 +371,29 @@
                  (print "Signature made with key: " key)
                  (case (openpgp-signature-halg sig)
                    ((md5)
-                    (verify key make-md5 md5-update! md5-finish! md5->bytevector))
+                    (verify key make-md5 md5-update!
+                            md5-finish! md5->bytevector))
                    ((sha-1)
-                    (verify key make-sha-1 sha-1-update! sha-1-finish! sha-1->bytevector))
+                    (verify key make-sha-1 sha-1-update!
+                            sha-1-finish! sha-1->bytevector))
                    ((sha-256)
-                    (verify key make-sha-256 sha-256-update! sha-256-finish! sha-256->bytevector))
+                    (verify key make-sha-256 sha-256-update!
+                            sha-256-finish! sha-256->bytevector))
                    ((sha-384)
-                    (verify key make-sha-384 sha-384-update! sha-384-finish! sha-384->bytevector))
+                    (verify key make-sha-384 sha-384-update!
+                            sha-384-finish! sha-384->bytevector))
                    ((sha-512)
-                    (verify key make-sha-512 sha-512-update! sha-512-finish! sha-512->bytevector))
+                    (verify key make-sha-512 sha-512-update!
+                            sha-512-finish! sha-512->bytevector))
                    ((sha-224)
-                    (verify key make-sha-224 sha-224-update! sha-224-finish! sha-224->bytevector))
+                    (verify key make-sha-224 sha-224-update!
+                            sha-224-finish! sha-224->bytevector))
                    (else
                     ;; Only missing ripe-md160
                     (error who "Unimplemented signature algorithm"
                            (openpgp-signature-halg sig)))))))
             (else
-             (list 'missing-key issuer)))))
-
-  (define (detached-openpgp-signature-from-file filename)
-    (call-with-port (open-input-file filename)
-      (lambda (p)
-        ;; TODO: detect binary/ascii armor
-        (get-detached-signature/ascii p))))
+             (values 'missing-key issuer)))))
 
   (define (get-signature p)
     (define who 'get-signature)
@@ -366,7 +424,7 @@
              (make-openpgp-signature version type
                                      (public-key-algorithm pkalg)
                                      (hash-algorithm halg) hashl16
-                                     (pack "!uCL" type ctime)
+                                     (list (pack "!uCL" type ctime))
                                      ;; Emulate hashed subpackets
                                      (list (cons 'signature-ctime ctime))
                                      ;; Unhashed subpackets
@@ -384,16 +442,23 @@
            (let ((value (get-sig p pkalg)))
              (unless (port-eof? p)
                (print "Trailing data in signature: " (get-bytevector-all p)))
-             (make-openpgp-signature version type
-                                     (public-key-algorithm pkalg)
-                                     (hash-algorithm halg) hashl16
-                                     (bytevector-append
-                                      (pack "!4CS" version type pkalg halg
-                                            (bytevector-length hashed-subpackets))
-                                      hashed-subpackets)
-                                     (parse-subpackets hashed-subpackets)
-                                     (parse-subpackets unhashed-subpackets)
-                                     value))))
+             (let ((append-data
+                    (list
+                     (pack "!4CS" version type pkalg halg
+                           (bytevector-length hashed-subpackets))
+                     hashed-subpackets
+                     ;; http://www.rfc-editor.org/errata_search.php?rfc=4880
+                     ;; Errata ID: 2214.
+                     (pack "!uCCL" #x04 #xff
+                           (+ (format-size "!4CS")
+                              (bytevector-length hashed-subpackets))))))
+               (make-openpgp-signature version type
+                                       (public-key-algorithm pkalg)
+                                       (hash-algorithm halg) hashl16
+                                       append-data
+                                       (parse-subpackets hashed-subpackets)
+                                       (parse-subpackets unhashed-subpackets)
+                                       value)))))
         (else
          (error who "Unsupported signature version" version)))))
 
@@ -543,11 +608,14 @@
 
 ;;; User IDs and User attributes
 
-  (define-record-type openpgp-user-id (fields value unparsed))
+  (define-record-type openpgp-user-id (fields unparsed))
+
+  (define (openpgp-user-id-value x)
+    (utf8->string (openpgp-user-id-unparsed x)))
 
   (define (get-user-id p len)
-    (let ((bv (get-bytevector-n p len)))
-      (make-openpgp-user-id (utf8->string bv) bv)))
+    ;; utf8 conversion is delayed
+    (make-openpgp-user-id (get-bytevector-n p len)))
 
   (define-record-type openpgp-user-attribute (fields unparsed))
 
