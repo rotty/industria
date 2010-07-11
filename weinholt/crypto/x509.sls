@@ -20,8 +20,12 @@
 ;; The decoding routines are implemented manually, but should maybe be
 ;; automatically generated from the ASN.1 types in the RFC.
 
-(library (weinholt crypto x509 (0 0 20100627))
-  (export certificate-from-bytevector
+;; A little on how people implement X.509 differently:
+;; http://www.cs.auckland.ac.nz/~pgut001/pubs/x509guide.txt
+
+(library (weinholt crypto x509 (0 0 20100705))
+  (export certificate?
+          certificate-from-bytevector
           certificate-public-key
           decipher-certificate-signature
           validate-certificate-path
@@ -53,7 +57,7 @@
   ;; there's no standard way to find the path separator.
   (define CA-path (make-parameter "/etc/ssl/certs/"))
   (define CA-file (make-parameter "/etc/ssl/certs/ca-certificates.crt"))
-  (define CA-procedure (make-parameter (lambda (issuer) #f)))
+  (define CA-procedure (make-parameter (lambda (issuer . _) #f)))
 
 ;;; The Certificate ASN.1 type from the RFC (parsed by hand).
   (define (RelativeDistinguishedName)
