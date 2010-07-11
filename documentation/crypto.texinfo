@@ -28,17 +28,20 @@ or the FDA and quite likely aren't allowed for government work.
 @cindex security, warning
 
 @menu
-* crypto aes::         Advanced Encryption Standard
+* crypto aes::         Advanced Encryption Standard (AES)
 * crypto arcfour::     ARCFOUR stream cipher
 * crypto blowfish::    The Blowfish cipher
-* crypto crc::         Cyclic Redundancy Codes
-* crypto des::         Data Encryption Standard
-* crypto dsa::         Digital Signature Algorithm
+* crypto crc::         Cyclic Redundancy Codes (CRC)
+* crypto des::         Data Encryption Standard (DES, 3DES)
+* crypto dsa::         Digital Signature Algorithm (DSA)
 * crypto entropy::     Entropy and randomness
-* crypto md5::         Message-Digest algorithm 5
+* crypto md5::         Message-Digest algorithm 5 (MD5)
+* crypto openpgp::     OpenPGP signature verification
 * crypto password::    Password hashing
-* crypto sha-1::       Secure Hash Algorithm 1
-* crypto sha-2::       Secure Hash Algorithm 2
+* crypto rsa::         RSA public key encryption and signatures
+* crypto sha-1::       Secure Hash Algorithm 1 (SHA-1)
+* crypto sha-2::       Secure Hash Algorithm 2 (SHA-256, SHA-512, etc)
+* crypto x509::        X.509 Public-Key Infrastructure
 @end menu
 
 @c ======================================================================
@@ -92,8 +95,8 @@ should first be reversed with @code{reverse-aes-schedule}.
 (import (weinholt crypto aes))
 (let ((buf (bytevector-copy #vu8(116 7 242 187 114 235 130 138
                                  166 39 24 204 117 224 5 8)))
-      (sched (reverse-aes-schedule 
-              (expand-aes-key 
+      (sched (reverse-aes-schedule
+              (expand-aes-key
                (string->utf8 "super-secret-key")))))
   (aes-decrypt! buf 0 buf 0 sched)
   (utf8->string buf))
@@ -172,7 +175,7 @@ XORs them with bytes from the @var{keystream}, and writes them to
 
 @example
 (import (weinholt crypto arcfour))
-(let ((buf #vu8(90 60 247 233 181 200 38 52 121 82 133 
+(let ((buf #vu8(90 60 247 233 181 200 38 52 121 82 133
                 98 244 159 12 97 90 157 43 183 249 170
                 73 244 126))
       (keystream (expand-arcfour-key
@@ -700,6 +703,72 @@ Version history:
 @end itemize
 
 @c ======================================================================
+@node crypto openpgp
+@subsection OpenPGP signature verification
+The @code{(weinholt crypto openpgp)} library provides procedures for
+reading OpenPGP keyrings and verifying signatures. OpenPGP signatures
+can be created with e.g.@: GNU Private Guard (GnuPG) and are often
+used to verify the integrity of software releases.
+
+Version 4 keys and version 3/4 signatures are supported. The
+implemented public key algorithms are RSA and DSA, and it verifies
+signatures made using the message digest algorithms MD5, SHA-1,
+SHA-224, SHA-256, SHA-384 and SHA-512 (all the standard algorithms
+except RIPE-MD160).
+
+An OpenPGP key is actually a list of OpenPGP packets with a certain
+structure: first is the primary key (e.g. an RSA or DSA key), then
+comes a number of user IDs, attributes, signatures and also subkeys
+(which are just like primary keys, except marked as subkeys).
+
+@deffn Procedure get-openpgp-keyring p
+Reads a keyring from the binary input port @var{p}. Returns a
+hashtable where all primary keys and subkeys are indexed by their key
+ID (an integer). The values in the hashtable are lists that contain
+all OpenPGP packets associated with each key. No effort at all is made
+to verify that keys have valid signatures.
+
+Warning: this can take a while if the keyring is very big.
+@end deffn
+
+@deffn Procedure get-openpgp-detached-signature/ascii p
+Reads a detached OpenPGP signature from the textual input port
+@var{p}. Returns either an OpenPGP signature object or the end of file
+object.
+
+These signatures can be created with e.g.@: @code{gpg -a --detach-sign filename}.
+@end deffn
+
+@deffn Procedure verify-openpgp-signature sig keyring p
+TODO: document.
+@end deffn
+
+@deffn Procedure openpgp-signature? obj
+True if @var{obj} is an OpenPGP signature object. Such objects are
+read with @code{get-openpgp-detached-signature/ascii} and are also
+contained in keyring entries.
+@end deffn
+
+@deffn Procedure openpgp-signature-issuer sig
+TODO: document.
+@end deffn
+
+@deffn Procedure openpgp-public-key? obj
+True if @var{obj} is an OpenPGP primary key or subkey.
+@end deffn
+
+@deffn Procedure openpgp-user-id? obj
+True if @var{obj} is an OpenPGP user id.
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
+@end itemize
+
+@c ======================================================================
 @node crypto password
 @subsection Password hashing
 The procedure provided by @code{(weinholt crypto password)} is the
@@ -753,6 +822,80 @@ Version history:
 @end itemize
 
 @c ======================================================================
+@node crypto rsa
+@subsection RSA public key encryption and signatures
+The @code{(weinholt crypto rsa)} library implements the Rivest, Shamir
+and Adleman (RSA) algorithm and a few helpers.
+
+Currently only public key operations are provided. This is the bare
+minimum required for the TLS client library.
+
+@deffn Procedure make-rsa-public-key n e
+Returns an RSA public key object containing the modulus @var{n} and
+the public exponent @var{e}.
+@end deffn
+
+@deffn Procedure rsa-public-key? obj
+True if @var{obj} is a public RSA key.
+@end deffn
+
+@deffn Procedure rsa-public-key-from-bytevector bv
+Parses the bytevector @var{bv} as an ASN.1 DER encoded public RSA key.
+The return value can be used with the other procedures in this
+library.
+@end deffn
+
+@deffn Procedure rsa-public-key-length key
+Returns the number of bits in the modulus of @var{key}. This is also
+the maximum length of data that can be encrypted or decrypted with the
+key.
+@end deffn
+
+@deffn Procedure rsa-public-key-byte-length key
+Returns the number of 8-bit bytes required to store the modulus of
+@var{key}.
+@end deffn
+
+@deffn Procedure rsa-encrypt plaintext key
+Encrypts the @var{plaintext} integer using the @var{key}, which is
+either a public or private RSA key.
+@end deffn
+
+@c @deffn Procedure rsa-decrypt
+@c @end deffn
+It is often not enough to just use the plain encryption and decryption
+procedures, a protocol for what to put in the plaintext should also be
+used. PKCS #1 (RFC@: 3447) is a standard for how to perform RSA
+encryption and signing with padding. New protocols should use one of
+the other protocols from the RFC.
+
+@deffn Procedure rsa-pkcs1-encrypt plaintext key
+Pads and encrypts the @var{plaintext} bytevector using @var{key}, a
+public RSA key. The return value is an integer. (The corresponding
+-decrypt procedure is missing).
+@end deffn
+
+@deffn Procedure rsa-pkcs1-decrypt-signature signature key
+Decrypts the signature (a bytevector) contained in the @var{signature}
+integer by using the @var{key}. The signature initially contains PKCS
+#1 padding, but this is removed.
+@end deffn
+
+@deffn Procedure rsa-pkcs1-decrypt-digest signature key
+This performs the same operation as
+@code{rsa-pkcs1-decrypt-signature}, except it then treats the
+decrypted signature as a DER encoded DigestInfo. The return value is a
+list containing a digest algorithm specifier and a digest.
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(0 0)} -- Initial version.
+@end itemize
+
+@c ======================================================================
 @node crypto sha-1
 @subsection Secure Hash Algorithm 1
 The interface provided by @code{(weinholt crypto sha-1)} is identical
@@ -760,7 +903,7 @@ to the one provided by the MD5 library, except every procedure is
 prefixed by @code{sha-1} instead of @code{md5}. @xref{crypto md5}.
 
 SHA-1 also has a maximum message size of @math{2^{64}-1} bits, but
-the message digests are 160 bits instead of 128.
+the message digests are 160 bits instead of MD5's 128.
 @cindex SHA-1
 
 @noindent
@@ -794,6 +937,125 @@ Version history:
 @end itemize
 
 @c ======================================================================
-@c @node crypto x509
-@c @subsection X.509 Public-Key Infrastructure
-@c TODO:
+@node crypto x509
+@subsection X.509 Public-Key Infrastructure
+The @code{(weinholt crypto x509)} library implements parts of ITU-T's
+X.509 standard for public-key infrastructure.
+
+An X.509 certificate is a data structure that contains a public RSA or
+DSA key and some identifying information. There is a @emph{subject}
+and an @emph{issuer} (and lots of details). The subject specifies who
+the certificate belongs to, and the issuer specifies who signed it.
+Certificate path validation is used to get from a trusted issuer to
+the subject, often via several intermediates.
+@cindex X.509 certificate
+
+X.509 certificates are used in many places, e.g.@: TLS, S/MIME email
+and IPsec.
+
+@deffn Procedure certificate? obj
+True if @var{obj} is an X.509 certificate.
+@end deffn
+
+@deffn Procedure certificate-from-bytevector bv [start end]
+Reads an X.509 certificate from the bytevector @var{bv}. The
+certificate is in the ASN.1 DER format customarily used for X.509
+certificates. For certificates in PEM format, first read them with
+@code{get-delimited-base64}. @xref{text base64}.
+@end deffn
+
+@deffn Procedure certificate-public-key certificate
+Returns the public key contained in the @var{certificate}. The return
+value's type is either an RSA or a DSA public key. @xref{crypto dsa}.
+@xref{crypto rsa}.
+@end deffn
+
+@deffn Procedure validate-certificate-path path [common-name time CA-cert]
+Returns @code{ok} if the certificates in the @var{path} list form a
+valid certificate path. A valid certificate path begins with a trusted
+CA certificate and ends with an end entity's certificate. Each
+certificate in the chain signs the next certificate. This is intended
+to form a chain of trust from a certificate you already trust (the CA
+certificate) to a new certificate, the end entity's certificate.
+
+Optionally a @var{common-name} string can be given. This is normally a
+good idea. If you've tried to connect to a service at the domain name
+example.com, you might like to know that the certificate it presents
+actually belongs to example.com. Both the common name and
+subjectAltName fields of the certificate are checked. Currently only
+tested with domain names.
+
+An SRFI-19 @var{time} can also optionally be given, in which case it
+is used instead of the system's current time.
+
+If the optional @var{CA-cert} argument is given it is a trusted
+certificate that will be used to validate the start of the path. If
+this argument is given then no other trusted certificates will be
+tried.
+@end deffn
+
+@deffn Parameter CA-path
+@end deffn
+@deffn Parameter CA-file
+@end deffn
+@deffn Parameter CA-procedure
+These SRFI-39 parameters can be used to provide the
+@code{validate-certificate-path} procedure with trusted Certificate
+Authority (CA) certificates, also known as root certificates. It is
+beyond the scope of this library collection to provide you with
+trusted certificates. Many operating systems have such collections,
+e.g.@: Debian's ca-certificates package. Technically, a CA certificate
+is a self-issued certificate with correctly set ``basic constraints''
+and ``key usage'' attributes.
+@cindex CA certificate
+@cindex trusted certificate
+
+The @code{CA-path} parameter should be the name (ending in the path
+separator character, if any) of a directory containing files named by
+OpenSSL's c_rehash program. The files contain PEM encoded CA
+certificates. The filenames are partially a hash which also can be
+retrieved from the @code{name-hash} value in the issuer/subject
+alists. Default: @code{"/etc/ssl/certs/"}.
+
+The @code{CA-file} parameter is not yet implemented. In the future
+this will be the name of a file which contains trusted certificates.
+Default: @code{"/etc/ssl/certs/ca-certificates.crt"}.
+
+The @code{CA-procedure} parameter is a procedure which takes a single
+argument: an issuer alist. If you have the requested certificate,
+return it. Otherwise return @code{#f}. For forward compatibility the
+procedure should accept any number of arguments.
+Default: @code{(lambda (issuer . _) #f)}
+@end deffn
+
+The following part of the library is for more advanced uses.
+
+@deffn Procedure certificate-key-usage certificate
+Returns the keyUsage extension data from @var{certificate}. If the
+extension is absent then the return value is @code{#f}. Otherwise it
+is a list where the possible entries are: @code{digitalSignature},
+@code{nonRepudiation}, @code{keyEncipherment},
+@code{dataEncipherment}, @code{keyAgreement}, @code{keyCertSign},
+@code{cRLSign}, @code{encipherOnly}, and @code{decipherOnly}. See
+RFC@: 5280 for an explanation of their meaning. If you are
+implementing a protocol where keyUsage is important, the specification
+will probably mention it.
+@end deffn
+
+@deffn Procedure certificate-tbs-data certificate
+Returns the To Be Signed (TBS) part of @var{certificate} as a DER
+encoded bytevector. Except for the certificate's signature, the whole
+certificate is contained in the TBS data.
+@end deffn
+
+@deffn Procedure decipher-certificate-signature subject-cert issuer-cert
+Uses the public key of @var{issuer-cert} to decipher the signature on
+@var{subject-cert}.
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(0 0)} -- Initial version.
+@end itemize
