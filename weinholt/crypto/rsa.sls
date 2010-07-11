@@ -24,8 +24,9 @@
 
 ;; But look at RFC 2313, it's easier to read...
 
-(library (weinholt crypto rsa (0 0 20100702))
-  (export rsa-public-key?
+(library (weinholt crypto rsa (0 0 20100703))
+  (export make-rsa-public-key
+          rsa-public-key?
           rsa-public-key-from-bytevector
           rsa-public-key-length
           rsa-public-key-byte-length
