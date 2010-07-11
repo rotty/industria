@@ -38,7 +38,7 @@
 ;; and send all your replies as NOTICEs. IRC bots can get into wars
 ;; with each other if they send PRIVMSGs.
 
-(library (weinholt net irc (2 1 20100608))
+(library (weinholt net irc (2 1 20100711))
   (export irc-format-condition? irc-parse-condition?
           parse-message parse-message-bytevector
           format-message-raw format-message-and-verify
@@ -93,7 +93,17 @@
                          "Parameters can be bytevectors, strings, numbers or symbols."
                          x))))
 
+  (define (parse-cmd who cmd)
+    (cond ((char-numeric? (string-ref cmd 0))
+           (unless (and (= (string-length cmd) 3)
+                        (for-all char-numeric? (string->list cmd)))
+             (parse-error who "Malformed numerical command" cmd))
+           (string->number cmd))
+          (else
+           (string->symbol cmd))))
+
 ;;; Parsing code
+
 
   ;; (parse-message ":irc.example.net PONG irc.example.net :irc.example.net")
   ;; => "irc.example.net"
@@ -119,52 +129,49 @@
   ;; or a symbol.
   (define parse-message
     (case-lambda
+      ((msg)
+       (parse-message msg #f))
       ((msg remote-server)
+       (define who 'parse-message)
        (let-values (((prefix start)
                      (if (string-index msg #\: 0 1)
                          (let ((idx (string-index msg #\space 1)))
                            (values (substring msg 1 idx)
                                    (+ idx 1)))
                          (values remote-server 0))))
-         (define (args-done args)
+         (define (skip-space msg i)
+           (if (or (>= i (string-length msg))
+                   (not (char=? #\space (string-ref msg i))))
+               i
+               (skip-space msg (+ i 1))))
+         (define (return args)
            (let* ((args (reverse args))
                   (cmd (car args)))
-             ;; Ignore this error, because e.g. Dancer ircd sends more parameters in ISUPPORT.
+             ;; Ignore this error, because some ircds sends more parameters in ISUPPORT.
              ;; (when (> (length (cdr args)) 15)
              ;;   (parse-error 'parse-message
              ;;                "Too many parameters"
              ;;                prefix cmd args))
-             (values prefix
-                     (cond ((char-numeric? (string-ref cmd 0))
-                            (unless (and (= (string-length cmd) 3)
-                                         (for-all char-numeric? (string->list cmd)))
-                              (parse-error 'parse-message
-                                           "Malformed numerical command"
-                                           prefix args))
-                            (string->number cmd))
-                           (else
-                            (string->symbol cmd)))
-                     (cdr args))))
-         (let lp ((i start) (tokens '()))
-           (let ((start i))
-             (let lpc ((end i))
-               (cond ((= end (string-length msg))
-                      (args-done (cons (substring msg start end) tokens)))
-                     ((and (char=? #\space (string-ref msg end))
-                           (< (+ 1 end) (string-length msg))
-                           (char=? #\: (string-ref msg (+ 1 end))))
-                      ;; If there's a " :" then what's behind that is the last param
-                      (args-done (cons (substring msg (+ 2 end) (string-length msg))
-                                       (cons (substring msg start end)
-                                             tokens))))
-                     ((char=? #\space (string-ref msg end))
-                      (lp (+ end 1) (cons (substring msg start end) tokens)))
-                     (else
-                      (lpc (+ end 1)))))))))
-      ((msg)
-       (parse-message msg #f))))
+             (values prefix (parse-cmd who cmd) (cdr args))))
+         (let loop ((start start)
+                    (tokens '()))
+           (cond ((= start (string-length msg))
+                  (return tokens))
+                 ((char=? #\: (string-ref msg start))
+                  ;; Everything behind : is the last parameter
+                  (return
+                   (cons (substring msg (+ start 1) (string-length msg))
+                         tokens)))
+                 ((string-index msg #\space start)
+                  => (lambda (end)
+                       (loop (skip-space msg end)
+                             (cons (substring msg start end) tokens))))
+                 (else
+                  (return
+                   (cons (substring msg start (string-length msg))
+                         tokens)))))))))
 
-  ;; The parse-mssage-bytevector function reads an IRC message from
+  ;; The parse-message-bytevector function reads an IRC message from
   ;; the given bytevector and only within the given range. Use this
   ;; function if you don't want to transcode messages from latin-1 or
   ;; utf-8. The return values are the same as for parse-message, but
@@ -175,7 +182,14 @@
   ;; different encodings.
   (define parse-message-bytevector
     (case-lambda
+      ((msg)
+       (parse-message-bytevector msg 0 (bytevector-length msg) #f))
+      ((msg bvstart)
+       (parse-message-bytevector msg bvstart (bytevector-length msg) #f))
+      ((msg bvstart bvend)
+       (parse-message-bytevector msg bvstart bvend #f))
       ((msg bvstart bvend remote-server)
+       (define who 'parse-message-binary)
        (let-values (((prefix start)
                      (if (bytevector-u8-index msg (char->integer #\:)
                                               bvstart (min (+ bvstart 1) bvend))
@@ -184,7 +198,12 @@
                            (values (subbytevector msg (+ bvstart 1) idx)
                                    (+ idx 1)))
                          (values remote-server bvstart))))
-         (define (args-done args)
+         (define (skip-space msg i)
+           (if (or (>= i bvend)
+                   (not (= (char->integer #\space) (bytevector-u8-ref msg i))))
+               i
+               (skip-space msg (+ i 1))))
+         (define (return args)
            (let* ((args (reverse args))
                   (cmd (ascii->string (car args))))
              ;; (when (> (length (cdr args)) 15)
@@ -192,39 +211,25 @@
              ;;                "Too many parameters"
              ;;                prefix cmd args))
              (values (if (bytevector? prefix) (ascii->string prefix) prefix)
-                     (cond ((char-numeric? (string-ref cmd 0))
-                            (unless (and (= (string-length cmd) 3)
-                                         (for-all char-numeric? (string->list cmd)))
-                              (parse-error 'parse-message-binary
-                                           "Malformed numerical command"
-                                           prefix args))
-                            (string->number cmd))
-                           (else
-                            (string->symbol cmd)))
+                     (parse-cmd who cmd)
                      (cdr args))))
-         (let lp ((i start) (tokens '()))
-           (let ((start i))
-             (let lpc ((end i))
-               (cond ((= end bvend)
-                      (args-done (cons (subbytevector msg start end) tokens)))
-                     ((and (= (char->integer #\space) (bytevector-u8-ref msg end))
-                           (< (+ 1 end) bvend)
-                           (= (char->integer #\:) (bytevector-u8-ref msg (+ 1 end))))
-                      ;; If there's a " :" then what's behind that is the last param
-                      (args-done (cons (subbytevector msg (+ 2 end) bvend)
-                                       (cons (subbytevector msg start end)
-                                             tokens))))
-                     ((= (char->integer #\space) (bytevector-u8-ref msg end))
-                      (lp (+ end 1) (cons (subbytevector msg start end) tokens)))
-                     (else
-                      (lpc (+ end 1)))))))))
-      ((msg bvstart bvend)
-       (parse-message-bytevector msg bvstart bvend #f))
-      ((msg bvstart)
-       (parse-message-bytevector msg bvstart (bytevector-length msg) #f))
-      ((msg)
-       (parse-message-bytevector msg 0 (bytevector-length msg) #f))))
-
+         (let loop ((start start)
+                    (tokens '()))
+           (cond ((= start bvend)
+                  (return tokens))
+                 ((= (char->integer #\:) (bytevector-u8-ref msg start))
+                  ;; Everything behind : is the last parameter
+                  (return
+                   (cons (subbytevector msg (+ start 1) bvend)
+                         tokens)))
+                 ((bytevector-u8-index msg (char->integer #\space) start)
+                  => (lambda (end)
+                       (loop (skip-space msg end)
+                             (cons (subbytevector msg start end) tokens))))
+                 (else
+                  (return
+                   (cons (subbytevector msg start bvend)
+                         tokens)))))))))
 
 ;;; Formatting
 
@@ -282,7 +287,8 @@
                ;; then prefix the whole parameter with a colon.
                (put-u8 port (char->integer #\space))
                (let ((b (parameter->bytevector (car p) t)))
-                 (when (bytevector-u8-index b (char->integer #\space))
+                 (when (or (bytevector-u8-index b (char->integer #\space))
+                           (zero? (bytevector-length b)))
                    (put-u8 port (char->integer #\:)))
                  (put-bytevector port b)))
               (else
@@ -339,22 +345,31 @@
                 (put-bytevector port bv)
                 (format-error 'format-message-and-verify
                               "Malformed message"
-                              prefix cmd parameters)))))))
+                              'wanted prefix cmd parameters
+                              'got prefix* cmd* parameters*)))))))
 
 
   ;; format-message-with-whitewash replaces carriage return and
   ;; newlines in the parameters. Hopefully you will make sure yourself
-  ;; that the prefix, the command all but last the parameter is sane.
+  ;; that the prefix, the command and all but the last parameter are
+  ;; sane.
 
-  ;; (call-with-values open-bytevector-output-port
-  ;;   (lambda (port extract)
-  ;;     (format-message-with-whitewash port (utf-8-codec)
-  ;;                                    #f 'NOTICE "#abusers"
-  ;;                                    "DrAbuse: your answer is: 123\r\nJOIN 0")
-  ;;     (bytevector->string (extract) (make-transcoder (utf-8-codec)))))
+  ;; (utf8->string
+  ;;  (call-with-bytevector-output-port
+  ;;    (lambda (port)
+  ;;      (format-message-with-whitewash port (utf-8-codec)
+  ;;                                     #f 'NOTICE "#abusers"
+  ;;                                     "DrAbuse: your answer is: 123\r\nJOIN 0"))))
 
   ;; => "NOTICE #abusers :DrAbuse: your answer is: 123  JOIN 0\r\n"
   (define (format-message-with-whitewash port codec prefix cmd . parameters)
+    (define (wash bv)
+      (call-with-bytevector-output-port
+        (lambda (p)
+          (do ((i 0 (fx+ i 1)))
+              ((= i (bytevector-length bv)))
+            (let ((b (bytevector-u8-ref bv i)))
+              (put-u8 p (if (memv b '(#x0a #x0d #x00)) #x20 b)))))))
     (let ((t (make-transcoder codec)))
       (apply format-message-raw port codec prefix cmd
              (let lp ((p parameters)
@@ -362,15 +377,9 @@
                (cond ((null? p)
                       (reverse l))
                      ((null? (cdr p))
-                      (let ((param (parameter->bytevector (car p) t)))
-                        (lp (cdr p)
-                            (cons (u8-list->bytevector
-                                   (map (lambda (b)
-                                          (if (memv b '(#x0a #x0d #x00))
-                                              #x20
-                                              b))
-                                        (bytevector->u8-list param)))
-                                  l))))
+                      (lp (cdr p)
+                          (cons (wash (parameter->bytevector (car p) t))
+                                l)))
                      (else
                       (lp (cdr p) (cons (car p) l))))))))
 
@@ -520,7 +529,7 @@
                (not (char=? (char-ascii-downcase (string-ref pattern (- plen 1)))
                             (char-ascii-downcase (string-ref input (- ilen 1))))))
           #f                            ;prune
-          (avancez pattern input plen ilen))))       
+          (avancez pattern input plen ilen))))
 
   ;; http://www.irc.org/tech_docs/005.html
 
