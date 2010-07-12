@@ -38,7 +38,7 @@
 ;; and send all your replies as NOTICEs. IRC bots can get into wars
 ;; with each other if they send PRIVMSGs.
 
-(library (weinholt net irc (2 1 20100711))
+(library (weinholt net irc (2 2 20100712))
   (export irc-format-condition? irc-parse-condition?
           parse-message parse-message-bytevector
           format-message-raw format-message-and-verify
@@ -46,9 +46,10 @@
           extended-prefix? prefix-split prefix-nick
           parse-isupport isupport-defaults ctcp-message?
           string-irc=? string-upcase-irc string-downcase-irc
-          irc-match?)
+          irc-match? parse-channel-mode)
   (import (rnrs)
-          (only (srfi :1 lists) make-list drop-right append-map)
+          (only (srfi :1 lists) make-list drop-right append-map
+                map-in-order)
           (only (srfi :13 strings) string-index string-map)
           (weinholt bytevectors)
           (weinholt text strings))
@@ -609,12 +610,50 @@
        "CHANMODES=beIqd,k,lfJ,imnpst"   ;nicked from irssi
        "are the defaults")))
 
-  ;; TODO: wildcard expression matcher
-
-  ;; TODO: assistance with conforming to the maximum message length
-
-  ;; TODO: parse channel modes according to CHANMODES and PREFIX
-
+  ;; Parser for channel MODE commands. Please note that ircds normally
+  ;; filter the changes so that multiple conflicting changes are
+  ;; replaced with the first or the last one. Some ircds allow multiple
+  ;; conflicting changes of the prefix/address types.
+  (define (parse-channel-mode PREFIX CHANMODES modes)
+    (define (type char)
+      ;; address: list management (missing parameter is a query);
+      ;; always: always has a parameter; only: only when being set;
+      ;; never: never has a parameter.
+      (cond ((eqv? char #\+) '+)
+            ((eqv? char #\-) '-)
+            ((assv char PREFIX) 'prefix)
+            ((assv char CHANMODES) => cdr)
+            (else 'never)))
+    (define (get-param)
+      (and (not (null? modes))
+           (let ((param (car modes)))
+             (set! modes (cdr modes))
+             param)))
+    (define modifier '+)
+    (define (parse-char c)
+      (case (type c)
+        ((+) (set! modifier '+) #f)
+        ((-) (set! modifier '-) #f)
+        ((never)
+         (list modifier c 'channel))
+        ((only)
+         (list modifier c (if (eqv? modifier '+) (get-param) #f)))
+        ((always)
+         (list modifier c (get-param)))
+        ((address prefix)
+         (cond ((get-param) => (lambda (p) (list modifier c p)))
+               ((eq? (type c) 'prefix) #f)
+               (else (list '? c 'channel))))
+        (else #f)))
+    (let lp ((ret '()))
+      (cond ((get-param) =>
+             (lambda (modes)
+               (lp (append ret
+                           (filter list?
+                                   (map-in-order parse-char
+                                                 (string->list modes)))))))
+            (else ret))))
+  
 ;;; Client-To-Client Protocol
 
   ;; Btw, nobody seems to support the full feature set of CTCP. A

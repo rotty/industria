@@ -256,6 +256,32 @@ characters can be escaped with @code{#\\}.
 @end example
 @end deffn
 
+@deffn Procedure parse-channel-mode prefix chanmodes mode-list
+Uses the @code{ISUPPORT} data in @var{prefix} and @var{chanmodes} to
+parse a @code{MODE} command for a channel. The target is not included
+in the @var{mode-list}. To keep track of changes to who is op'd and
+voice'd (and half-op'd) you can use this procedure together with the
+server's @code{ISUPPORT PREFIX} data.
+
+@example
+(parse-channel-mode (cdr (assq 'PREFIX (isupport-defaults)))
+                    (cdr (assq 'CHANMODES (isupport-defaults)))
+                    '("+o-o+e-e+l-l+km+-be"
+                      "op" "deop" "ex" "unex" 
+                      "50" "key" "unban"))
+@result{}
+((+ #\o "op")
+ (- #\o "deop")
+ (+ #\e "ex")
+ (- #\e "unex")
+ (+ #\l "50")
+ (- #\l #f)
+ (+ #\k "key")
+ (+ #\m channel)
+ (- #\b "unban")
+ (? #\e channel))
+@end example
+@end deffn
 
 @noindent
 Version history:
@@ -269,6 +295,10 @@ parameter. Added @code{string-upcase-irc}, @code{string-downcase-irc},
 @code{parse-isupport}, @code{isupport-defaults} and @code{ctcp-message?}.
 @item
 @code{(2 1)} -- Added @code{irc-match?}.
+@item
+@code{(2 2)} -- Added @code{parse-channel-mode} and fixed handling of
+intra-word whitespace in the parser and empty parameters in the
+formatter.
 @end itemize
 
 

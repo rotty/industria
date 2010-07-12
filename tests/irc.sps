@@ -118,5 +118,34 @@
      (bytevector->string (extract) (make-transcoder (utf-8-codec)))))
  => "PRIVMSG #example :This is a message to a channel\r\n")
 
+;;; Channel mode commands
+
+(define (pchan modes)
+  (parse-channel-mode (cdr (assq 'PREFIX (isupport-defaults)))
+                      (cdr (assq 'CHANMODES (isupport-defaults)))
+                      modes))
+
+;; only
+(check (pchan '("+l" "50")) => '((+ #\l "50")))
+(check (pchan '("-l")) => '((- #\l #f)))
+
+;; never
+(check (pchan '("m-m")) => '((+ #\m channel) (- #\m channel)))
+(check (pchan '("-m+m")) => '((- #\m channel) (+ #\m channel)))
+
+;; always
+(check (pchan '("+k-k" "foo")) => '((+ #\k "foo") (- #\k #f)))
+(check (pchan '("+k-k" "foo" "foo")) => '((+ #\k "foo") (- #\k "foo")))
+
+;; address
+(check (pchan '("+e" "*!*@*" "-e" "*!*@*")) => '((+ #\e "*!*@*") (- #\e "*!*@*")))
+(check (pchan '("+e" "*!*@*" "e")) => '((+ #\e "*!*@*") (? #\e channel)))
+
+;; prefix
+(check (pchan '("+o" "Procrustes" "-o" "Procrustes")) => '((+ #\o "Procrustes") (- #\o "Procrustes")))
+(check (pchan '("o" "Procrustes")) => '((+ #\o "Procrustes")))
+(check (pchan '("o")) => '())
+
+
 
 (check-report)
