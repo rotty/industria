@@ -1033,7 +1033,7 @@ The following part of the library is for more advanced uses.
 @deffn Procedure certificate-key-usage certificate
 Returns the keyUsage extension data from @var{certificate}. If the
 extension is absent then the return value is @code{#f}. Otherwise it
-is a list where the possible entries are: @code{digitalSignature},
+is a list in which the possible entries are: @code{digitalSignature},
 @code{nonRepudiation}, @code{keyEncipherment},
 @code{dataEncipherment}, @code{keyAgreement}, @code{keyCertSign},
 @code{cRLSign}, @code{encipherOnly}, and @code{decipherOnly}. See
