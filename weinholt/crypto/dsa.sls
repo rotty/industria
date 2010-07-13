@@ -17,7 +17,7 @@
 
 ;; The Digital Signature Algorithm from FIPS Pub 186.
 
-(library (weinholt crypto dsa (0 0 20100625))
+(library (weinholt crypto dsa (0 0 20100712))
   (export make-dsa-public-key dsa-public-key?
           dsa-public-key-p
           dsa-public-key-q
@@ -48,9 +48,12 @@
   ;; y is (expt-mod g x p). x is secret.
 
   (define-record-type dsa-public-key
+    (nongenerative dsa-public-key-c0f523ff-cc62-4cb7-83fc-34fe3dcafb6c)
     (fields p q g y))
 
   (define-record-type dsa-private-key
+    (opaque #t)
+    (nongenerative dsa-private-key-ec67dd75-be57-42ac-b8ed-95bc893a80db)
     (fields p q g y x))
 
   (define (Dss-Parms)
