@@ -438,15 +438,15 @@ are the possible types:
 
 @itemize
 @item
-@t{(outgoing . }@emph{line}@t{)} -- The @code{cdr} is a bytevector
+@t{(outgoing . }@emph{line}@t{)} -- The @code{cdr} is a string
 that should be sent to the remote party.
 @item
-@t{(encrypted . }@emph{msg}@t{)} -- The @code{cdr} is a bytevector
+@t{(encrypted . }@emph{msg}@t{)} -- The @code{cdr} is a string
 that contains a decrypted message that was sent by the remote party.
 @item
-@t{(unencrypted . }@emph{msg}@t{)} -- The @code{cdr} is a string
-that sent @emph{unencrypted} by the remote party. This happens when
-a whitespace-tagged message is received. 
+@t{(unencrypted . }@emph{msg}@t{)} -- The @code{cdr} is a string that
+was sent @emph{unencrypted} by the remote party. This happens when a
+whitespace-tagged message is received.
 @item
 @t{(session-established . }@emph{whence}@t{)} -- A session has been
 established with the remote party. It is now safe to call
@@ -535,6 +535,14 @@ the ID should be shown to the OTR user.
 
 The first part of the ID should be shown in bold if the session was
 initiated by the local party. Otherwise the second part should be bold.
+@end deffn
+
+@deffn Procedure otr-state-mss state
+Returns the current maximum segment size of the OTR state.
+@end deffn
+
+@deffn Procedure otr-state-mss-set! state int
+Sets @var{int} as the maximum segment size of the OTR state.
 @end deffn
 
 Isn't this the most boring manual you've ever read?

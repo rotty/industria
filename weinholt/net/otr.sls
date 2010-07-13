@@ -26,7 +26,7 @@
 ;; TODO: finishing sessions.
 ;; TODO: let the library user decide what errors to send
 
-(library (weinholt net otr (0 0 20100619))
+(library (weinholt net otr (0 0 20100712))
   (export otr-message?
           otr-update!
           otr-send-encrypted!
@@ -37,7 +37,8 @@
           otr-state-our-dsa-key
           otr-state-secure-session-id
           otr-hash-public-key
-          otr-format-session-id)
+          otr-format-session-id
+          otr-state-mss otr-state-mss-set!)
   (import (rnrs)
           (only (srfi :1 lists) iota map-in-order
                 alist-delete take)
@@ -269,6 +270,8 @@
                         tlv-smp-abort tlv-smp-1q)))
 
   (define-record-type otr-state
+    (opaque #t)
+    (nongenerative otr-state-92d95444-59ad-4658-9d3f-8d605ad87180)
     (fields (immutable our-dsa-key)
             (mutable their-dsa-key)
             (mutable secure-session-id)
@@ -313,6 +316,8 @@
             #f)))))
 
   (define-record-type smp-state
+    (opaque #t)
+    (nongenerative smp-state-edef0336-67da-4d9e-8851-f4d41bf1d9e8)
     (fields (mutable next)
             (mutable values))
     (protocol
