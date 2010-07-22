@@ -252,13 +252,17 @@
           (cond ((register? o) (memv (register-type o) '(16 32 64)))
                 ((memory? o) (memv (memory-datasize o) '(#f 16 32 64)))
                 (else #f)))
+        (defop (Eb o opsize mode (r/m #f))
+          (cond ((register? o) (memv (register-type o) '(8 rex8 norex8)))
+                ((memory? o) (memv (memory-datasize o) '(#f 8 rex8 norex8)))
+                (else #f)))
         (defop (Ew o opsize mode (r/m #f))
           (cond ((register? o) (memv (register-type o) '(16)))
                 ((memory? o) (memv (memory-datasize o) '(#f 16)))
                 (else #f)))
-        (defop (Eb o opsize mode (r/m #f))
-          (cond ((register? o) (memv (register-type o) '(8 rex8 norex8)))
-                ((memory? o) (memv (memory-datasize o) '(#f 8 rex8 norex8)))
+        (defop (Ed o opsize mode (r/m #f))
+          (cond ((register? o) (eqv? (register-type o) 32))
+                ((memory? o) (memv (memory-datasize o) '(#f 32)))
                 (else #f)))
 
         ;; Memory
@@ -762,7 +766,7 @@
                          (if (null? templates)
                              (error 'find-instruction-encoding
                                     "There is no implemented encoding for this combination of operands"
-                                    instr operands mode)
+                                    instr mode)
                              (let* ((template (car templates))
                                     (eos (encoding-operand-size (template-encoding template)))
                                     (eas (encoding-address-size (template-encoding template)))
