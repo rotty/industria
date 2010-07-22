@@ -41,7 +41,7 @@
   (flush-output-port out)
   (let lp ()
     (unless (port-eof? in)
-      (display (utf8->string (get-bytevector-some in)))
+      (display (utf8->string (get-bytevector-n in 128)))
       (lp)))
   (close-port in)
   (close-port out))
