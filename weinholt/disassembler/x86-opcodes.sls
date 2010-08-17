@@ -1,6 +1,6 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
 ;; Opcode table for the Intel 80x86 processor
-;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -121,7 +121,7 @@
 ;; For Intel AVX instructions, the opcode syntaxes K, KW, WK, B, BW,
 ;; WB, In have been used and are not official.
 
-(library (weinholt disassembler x86-opcodes (1 0 20090821))
+(library (weinholt disassembler x86-opcodes (1 0 20100817))
   (export opcodes pseudo-mnemonics mnemonic-aliases
           lock-instructions
           branch-hint-instructions
@@ -390,44 +390,20 @@
       (xlat . xlatb)
       (loope . loopz)
       (loopne . loopnz)
-      (jnae . jb)
-      (jae . jnb)
-      (je . jz)
-      (jne . jnz)
-      (jna . jbe)
-      (ja . jnbe)
-      (jpe . jp)
-      (jpo . jnp)
-      (jnge . jl)
-      (jge . jnl)
-      (jng . jle)
-      (jg . jnle)
-      (jc . jb)
-      (jnc . jnb)
-      (setnae . setb)
-      (setae . setnb)
-      (sete . setz)
-      (setne . setnz)
-      (setna . setbe)
-      (seta . setnbe)
-      (setpe . setp)
-      (setpo . setnp)
-      (setnge . setl)
-      (setge . setnl)
-      (setng . setle)
-      (setg . setnle)
-      (cmovnae . cmovb)
-      (cmovae . cmovnb)
-      (cmove . cmovz)
-      (cmovne . cmovnz)
-      (cmovna . cmovbe)
-      (cmova . cmovnbe)
-      (cmovpe . cmovp)
-      (cmovpo . cmovnp)
-      (cmovnge . cmovl)
-      (cmovge . cmovnl)
-      (cmovng . cmovle)
-      (cmovg . cmovnle)
+      (jnae . jb) (setnae . setb) (cmovnae . cmovb)
+      (jae . jnb) (setae . setnb) (cmovae . cmovnb)
+      (je . jz) (sete . setz) (cmove . cmovz)
+      (jne . jnz) (setne . setnz) (cmovne . cmovnz)
+      (jna . jbe) (setna . setbe) (cmovna . cmovbe)
+      (ja . jnbe) (seta . setnbe) (cmova . cmovnbe)
+      (jpe . jp) (setpe . setp) (cmovpe . cmovp)
+      (jpo . jnp) (setpo . setnp) (cmovpo . cmovnp)
+      (jnge . jl) (setnge . setl) (cmovnge . cmovl)
+      (jge . jnl) (setge . setnl) (cmovge . cmovnl)
+      (jng . jle) (setng . setle) (cmovng . cmovle)
+      (jg . jnle) (setg . setnle) (cmovg . cmovnle)
+      (jc . jb) (setc . setb) (cmovc . cmovb)
+      (jnc . jnb) (setnc . setnb) (cmovnc . cmovnb)
       (int1 . icebp)
       (setalc . salc)))
 
