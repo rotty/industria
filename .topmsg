@@ -1,0 +1,4 @@
+From: Andreas Rottmann <a.rottmann@gmx.at>
+Subject: compression zip: temporarily remove library versions
+
+For the sake of Dorodango on PLT/Racket.

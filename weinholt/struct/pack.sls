@@ -151,7 +151,7 @@
 (library (weinholt struct pack (1 4 20100304))
   (export format-size pack pack! unpack get-unpack)
   (import (rnrs)
-          (for (prefix (weinholt struct pack-aux (1 0)) aux:)
+          (for (prefix (weinholt struct pack-aux) aux:)
                expand run))
 
   (define-syntax unpack*
