@@ -28,7 +28,7 @@
   (import (rnrs)
           (only (srfi :1 lists) iota)
           (weinholt compression sliding-buffer)
-          (weinholt compression huffman (0 (>= 1))))
+          (weinholt compression huffman))
 
   (define-syntax trace
     (syntax-rules ()
