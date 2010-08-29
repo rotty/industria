@@ -24,12 +24,20 @@
 
 ;; But look at RFC 2313, it's easier to read...
 
-(library (weinholt crypto rsa (0 0 20100703))
+(library (weinholt crypto rsa (1 0 20100829))
   (export make-rsa-public-key
           rsa-public-key?
+          rsa-public-key-modulus
+          rsa-public-key-public-exponent
+          rsa-public-key-n
+          rsa-public-key-e
+
           rsa-public-key-from-bytevector
           rsa-public-key-length
           rsa-public-key-byte-length
+
+          ;; make-rsa-private-key
+
           rsa-decrypt
           rsa-encrypt
           rsa-pkcs1-encrypt
@@ -88,6 +96,9 @@
             exponent1                   ;d mod (p-1)
             exponent2                   ;d mod (q-1)
             coefficient))               ;(inverse of q) mod p
+
+  (define rsa-public-key-n rsa-public-key-modulus)
+  (define rsa-public-key-e rsa-public-key-public-exponent)
 
   (define (rsa-public-key-length key)
     (bitwise-length (rsa-public-key-modulus key)))
