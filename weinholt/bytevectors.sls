@@ -16,7 +16,7 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!r6rs
 
-(library (weinholt bytevectors (1 0 20100111))
+(library (weinholt bytevectors (1 0 20100825))
   (export bytevector-append
           bytevectors-length
           bytevector-concatenate
@@ -91,12 +91,16 @@
        (bytevector-u8-index-right bv c 0 (bytevector-length bv)))))
 
   (define (bytevector->uint bv)
-    (bytevector-uint-ref bv 0 (endianness big) (bytevector-length bv)))
+    (if (zero? (bytevector-length bv))
+        0
+        (bytevector-uint-ref bv 0 (endianness big) (bytevector-length bv))))
 
   (define (uint->bytevector int)
-    (let ((ret (make-bytevector (div (bitwise-and -8 (+ 7 (bitwise-length int))) 8))))
-      (bytevector-uint-set! ret 0 int (endianness big) (bytevector-length ret))
-      ret))
+    (if (zero? int)
+        #vu8()
+        (let ((ret (make-bytevector (div (bitwise-and -8 (+ 7 (bitwise-length int))) 8))))
+          (bytevector-uint-set! ret 0 int (endianness big) (bytevector-length ret))
+          ret)))
 
 
   )
