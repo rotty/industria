@@ -28,20 +28,21 @@ or the FDA and quite likely aren't allowed for government work.
 @cindex security, warning
 
 @menu
-* crypto aes::         Advanced Encryption Standard (AES)
-* crypto arcfour::     ARCFOUR stream cipher
-* crypto blowfish::    The Blowfish cipher
-* crypto crc::         Cyclic Redundancy Codes (CRC)
-* crypto des::         Data Encryption Standard (DES, 3DES)
-* crypto dsa::         Digital Signature Algorithm (DSA)
-* crypto entropy::     Entropy and randomness
-* crypto md5::         Message-Digest algorithm 5 (MD5)
-* crypto openpgp::     OpenPGP signature verification
-* crypto password::    Password hashing
-* crypto rsa::         RSA public key encryption and signatures
-* crypto sha-1::       Secure Hash Algorithm 1 (SHA-1)
-* crypto sha-2::       Secure Hash Algorithm 2 (SHA-256, SHA-512, etc)
-* crypto x509::        X.509 Public-Key Infrastructure
+* crypto aes::            Advanced Encryption Standard (AES)
+* crypto arcfour::        ARCFOUR stream cipher
+* crypto blowfish::       The Blowfish cipher
+* crypto crc::            Cyclic Redundancy Codes (CRC)
+* crypto des::            Data Encryption Standard (DES, 3DES)
+* crypto dsa::            Digital Signature Algorithm (DSA)
+* crypto entropy::        Entropy and randomness
+* crypto md5::            Message-Digest algorithm 5 (MD5)
+* crypto openpgp::        OpenPGP signature verification
+* crypto password::       Password hashing
+* crypto rsa::            RSA public key encryption and signatures
+* crypto sha-1::          Secure Hash Algorithm 1 (SHA-1)
+* crypto sha-2::          Secure Hash Algorithm 2 (SHA-256, SHA-512, etc)
+* crypto ssh-public-key:: SSH public key format conversion
+* crypto x509::           X.509 Public-Key Infrastructure
 @end menu
 
 @c ======================================================================
@@ -526,7 +527,14 @@ To access the fields use @code{dsa-public-key-p},
 @end deffn
 
 @deffn Procedure dsa-public-key? obj
-Returns @code{#t} if @var{obj} is a DSA public key value.
+True if @var{obj} is a DSA public key value.
+@end deffn
+
+@deffn Procedure dsa-public-key-length key
+Returns the number of bits in the @emph{p} value of @var{key}. This is
+often considered to be the length of the key. The bitwise-length of
+@emph{q} is also important, it corresponds with the length of the
+hashes used for signatures.
 @end deffn
 
 @deffn Procedure make-dsa-private-key p q g y x
@@ -584,7 +592,7 @@ Returns @code{#t} if the signature matches, otherwise @code{#f}.
 Version history:
 @itemize
 @item
-@code{(0 0)} -- Initial version.
+@code{(1 0)} -- Initial version.
 @end itemize
 
 
@@ -717,9 +725,18 @@ SHA-224, SHA-256, SHA-384 and SHA-512 (all the standard algorithms
 except RIPE-MD160).
 
 An OpenPGP key is actually a list of OpenPGP packets with a certain
-structure: first is the primary key (e.g. an RSA or DSA key), then
-comes a number of user IDs, attributes, signatures and also subkeys
-(which are just like primary keys, except marked as subkeys).
+structure: first is the primary key (e.g. an RSA or DSA key), next
+possibly a revocation, then a number of user IDs, attributes,
+signatures and also subkeys (which are just like primary keys, except
+marked as subkeys). See RFC 4880 section 11 for the exact composition.
+This library represents keyrings as hashtables indexed by key ID and
+where the entries are lists of packets in the order they appeared in
+the keyring file.
+
+Please note that this library assumes the program that wrote the
+keyring did due diligence when importing keys, and made sure that
+e.g.@: subkey binding signatures are verified, and that the order of
+packets is correct.
 
 @deffn Procedure get-openpgp-keyring p
 Reads a keyring from the binary input port @var{p}. Returns a
@@ -731,6 +748,18 @@ to verify that keys have valid signatures.
 Warning: this can take a while if the keyring is very big.
 @end deffn
 
+@deffn Procedure get-openpgp-keyring/keyid p keyid
+Searches the binary input port @var{p} for the public key with the
+given @var{keyid}. Returns a hashtable similar to
+@code{get-openpgp-keyring}, except it will only contain the primary
+and subkeys associated with the @var{keyid}.
+
+The @var{keyid} can be either a 64 or 32 bit exact integer.
+
+Warning: this is faster than get-openpgp-keyring, but is still rather
+slow with big keyrings. The speed depends on the SHA-1 implementation.
+@end deffn
+
 @deffn Procedure get-openpgp-detached-signature/ascii p
 Reads a detached OpenPGP signature from the textual input port
 @var{p}. Returns either an OpenPGP signature object or the end of file
@@ -740,7 +769,25 @@ These signatures can be created with e.g.@: @code{gpg -a --detach-sign filename}
 @end deffn
 
 @deffn Procedure verify-openpgp-signature sig keyring p
-TODO: document.
+Verifies the signature data in @var{sig}. The @var{keyring} hashtable
+is used to find the public key of the signature issuer. The signed
+data is read from the binary input port @var{p}.
+
+This procedure returns two values. These are the possible
+combinations:
+@itemize
+@item
+@t{good-signature }@emph{key-data} -- The signature matches
+the data. The @emph{key-data} contains the public key list that was
+used to verify the signature.
+@item
+@t{bad-signature }@emph{key-data} -- The signature does not
+match the data. The @emph{key-data} is the same as above.
+@item
+@t{missing-key }@emph{key-id} -- The issuer public key for the
+signature was not found in the keyring. The @emph{key-id} is the
+64-bit key ID of the issuer.
+@end itemize
 @end deffn
 
 @deffn Procedure openpgp-signature? obj
@@ -750,15 +797,74 @@ contained in keyring entries.
 @end deffn
 
 @deffn Procedure openpgp-signature-issuer sig
-TODO: document.
+The 64-bit key ID of the OpenPGP public key that issued the
+signature @var{sig}.
+@end deffn
+
+@deffn Procedure openpgp-signature-public-key-algorithm sig
+Returns the name of the public key algorithm used to create the
+signature @var{sig}. This is currently the symbol @code{dsa} or
+@emph{rsa}.
+@end deffn
+
+@deffn Procedure openpgp-signature-hash-algorithm sig
+The name of the message digest algorithm used to create the
+signature @var{sig}. This is currently one of @code{md5},
+@code{sha-1}, @code{ripe-md160} (unsupported), @code{sha-224},
+@code{sha-256}, @code{sha-384} or @code{sha-512}.
+@end deffn
+
+@deffn Procedure openpgp-signature-creation-time sig
+An SRFI-19 date object representing the time at which the signature
+@var{sig} was created.
+@end deffn
+
+@deffn Procedure openpgp-signature-expiration-time sig
+An SRFI-19 date object representing the time at which the signature
+@var{sig} expires. Returns @code{#f} if there's no expiration time.
+@end deffn
+
+@deffn Procedure openpgp-user-id? obj
+True if @var{obj} is an OpenPGP user id.
+@end deffn
+
+@deffn Procedure openpgp-user-id-value user-id
+The string value of the @var{user-id}. This is often the name of the
+person who owns the key.
+@end deffn
+
+@deffn Procedure openpgp-user-attribute? obj
+True if @var{obj} is an OpenPGP user attribute. Attributes are used to
+encode JPEG images. There's currently no way to access the image.
 @end deffn
 
 @deffn Procedure openpgp-public-key? obj
 True if @var{obj} is an OpenPGP primary key or subkey.
 @end deffn
 
-@deffn Procedure openpgp-user-id? obj
-True if @var{obj} is an OpenPGP user id.
+@deffn Procedure openpgp-public-key-subkey? key
+True if @var{obj} is a subkey.
+@end deffn
+
+@deffn Procedure openpgp-public-key-value key
+The DSA or RSA public key contained in the OpenPGP public @var{key}.
+The value returned has the same type as the @code{(crypto weinholt
+dsa)} or @code{(crypto weinholt rsa)}.
+@end deffn
+
+@deffn Procedure openpgp-public-key-fingerprint key
+The fingerprint of the OpenPGP public @var{key} as a bytevector. This
+is an SHA-1 digest based on the public key values.
+@end deffn
+
+@deffn Procedure openpgp-format-fingerprint bv
+Formats the bytevector @var{bv}, which was presumably created by
+@code{openpgp-public-key-fingerprint}, as a string in the format
+preferred for PGP public key fingerprints.
+@end deffn
+
+@deffn Procedure openpgp-public-key-id key
+The 64-bit key ID of the OpenPGP public @var{key}.
 @end deffn
 
 @noindent
@@ -839,6 +945,18 @@ the public exponent @var{e}.
 True if @var{obj} is a public RSA key.
 @end deffn
 
+@deffn Procedure rsa-public-key-n key
+@end deffn
+@deffn Procedure rsa-public-key-modulus key
+Returns the @emph{modulus} of @var{key}.
+@end deffn
+
+@deffn Procedure rsa-public-key-e key
+@end deffn
+@deffn Procedure rsa-public-key-public-exponent key
+Returns the @emph{public exponent} of @var{key}.
+@end deffn
+
 @deffn Procedure rsa-public-key-from-bytevector bv
 Parses the bytevector @var{bv} as an ASN.1 DER encoded public RSA key.
 The return value can be used with the other procedures in this
@@ -864,7 +982,7 @@ either a public or private RSA key.
 @c @deffn Procedure rsa-decrypt
 @c @end deffn
 It is often not enough to just use the plain encryption and decryption
-procedures, a protocol for what to put in the plaintext should also be
+procedures; a protocol for what to put in the plaintext should also be
 used. PKCS #1 (RFC@: 3447) is a standard for how to perform RSA
 encryption and signing with padding. New protocols should use one of
 the other protocols from the RFC.
@@ -892,7 +1010,7 @@ list containing a digest algorithm specifier and a digest.
 Version history:
 @itemize
 @item
-@code{(0 0)} -- Initial version.
+@code{(1 0)} -- Initial version.
 @end itemize
 
 @c ======================================================================
@@ -934,6 +1052,49 @@ Version history:
 @itemize
 @item
 @code{(0 0)} -- Initial version.
+@end itemize
+
+@c ======================================================================
+@node crypto ssh-public-key
+@subsection SSH public key format conversion
+Use @code{(weinholt crypto ssh-public-key)} to convert public RSA and
+DSA keys from records to the binary SSH public key format, and the
+other way around. SSH is the name of a network protocol for secure
+terminal connections defined by RFCs 4250-4254. The key format is
+specified by RFC 4716.
+
+The types used for RSA and DSA keys in this library are the same types
+used elsewhere.
+
+Future work would be to implement parsing of the various textual
+formats that contain Base64 public SSH keys.
+
+@deffn Procedure get-ssh-public-key p
+Reads a public RSA/DSA key encoded in the SSH public key format from
+the binary input port @var{p}.
+@end deffn
+
+@deffn Procedure ssh-public-key->bytevector key
+Converts the public RSA/DSA @var{key} to the SSH public key format.
+@end deffn
+
+@deffn Procedure ssh-public-key-fingerprint key
+The MD5 based fingerprint of the RSA/DSA key in the same format used
+by common SSH software and specified by RFC 4716.
+@end deffn
+
+@deffn Procedure ssh-public-key-random-art key
+The random art of the RSA/DSA key. This is a visual representation of
+the key can is easier for humans to distinguish than fingerprints.
+This is the same art that OpenSSH's VisualHostKey feature displays.
+@cindex VisualHostKey
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
 @end itemize
 
 @c ======================================================================
