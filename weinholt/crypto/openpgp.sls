@@ -18,7 +18,9 @@
 ;; Procedures for dealing with OpenPGP messages.
 
 ;; XXX: Currently only does enough to verify detached signatures of
-;; binary data.
+;; binary data. Sanity checks on self-signatures, subkey binding
+;; signatures, etc is left as an exercise for the program that manages
+;; the keyring.
 
 ;; 4880 OpenPGP Message Format. J. Callas, L. Donnerhacke, H. Finney, D.
 ;;      Shaw, R. Thayer. November 2007. (Format: TXT=203706 bytes) (Obsoletes
@@ -26,8 +28,13 @@
 
 ;; TODO: radix64 reader, not just base64
 
-(library (weinholt crypto openpgp (1 0 20100705))
+;; Each User ID on a public key has a self-signature made by the key.
+;; Each subkey also has a self-signature that binds it to the primary
+;; key, and a self-signature that binds the primary key to the subkey.
+
+(library (weinholt crypto openpgp (1 0 20100829))
   (export get-openpgp-keyring
+          get-openpgp-keyring/keyid
           get-openpgp-detached-signature/ascii
           verify-openpgp-signature
 
@@ -38,15 +45,20 @@
                   (openpgp-signature-halg
                    openpgp-signature-hash-algorithm))
           openpgp-signature-creation-time
+          openpgp-signature-expiration-time
 
           openpgp-user-id?
+          openpgp-user-id-value
           openpgp-user-attribute?
 
           openpgp-public-key?
-          openpgp-public-key-fingerprint
-          openpgp-public-key-id
-          )
+          openpgp-public-key-subkey?
+          openpgp-public-key-value
+          openpgp-public-key-fingerprint openpgp-format-fingerprint
+          openpgp-public-key-id)
   (import (rnrs)
+          (only (srfi :1 lists) take-while)
+          (only (srfi :13 strings) string-pad)
           (srfi :19 time)
           (weinholt bytevectors)
           (weinholt crypto dsa)
@@ -82,6 +94,15 @@
                    (cons (car names) bits)
                    bits)))
         ((null? names) (reverse bits))))
+
+  (define (openpgp-format-fingerprint bv)
+    (define (h i)
+      (string-pad (string-upcase
+                   (number->string (unpack "!S" bv (* i 2)) 16))
+                  4 #\0))
+    (string-append (h 0) " " (h 1) " " (h 2) " " (h 3) " " (h 4)
+                   "  "
+                   (h 5) " " (h 6) " " (h 7) " " (h 8) " " (h 9)))
 
 ;;; Constants
 
@@ -206,7 +227,7 @@
   (define SIGNATURE-CERT-REVOCATION #x30)
   (define SIGNATURE-TIMESTAMP #x40)
   (define SIGNATURE-THIRD-PARTY #x50)
-  
+
 ;;; Parsing
 
   (define (get-mpi p)
@@ -226,7 +247,9 @@
             ((= o1 255)
              (get-unpack p "!L")))))
 
-  (define (get-packet p)
+  (define (get-packet p) (get-packet* p get-data))
+
+  (define (get-packet* p get-data)
     (let ((tag (get-u8 p)))
       #;(unless (fxbit-set? tag 7)
           (error 'get-packet "Invalid tag" tag))
@@ -286,6 +309,14 @@
           ;; XXX: should be an error?
           (else #f)))
 
+  (define (openpgp-signature-expiration-time sig)
+    (cond ((assq 'signature-etime (openpgp-signature-hashed-subpackets sig))
+           => (lambda (x)
+                (unixtime (+ (cdr x)
+                             (openpgp-signature-creation-time sig)))))
+          (else #f)))
+
+
   ;; Read one ASCII armored detached OpenPGP signature
   (define (get-openpgp-detached-signature/ascii p)
     (define who 'get-openpgp-detached-signatures/ascii)
@@ -299,11 +330,9 @@
             (else
              (error who "Expected PGP SIGNATURE" type)))))
 
-  ;; FIXME: some easy way to see which key made the signature, so the
-  ;; user id can be displayed. will probably change the return value.
-  ;; returns (good-signature (#<openpgp-public-key etc etc> ...)
-  ;; returns (missing-key key-id)
-  ;; FIXME: let user check for revoked keys
+  ;; returns (good-signature key-data)
+  ;; or (bad-signature key-data)
+  ;; or (missing-key key-id)
   (define (verify-openpgp-signature sig keyring dataport)
     (define who 'verify-openpgp-signature)
     (define (check-digest pgpkey digest)
@@ -353,10 +382,11 @@
                   (openpgp-signature-append-data sig))
         (md-finish! md)
         (guard (cnd
-                (else
+                ((error? cnd)
                  (print "Error while verifying signature: " cnd)
                  ;; Note: identical to the return values from
-                 ;; check-digest.
+                 ;; check-digest. The idea is that this might stop a
+                 ;; random oracle attack, but maybe not.
                  (values 'bad-signature pgpkey)))
           (check-digest pgpkey (md->bytevector md)))))
     (let ((issuer (openpgp-signature-issuer sig)))
@@ -460,7 +490,8 @@
                                        (parse-subpackets unhashed-subpackets)
                                        value)))))
         (else
-         (error who "Unsupported signature version" version)))))
+         (print "Unsupported signature version: " version)
+         'unsupported-signature-version))))
 
   (define (parse-subpackets bv)
     (define (parse tag data)
@@ -557,7 +588,13 @@
 
   (define-record-type openpgp-public-key
     (fields version subkey? time value
-            fingerprint id))
+            fingerprint))
+
+  (define (openpgp-public-key-id k)
+    (let ((bv (openpgp-public-key-fingerprint k)))
+      (unpack "!uQ" bv
+              (- (bytevector-length bv)
+                 (format-size "!uQ")))))
 
   (define (get-public-key p subkey?)
     (define who 'get-public-key)
@@ -595,12 +632,10 @@
                (print "Trailing data in public key: " (get-bytevector-all p)))
              (let ((digest (fingerprint p)))
                (make-openpgp-public-key version subkey? ctime key
-                                        (sha-1->string digest)
-                                        (let ((bv (sha-1->bytevector digest)))
-                                          (unpack "!uQ" bv
-                                                  (- (bytevector-length bv)
-                                                     (format-size "!uQ")))))))))
-        (else (error who "Unsupported public key version" version)))))
+                                        (sha-1->bytevector digest))))))
+        (else
+         (print "Unsupported public key version: " version)
+         'unsupported-public-key-version))))
 
   (define (openpgp-public-key-primary? key)
     (and (openpgp-public-key? key)
@@ -608,14 +643,11 @@
 
 ;;; User IDs and User attributes
 
-  (define-record-type openpgp-user-id (fields unparsed))
-
-  (define (openpgp-user-id-value x)
-    (utf8->string (openpgp-user-id-unparsed x)))
+  (define-record-type openpgp-user-id (fields value unparsed))
 
   (define (get-user-id p len)
-    ;; utf8 conversion is delayed
-    (make-openpgp-user-id (get-bytevector-n p len)))
+    (let ((unparsed (get-bytevector-n p len)))
+      (make-openpgp-user-id (utf8->string unparsed) unparsed)))
 
   (define-record-type openpgp-user-attribute (fields unparsed))
 
@@ -628,48 +660,92 @@
 
   ;; Reads a keyring from the binary input port p. It must not be
   ;; ASCII armored.
-  (define (get-openpgp-keyring p)
-    (define (get-pkt p)
-      (guard (cnd (else cnd))
-        (if (port-eof? p)
-            (eof-object)
-            (get-packet p))))
-    (let ((kr (make-eqv-hashtable)))
-      (let lp ((pkt (get-pkt p)))
-        (print "#;key " pkt)
-        (cond ((eof-object? pkt) kr)
-              ((openpgp-public-key-primary? pkt)
-               ;; Read signatures, user id's, subkeys
-               (let lp* ((pkt (get-pkt p))
-                         (pkts (list pkt))
-                         (key-ids (list (openpgp-public-key-id pkt))))
-                 (print "#;keydata " pkt)
-                 (cond ((or (eof-object? pkt)
-                            (openpgp-public-key-primary? pkt))
-                        (let ((pkts (reverse pkts)))
-                          ;; Hashtable is indexed by key-id. Key ids
-                          ;; for both the primary key and subkeys all
-                          ;; point to the list of packets.
-                          (for-each (lambda (key-id)
-                                      (print "#;key-id " key-id)
-                                      (hashtable-set! kr key-id pkts))
-                                    key-ids)
-                          (lp pkt)))
-                       ((openpgp-public-key? pkt) ;subkey
-                        (lp* (get-pkt p) (cons pkt pkts)
-                             (cons (openpgp-public-key-id pkt) key-ids)))
-                       ((condition? pkt)
-                        ;; Ignore errors reading the keyring.
-                        (lp* (get-pkt p) pkts key-ids))
-                       (else
-                        (lp* (get-pkt p) (cons pkt pkts) key-ids)))))
-              (else
-               ;; Skip until there's a primary key. Ignore errors...
-               (lp (get-pkt p)))))))
+  (define get-openpgp-keyring
+    (case-lambda
+      ((p) (get-openpgp-keyring p -1))
+      ((p limit)
+       (define (get-pkt p)
+         (if (port-eof? p)
+             (eof-object)
+             (get-packet p)))
+       (let ((kr (make-eqv-hashtable)))
+         (let lp ((pkt (get-pkt p))
+                  (limit limit))
+           (print "#;key " pkt)
+           (cond ((or (zero? limit) (eof-object? pkt)) kr)
+                 ((openpgp-public-key-primary? pkt)
+                  ;; Read signatures, user id's, subkeys
+                  (let lp* ((pkt (get-pkt p))
+                            (pkts (list pkt))
+                            (key-ids (list (openpgp-public-key-id pkt))))
+                    (print "#;keydata " pkt)
+                    (cond ((or (eof-object? pkt)
+                               (eq? pkt 'unsupported-public-key-version)
+                               (openpgp-public-key-primary? pkt))
+                           (let ((pkts (reverse pkts)))
+                             ;; Hashtable is indexed by key-id. Key ids
+                             ;; for both the primary key and subkeys all
+                             ;; point to the list of packets.
+                             (for-each (lambda (key-id)
+                                         (print "#;key-id " key-id)
+                                         (hashtable-set! kr key-id pkts))
+                                       key-ids)
+                             (lp pkt (- limit 1))))
+                          ((openpgp-public-key? pkt) ;subkey
+                           (lp* (get-pkt p) (cons pkt pkts)
+                                (cons (openpgp-public-key-id pkt) key-ids)))
+                          (else
+                           (lp* (get-pkt p) (cons pkt pkts) key-ids)))))
+                 (else
+                  ;; Skip until there's a primary key. Ignore errors...
+                  (lp (get-pkt p) limit))))))))
 
   ;; XXX: should probably detect ascii armoring
   (define (openpgp-keyring-from-file filename)
     (call-with-port (open-file-input-port filename)
       (lambda (p) (get-openpgp-keyring p))))
 
-  )
+  ;; "Quickly" find a given public key given the key ID. The most
+  ;; expensive thing here is SHA-1.
+  (define (get-openpgp-keyring/keyid p keyid)
+    (define (keyid=? x y)               ;x is non-truncated
+      (or (= x y)
+          (and (zero? (bitwise-bit-field y 32 64))
+               (= (bitwise-bit-field x 0 32) y))))
+    (let ((pkey-pos #f)
+          (next-pos 0)
+          (s (make-sha-1))
+          (digest (make-bytevector 20))
+          (buf (make-bytevector 128)))
+      (define (parse-packet p tag len start-pos lp)
+        ;; (print (list 'parse-packet pkey-pos next-pos start-pos tag len))
+        (cond ((and (or (= tag PACKET-PUBLIC-KEY)
+                        (= tag PACKET-PUBLIC-SUBKEY))
+                    (= (lookahead-u8 p) 4))
+               (if (= tag PACKET-PUBLIC-KEY) (set! pkey-pos start-pos))
+               (sha-1-clear! s)
+               (sha-1-update! s (pack "!uCS" #x99 len))
+               (let lp ((n len))
+                 (unless (zero? n)
+                   (let ((read (get-bytevector-n! p buf 0
+                                                  (min n (bytevector-length buf)))))
+                     (sha-1-update! s buf 0 read)
+                     (lp (- n read)))))
+               (sha-1-finish! s)
+               (sha-1-copy-hash! s digest 0)
+               (let ((id (unpack "!uQ" digest (- 20 8))))
+                 ;; (print "KEY ID: " id)
+                 (cond ((keyid=? id keyid)
+                        (set-port-position! p pkey-pos)
+                        (get-openpgp-keyring p 1))
+                       (else (lp)))))
+              (else (lp))))
+      (let lp ()
+        (set-port-position! p next-pos)
+        (let ((start-pos (port-position p)))
+          (if (port-eof? p)
+              (make-eq-hashtable)
+              (get-packet* p
+                           (lambda (p tag len)
+                             (set! next-pos (+ len (port-position p)))
+                             (parse-packet p tag len start-pos lp)))))))))
