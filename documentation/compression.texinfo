@@ -1,0 +1,409 @@
+@c -*-texinfo-*-
+
+@node compression
+@section Data decompression
+
+The libraries in this section deal with data decompression. They're
+currently all based around the INFLATE algorithm that decompresses
+data created by gzip, zip and zlib.
+
+@menu
+* compression adler-32::       Mark Adler's Adler-32 checksum
+* compression gzip::           GZIP custom input port
+@c * compression huffman::        Huffman code utilities
+* compression inflate::        Decompress DEFLATE'd data
+* compression sliding-buffer:: A circular buffer attached to a data sink
+* compression zip::            ZIP archive reader/writer
+* compression zlib::           ZLIB custom input port
+@end menu
+
+@c ======================================================================
+@node compression adler-32
+@subsection Mark Adler's Adler-32 checksum
+The @code{(weinholt compression adler-32)} library provides the
+Adler-32 checksum used in the ZLIB data format. @xref{compression zlib}. 
+
+The procedures defined are similar to those made by @code{define-crc}
+in @ref{crypto crc}. The exported bindings are @code{adler-32},
+@code{adler-32-init}, etc.
+@cindex Adler-32
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(0 0)} -- Initial version
+@end itemize
+
+@c ======================================================================
+@node compression gzip
+@subsection GZIP custom input port
+The @code{(weinholt compression gzip)} library provides a custom
+input port for reading GZIP compressed data.
+
+A word of warning: the current implementation uses an internal buffer
+that can grow big when reading specially crafted data.
+
+The GZIP format can support multiple compression methods, but only
+DEFLATE'd data is supported in this library.
+
+@deffn Procedure is-gzip-file? filename-or-port
+Takes a filename or a binary input port and returns true if the file
+looks like a GZIP file. The port should have @code{set-port-position!}
+and @code{port-position}.
+@end deffn
+
+@deffn Procedure make-gzip-input-port binary-input-port id close-underlying-port?
+Returns a new port that can be used to read decompressed GZIP data
+from the @var{binary-input-port}. The @var{id} is the name of the
+returned port. 
+
+If @var{close-underlying-port?} is true then at the end of the GZIP
+stream the @var{binary-input-port} will be closed.
+@end deffn
+
+@deffn Procedure open-gzip-file-input-port filename
+Opens the file specified by @var{filename} and returns a binary input
+port that decompresses the file on-the-fly.
+@end deffn
+
+@deffn Procedure extract-gzip binary-input-port binary-output-port
+Reads compressed data from @var{binary-input-port} and writes the
+decompressed data to @var{binary-output-port}. Returns the same values
+as @code{get-gzip-header}.
+@end deffn
+
+@deffn Procedure get-gzip-header binary-input-port
+Reads a GZIP header from @var{binary-input-port} and performs sanity
+checks.
+
+Returns several values:
+
+@itemize
+@item
+A boolean that indicates if the data is believed to be text or binary.
+@item
+The file's modification time as an SRFI-19 date or @code{#f} is none
+is available.
+@item
+An ``extra field'' which some systems use to encode additional file
+attributes. This is an unparsed bytevector.
+@item
+The file's original filename as a string or @code{#f} if none is
+available.
+@item
+A file comment as a string or @code{#f} if none is available.
+@item
+The symbol @code{slowest}, @code{fastest} or an integer (probably
+denoting a different compression setting).
+@item
+The id number of the operating system that created the file. It is
+e.g.@: 0 for DOS, 1 for Amiga, 2 for VMS, 3 for Unix.
+@end itemize
+
+See RFC 1952 for a full description of the values. Updates are
+available at @uref{http://www.gzip.org/format.txt}.
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(0 0)} -- Initial version
+@end itemize
+
+@c ======================================================================
+@node compression inflate
+@subsection Decompress DEFLATE'd data
+The procedures in @code{(weinholt compression inflate)} decompress
+DEFLATE data streams. DEFLATE is the data format used by gzip, zip and
+zlib. This library handles the raw data stream.
+
+@deffn Procedure inflate binary-input-port binary-output-port @
+                         crc-init crc-update crc-finish
+Inflates a complete DEFLATE data stream. It reads compressed data from
+@var{binary-input-port} and writes decompressed data to
+@var{binary-output-port}.
+
+The arguments @var{crc-init}, @var{crc-update} and @var{crc-finish}
+should have the same semantics that @code{(weinholt crypto crc)} uses,
+see @ref{crypto crc} and @ref{compression adler-32}.
+
+Two values are returned: the final CRC of the decompressed data, and
+its length.
+@end deffn
+
+@deffn Procedure make-inflater binary-input-port sink window-size dictionary
+Returns a procedure that, when called, decompresses a DEFLATE block
+from @var{binary-input-port}. The returned procedure should be called
+with zero arguments and returns either the symbol @code{done}, to
+signify the end of the DEFLATE stream, or @code{more} to indicate more
+blocks are (or will be) available.
+
+For a description of the @var{sink} argument,
+@pxref{compression sliding-buffer}.
+
+The @var{window-size} is the size of the sliding window buffer. The
+most common value is @math{32*1024} bytes, but each DEFLATE stream has
+a correct value that was used when creating the stream. For zlib
+streams this value is specified in the header.
+
+The @var{dictionary} is a bytevector that is prepended to the output
+buffer, but it is not actually copied to the output.
+@xref{compression zlib}.
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(0 0)} -- Initial version
+@end itemize
+
+@c ======================================================================
+@node compression sliding-buffer
+@subsection A circular buffer attached to a data sink
+The @code{(weinholt compression sliding-buffer)} library provides a
+circular buffer that passes the buffered data to a sink (a
+@dfn{sliding window}).
+
+A @dfn{sink} is a procedure with three arguments: a bytevector
+@var{bv}, an integer @var{start} and an integer @var{count}. When the
+sink procedure is called it should process @var{count} bytes starting
+at offset @var{start} of @var{bv}.
+
+This library was written by Andreas Rottmann (and has been modified,
+see the source code for a history). It is used by the @code{(weinholt
+compression inflate)} library because the LZ77 component in INFLATE
+needs a way to copy data that has already been written to the output,
+and this data structure obviates the need to use a file for that
+purpose.
+
+@deffn Procedure make-sliding-buffer sink size
+Returns a new sliding buffer with the given @var{sink} and @var{size}.
+The @var{size} determines how far back in the output stream
+@code{sliding-buffer-dup!} can look.
+@end deffn
+
+@deffn Procedure sliding-buffer? obj
+True if @var{obj} is a sliding buffer.
+@end deffn
+
+@deffn Procedure sliding-buffer-init! buffer bv
+Copy initial data into the buffer so that it can be used with
+@code{sliding-buffer-dup!}. The sink does not receive this data.
+@end deffn
+
+@deffn Procedure sliding-buffer-drain! buffer
+Sends the buffered data to to the @var{buffer}'s sink.
+@end deffn
+
+@deffn Procedure sliding-buffer-read! buffer binary-input-port len
+Reads @var{len} bytes from @var{binary-input-port} into the
+@var{buffer}.
+@end deffn
+
+@deffn Procedure sliding-buffer-put-u8! buffer u8
+Copies the byte @var{u8} into the @var{buffer}.
+@end deffn
+
+@deffn Procedure sliding-buffer-dup! buffer distance len
+Duplicates @var{len} bytes from inside the output stream of
+@var{buffer} at @var{distance} bytes from the current end of the
+buffer.
+@end deffn
+
+@c ======================================================================
+@node compression zip
+@subsection ZIP archive reader/writer
+The @code{(weinholt compression zip)} library provides procedures for
+reading and writing ZIP archives.
+
+This library exports bindings that aren't easily identified as having
+to do with ZIP archives, so I suggest you use a prefix as described in
+@ref{Conflicting names}.
+
+@emph{TODO: document all the procedures and describe the bigger picture.}
+
+@deffn Procedure get-central-directory binary-input-port
+Returns the central directory of the ZIP file in
+@var{binary-input-port}. This is a list of central directory records.
+@end deffn
+@deffn Procedure central-directory->file-record binary-input-port cdir
+Uses the data in the central directory record @var{cdir} to read the
+associated file record from @var{binary-input-port}.
+@end deffn
+@deffn Procedure extract-file port local central
+@end deffn
+@deffn Procedure extract-to-port zip-port local central dest-port
+@end deffn
+@deffn Procedure append-file out filename
+@end deffn
+@deffn Procedure append-port out in inzip-filename date local-extra @
+                       central-extra os-made-by @
+                       internal-attributes external-attributes
+@end deffn
+@deffn Procedure append-central-directory port centrals
+@end deffn
+@deffn Procedure create-file port filenames
+@end deffn
+
+@deffn Procedure supported-compression-method? int
+True if @var{int} represents a supported compression method. Currently
+only stored and deflated are supported. See
+@code{file-record-compression-method}.
+@end deffn
+
+@deffn Procedure unsupported-error? obj
+@end deffn
+
+@deffn Procedure file-record? obj
+True if @var{obj} is a file record.
+@end deffn
+@deffn Procedure file-record-minimum-version frec
+@end deffn
+@deffn Procedure file-record-flags frec
+@end deffn
+@deffn Procedure file-record-compression-method frec
+Returns an integer that represents the compression method that was
+used when storing the file associated with @var{frec}. Most ZIP files
+use only Deflate and store.
+
+@itemize
+@item
+@code{compression-stored} means the file was stored without any
+compression.
+@item
+@code{compression-shrunk} is the obsolete Shrunk method.
+@item
+@code{compression-reduced1} is the obsolete Reduced method with
+factor 1.
+@item
+@code{compression-reduced2} same as above, factor 2.
+@item
+@code{compression-reduced3} same as above, factor 3.
+@item
+@code{compression-reduced4} same as above, factor 4.
+@item
+@code{compression-imploded} is the obsolete Implode method.
+@item
+@code{compression-deflated} is the Deflate compression algorithm.
+@item
+@code{compression-deflate64} is a slightly modified Deflate.
+@item
+@code{compression-pkimplode} is something else.
+@item
+@code{compression-bzip2} is BZIP2.
+@end itemize
+
+@end deffn
+@deffn Procedure file-record-date frec
+@end deffn
+@deffn Procedure file-record-crc-32 frec
+@end deffn
+@deffn Procedure file-record-compressed-size frec
+@end deffn
+@deffn Procedure file-record-uncompressed-size frec
+@end deffn
+@deffn Procedure file-record-filename frec
+@end deffn
+@deffn Procedure file-record-extra frec
+@end deffn
+@deffn Procedure file-record-data-port-position frec
+@end deffn
+
+@deffn Procedure central-directory? obj
+True if @var{obj} is a central-directory record.
+@end deffn
+@deffn Procedure central-directory-version-made-by cdir
+@end deffn
+@deffn Procedure central-directory-os-made-by cdir
+@end deffn
+@deffn Procedure central-directory-minimum-version cdir
+@end deffn
+@deffn Procedure central-directory-flags cdir
+@end deffn
+@deffn Procedure central-directory-compression-method cdir
+See @code{file-record-compression-method}.
+
+@end deffn
+@deffn Procedure central-directory-date cdir
+@end deffn
+@deffn Procedure central-directory-crc-32 cdir
+@end deffn
+@deffn Procedure central-directory-compressed-size cdir
+@end deffn
+@deffn Procedure central-directory-uncompressed-size cdir
+@end deffn
+@deffn Procedure central-directory-disk-number-start cdir
+@end deffn
+@deffn Procedure central-directory-internal-attributes cdir
+@end deffn
+@deffn Procedure central-directory-external-attributes cdir
+@end deffn
+@deffn Procedure central-directory-local-header-offset cdir
+@end deffn
+@deffn Procedure central-directory-filename cdir
+@end deffn
+@deffn Procedure central-directory-extra cdir
+@end deffn
+@deffn Procedure central-directory-comment cdir
+@end deffn
+
+@deffn Procedure end-of-central-directory? obj
+True of @var{obj} is an end-of-central-directory record.
+@end deffn
+@deffn Procedure end-of-central-directory-disk edir
+@end deffn
+@deffn Procedure end-of-central-directory-start-disk edir
+@end deffn
+@deffn Procedure end-of-central-directory-entries edir
+@end deffn
+@deffn Procedure end-of-central-directory-total-entries edir
+@end deffn
+@deffn Procedure end-of-central-directory-size edir
+@end deffn
+@deffn Procedure end-of-central-directory-offset edir
+@end deffn
+@deffn Procedure end-of-central-directory-comment edir
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(0 0)} -- Initial version
+@end itemize
+
+@c ======================================================================
+@node compression zlib
+@subsection ZLIB custom input port
+The @code{(weinholt compression zlib)} library provides a custom
+input port for reading ZLIB compressed data.
+
+@deffn Procedure make-zlib-input-port binary-input-port id max-buffer-size close-underlying-port? dictionaries
+Returns a binary input port that decompresses and reads a ZLIB stream
+from the binary input port @var{binary-input-port}. The @var{id} is
+the name of the returned custom binary input port.
+
+If @var{max-buffer-size} is false then the internal buffer can grow
+without bounds (might be a bad idea). Protocols using ZLIB will
+normally specify a "flush" behavior. If your protocol uses flushing
+and specifies a maximum record size, then use that size as
+max-buffer-size.
+
+If @var{close-underlying-port?} is true then at the end of the zlib
+stream the @var{binary-input-port} will be closed.
+
+An application can define dictionaries which can improve compression
+by containing byte sequences commonly found at the start of files. The
+@var{dictionaries} argument is an alist that maps Adler-32 checksums
+to bytevectors. @xref{compression adler-32}.
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(0 0)} -- Initial version
+@end itemize

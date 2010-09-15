@@ -99,7 +99,7 @@ later version published by the Free Software Foundation.
 @c * archive::            File archive utilities
 @c * assembler::          Machine code assemblers
 @c * binfmt::             Executable file format utilities
-@c * compression::        Data decompression
+* compression::        Data decompression
 * crypto::             Cryptographic primitives
 * disassembler::       Machine code disassemblers
 * net::                Network protocols
@@ -108,6 +108,7 @@ later version published by the Free Software Foundation.
 @c * x::                  X Window System interface
 @end menu
 
+@include compression.texinfo
 @include crypto.texinfo
 @include disassembler.texinfo
 @include net.texinfo
