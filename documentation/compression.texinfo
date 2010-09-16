@@ -223,47 +223,121 @@ This library exports bindings that aren't easily identified as having
 to do with ZIP archives, so I suggest you use a prefix as described in
 @ref{Conflicting names}.
 
-@emph{TODO: document all the procedures and describe the bigger picture.}
+The @code{(weinholt compression zip extra)} library is used to set and
+retrieve file attributes, look for absolute/relative path attacks,
+create directories, and handle system-specific file types. None of
+this can really be done portably, so the default version of that
+library does the minimum possible. A few implementation-dependent
+overrides are included which allow directories to be created and
+handle some attributes.
+
+To learn about the file format, see
+@uref{http://www.info-zip.org/doc/}. In brief: each file has a file
+record (followed by the file data), and the archive ends with a list
+of central directory records and a special end of central directory
+record. Some information is duplicated in the file and central
+directory records.
 
 @deffn Procedure get-central-directory binary-input-port
-Returns the central directory of the ZIP file in
-@var{binary-input-port}. This is a list of central directory records.
-@end deffn
-@deffn Procedure central-directory->file-record binary-input-port cdir
-Uses the data in the central directory record @var{cdir} to read the
-associated file record from @var{binary-input-port}.
-@end deffn
-@deffn Procedure extract-file port local central
-@end deffn
-@deffn Procedure extract-to-port zip-port local central dest-port
-@end deffn
-@deffn Procedure append-file out filename
-@end deffn
-@deffn Procedure append-port out in inzip-filename date local-extra @
-                       central-extra os-made-by @
-                       internal-attributes external-attributes
-@end deffn
-@deffn Procedure append-central-directory port centrals
-@end deffn
-@deffn Procedure create-file port filenames
+Returns the central directory of the ZIP archive in
+@var{binary-input-port}. This is a list of central directory records
+and the end of central directory record.
 @end deffn
 
-@deffn Procedure supported-compression-method? int
-True if @var{int} represents a supported compression method. Currently
+@deffn Procedure central-directory->file-record zip-port cdir
+Uses the data in the central directory record @var{cdir} to read the
+associated file record from @var{zip-input-port}. The returned value
+is also referred to as a @dfn{local file header}.
+@end deffn
+
+@deffn Procedure extract-file zip-port local central
+Extracts the file associated with the @var{local} and @var{central}
+records. The @var{zip-port} is the same port the records were read
+from.
+
+The extracted file will be created relative to the current
+working directory (or default filespec) and will retain as many
+attributes as possible from those recorded in the ZIP archive.
+@end deffn
+
+@deffn Procedure extract-to-port zip-port local central dest-port
+Extracts the file associated with the @var{local} and @var{central}
+records to the given binary output port @var{dest-port}. The
+@var{zip-port} is the same port the records were read from.
+
+It is possible to preserve the file's attributes (at least if the
+extracted file is a regular byte stream) by using the accessors for
+@var{local} and @var{central} similarly to how the ``extra'' library
+uses that data.
+@end deffn
+
+Creating a ZIP archive is done by appending each file, and then when
+done appending the central directory. The central directory is in this
+case a list of central directory records returned by e.g.@:
+@code{append-file}. The port the ZIP archive is written to must
+support @code{port-position} and @code{set-port-position!}.
+
+@emph{Note}: Currently there is no compression performed when creating
+archives.
+
+@deffn Procedure append-file zip-port filename
+Appends the file given by @var{filename} to @var{zip-port}, which is a
+binary output port. Returns a central directory record.
+@end deffn
+
+@deffn Procedure append-port zip-port data-port filename date @
+                       local-extra central-extra os-made-by @
+                       internal-attributes external-attributes
+Similar to @code{append-file}, except no file is used. Instead the
+data for the file is read from the binary input port @var{data-port}.
+Because there is no file, all the file attributes need to be provided
+explicitly. A central directory record is returned.
+
+For a description of the attributes, see the accessors for file and
+central directory records.
+@end deffn
+
+@deffn Procedure append-central-directory zip-port centrals
+Writes a list of central directory records to the @var{zip-port} and
+then appends the special @emph{end of central directory record}. After
+this no more data should be written to the ZIP archive. The list of
+central directory records @code{centrals} should be those returned by
+@code{append-file} and @code{append-port}.
+@end deffn
+
+@deffn Procedure create-file zip-port filenames
+Builds a complete ZIP archive that includes all the files specified by
+the list @var{filenames} and writes it to @var{port}, which should be
+a binary output port.
+@end deffn
+
+@deffn Procedure supported-compression-method? n
+True if @var{n} represents a supported compression method. Currently
 only stored and deflated are supported. See
 @code{file-record-compression-method}.
 @end deffn
 
 @deffn Procedure unsupported-error? obj
+If an attempt was made to access an unsupported file record or to
+extract a file using an unsupported compression method then a
+condition will be raised that satisfies this predicate.
 @end deffn
 
 @deffn Procedure file-record? obj
 True if @var{obj} is a file record.
 @end deffn
+
 @deffn Procedure file-record-minimum-version frec
+This is the minimum supported version of the ZIP standard required to
+extract the file. Currently vresion 2.0 is supported (which is encoded
+as the exact integer 20).
 @end deffn
+
 @deffn Procedure file-record-flags frec
+Various flags that can indiciate which compression option was used,
+etc. You can probably ignore these.
 @end deffn
+
 @deffn Procedure file-record-compression-method frec
 Returns an integer that represents the compression method that was
 used when storing the file associated with @var{frec}. Most ZIP files
@@ -295,77 +369,144 @@ factor 1.
 @item
 @code{compression-bzip2} is BZIP2.
 @end itemize
+@end deffn
 
-@end deffn
 @deffn Procedure file-record-date frec
+The file's modification time as an SRFI-19 date.
 @end deffn
+
 @deffn Procedure file-record-crc-32 frec
+The file's CRC-32 checksum. @xref{crypto crc}.
 @end deffn
+
 @deffn Procedure file-record-compressed-size frec
+The number of bytes the file uses inside the ZIP archive.
 @end deffn
+
 @deffn Procedure file-record-uncompressed-size frec
+The number of bytes the file will use when it has been decompressed.
 @end deffn
+
 @deffn Procedure file-record-filename frec
+The filename of the file. This might be different in the associated
+central directory record (e.g.@: due to mischief). This can also be
+the string @code{"-"} if the file came from the standard input port.
 @end deffn
+
 @deffn Procedure file-record-extra frec
+An list of id and data pairs. This is used to encode file attributes,
+etc. See the file format specification for more information.
 @end deffn
-@deffn Procedure file-record-data-port-position frec
-@end deffn
+
+@c @deffn Procedure file-record-data-port-position frec
+@c The position of the file's data inside the ZIP archive.
+@c @end deffn
 
 @deffn Procedure central-directory? obj
 True if @var{obj} is a central-directory record.
 @end deffn
+
 @deffn Procedure central-directory-version-made-by cdir
+This is the version of the ZIP standard supported by the
+implementation that created the archive.
 @end deffn
+
 @deffn Procedure central-directory-os-made-by cdir
+The ID number of the operating system on which the ZIP archive was
+created. See the file format specification for a full list (DOS is 0,
+Unix is 3).
 @end deffn
+
 @deffn Procedure central-directory-minimum-version cdir
+This is the minimum supported version of the ZIP standard required to
+extract the file. Currently version 2.0 is supported (which is encoded
+as the exact integer 20).
 @end deffn
+
 @deffn Procedure central-directory-flags cdir
+See @code{file-record-flags}.
 @end deffn
+
 @deffn Procedure central-directory-compression-method cdir
 See @code{file-record-compression-method}.
+@end deffn
 
-@end deffn
 @deffn Procedure central-directory-date cdir
+The file's modification time as an SRFI-19 date.
 @end deffn
+
 @deffn Procedure central-directory-crc-32 cdir
+The file's CRC-32 checksum. @xref{crypto crc}.
 @end deffn
+
 @deffn Procedure central-directory-compressed-size cdir
+The number of bytes the file uses inside the ZIP archive.
 @end deffn
+
 @deffn Procedure central-directory-uncompressed-size cdir
+The number of bytes the file will use when it has been decompressed.
 @end deffn
+
 @deffn Procedure central-directory-disk-number-start cdir
+The number of the split archive that the file starts on. Note that
+there is no explicit support for split archives, so this is untested.
 @end deffn
+
 @deffn Procedure central-directory-internal-attributes cdir
+Bit 0 of this integer is set if the file is believed to be text. This
+might be useful for end of line conversion, but it is probably
+unreliable.
 @end deffn
+
 @deffn Procedure central-directory-external-attributes cdir
+The file attributes of the file. The format depends on the os-made-by field.
 @end deffn
-@deffn Procedure central-directory-local-header-offset cdir
-@end deffn
+
+@c @deffn Procedure central-directory-local-header-offset cdir
+@c @end deffn
+
 @deffn Procedure central-directory-filename cdir
+See @code{file-record-filename}.
 @end deffn
+
 @deffn Procedure central-directory-extra cdir
+See @code{file-record-extra}. Note that some of the fields have the
+same ID here and in the file records, but slightly different
+encodings.
 @end deffn
+
 @deffn Procedure central-directory-comment cdir
+A textual comment associated with the file.
 @end deffn
 
 @deffn Procedure end-of-central-directory? obj
 True of @var{obj} is an end-of-central-directory record.
 @end deffn
+
 @deffn Procedure end-of-central-directory-disk edir
+The number of the split archive where @var{edir} is located.
 @end deffn
+
 @deffn Procedure end-of-central-directory-start-disk edir
+The number of the split archive where the central directory begins.
 @end deffn
+
 @deffn Procedure end-of-central-directory-entries edir
+The number of records in the central directory in this split archive.
 @end deffn
+
 @deffn Procedure end-of-central-directory-total-entries edir
+The number of records in the central directory for the whole archive.
 @end deffn
-@deffn Procedure end-of-central-directory-size edir
-@end deffn
-@deffn Procedure end-of-central-directory-offset edir
-@end deffn
+
+@c @deffn Procedure end-of-central-directory-size edir
+@c @end deffn
+
+@c @deffn Procedure end-of-central-directory-offset edir
+@c @end deffn
+
 @deffn Procedure end-of-central-directory-comment edir
+A textual comment associated with the whole archive.
 @end deffn
 
 @noindent
