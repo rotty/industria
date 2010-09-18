@@ -1,6 +1,6 @@
 #!/usr/bin/env scheme-script
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -247,3 +247,12 @@
 (test '(xchg r8 rax) 64)
 (test '(xchg ax ax) 32)
 
+;;; Group 15
+
+(test '(lfence) 64)
+(test '(mfence) 64)
+(test '(sfence) 64)
+
+;;; Moffset
+
+(test '(mov (mem64+ #xff00ff00ffffffff) rax) 64)
