@@ -1,5 +1,5 @@
 #!/usr/bin/env scheme-script
-;; -*- mode: scheme; coding: utf-8 -*-
+;; -*- mode: scheme; coding: utf-8 -*- !#
 ;; fcdisasm - The Full-Color Disassembler
 ;; Copyright © 2008, 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
