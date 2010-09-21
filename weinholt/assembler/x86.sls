@@ -55,6 +55,7 @@
 (library (weinholt assembler x86 (1 0 0))
     (export assemble)
     (import (rnrs)
+            (only (srfi :13 strings) string-index)
             (weinholt assembler x86-operands (1 0 (>= 0)))
             (weinholt assembler x86-misc (1 0 (>= 0)))
             (weinholt disassembler x86-opcodes (1 0 (>= 0))))
@@ -75,12 +76,6 @@
            (list-prefix? (cdr prefix)
                          (cdr list)))
           (else #f)))
-
-  (define (string-index s c)
-    (let lp ((i 0))
-      (cond ((= (string-length s) i) #f)
-            ((char=? (string-ref s i) c) i)
-            (else (lp (+ i 1))))))
 
   (define (string-split1 s c)
     (let ((i (string-index s c)))
@@ -146,7 +141,8 @@
       (let-syntax
           ((defop (lambda (x)
                     (syntax-case x ()
-                      ((defop (name operand operand-size mode (encoding opsize-prefix?))
+                      ((defop (name operand operand-size mode
+                                    (encoding opsize-prefix?))
                          test ...)
                        (unless (memq (syntax->datum #'encoding)
                                      '(#f reg r/m implicit-r/m
@@ -268,6 +264,8 @@
         ;; Memory
         (defop (Mdq o opsize mode (mem #f))
           (and (memory? o) (eqv? (memory-datasize o) 128)))
+        (defop (Mem80 o opsize mode (mem #f))
+          (and (memory? o) (eqv? (memory-datasize o) 80)))
         (defop (Mq o opsize mode (mem #f))
           (and (memory? o) (eqv? (memory-datasize o) 64)))
         (defop (Md o opsize mode (mem #f))
@@ -285,6 +283,7 @@
           ;; FIXME: far pointer, check the size and all. The operand
           ;; size override is also valid here actually.
           (memory? o))
+
 
         ;; Destination operand for the string instructions
         (defop (Yv o opsize mode (#f operand-size))
@@ -333,12 +332,19 @@
           (far-pointer? o))
 
         ;; XMM registers
+        (defop (Vdq o opsize mode (reg #f))
+          (and (register? o) (eq? (register-type o) 'xmm)))
         (defop (Vpd o opsize mode (reg #f))
           (and (register? o) (eq? (register-type o) 'xmm)))
+        (defop (Wdq o opsize mode (r/m #f))
+          (cond ((register? o) (eq? (register-type o) 'xmm))
+                ((memory? o) (memv (memory-datasize o) '(#f 128)))
+                (else #f)))
         (defop (Wpd o opsize mode (r/m #f))
           (cond ((register? o) (eq? (register-type o) 'xmm))
                 ((memory? o) (memv (memory-datasize o) '(#f 128)))
                 (else #f)))
+        
 
         ;; Immediates
         (defop (Iz o opsize mode (immZ #f))
@@ -382,8 +388,10 @@
         (defop (*AX o opsize mode (#f operand-size))
           (and (register? o) (eqv? (register-type o) 16)
                (= (register-index o) 0)))
-        (defop (*AL o) (and (register? o) (eqv? (register-type o) 8) (= (register-index o) 0)))
-        (defop (*CL o) (and (register? o) (eqv? (register-type o) 8) (= (register-index o) 1)))
+        (defop (*AL o) (and (register? o) (eqv? (register-type o) 8)
+                            (= (register-index o) 0)))
+        (defop (*CL o) (and (register? o) (eqv? (register-type o) 8)
+                            (= (register-index o) 1)))
         (defop (*DX o)
           (and (register? o)
                (eqv? (register-type o) 16)
@@ -772,12 +780,16 @@
                                     (eas (encoding-address-size (template-encoding template)))
                                     (os (instruction-operand-size eos operands (template-opsyntax template)))
                                     (as (instruction-address-size eas operands)))
-                               (print "- " (template-opsyntax template) " - " (template-encoding template))
-                               (if (and (encoding-mode-is-acceptable? mode (template-encoding template))
-                                        (instruction-encodable? operands template mode os))
+                               (print "- " (template-opsyntax template)
+                                      " - " (template-encoding template))
+                               (if (and (encoding-mode-is-acceptable?
+                                         mode (template-encoding template))
+                                        (instruction-encodable? operands template
+                                                                mode os))
                                    (let ((dos (encoding-default-operand-size (template-encoding template) mode)))
                                      (values dos os (or os dos) as prefixes operands
-                                             (template-opsyntax template) (template-encoding template)))
+                                             (template-opsyntax template)
+                                             (template-encoding template)))
                                    (lp (cdr templates)))))))))))
             (else (try-pseudo #t)))))
 
@@ -797,12 +809,15 @@
        (let* ((opsyntax (template-opsyntax template)))
          (and (for-all vector? opsyntax) ;FIXME: unimplemented opsyntax
               (cond ((for-all (lambda (operand opsyntax)
-                                (operand-compatible-with-opsyntax? operand opsyntax os mode))
+                                (operand-compatible-with-opsyntax?
+                                 operand opsyntax os mode))
                               operands opsyntax)
-                     (when (and (exists opsyntax-requires-operand-size-override? opsyntax)
+                     (when (and (exists opsyntax-requires-operand-size-override?
+                                        opsyntax)
                                 (not os))
                        (error 'instruction-encodable?
-                              "This instruction needs an explicit operand size" operands))
+                              "This instruction needs an explicit operand size"
+                              operands))
                      #t)
                     (else #f)))))))
 
@@ -878,7 +893,8 @@
                   (vector (or value 0) 8))
                  ((#f) #f)
                  (else
-                  (error 'put-instruction "Unimplemented encoding position" operand opsyntax)))))
+                  (error 'put-instruction "Unimplemented encoding position"
+                         operand opsyntax)))))
             ((far-pointer? operand)
              (let ((offset (eval-expression (far-pointer-offset operand)
                                             (assembler-state-labels state))))
@@ -889,12 +905,14 @@
                   ;; FIXME: verify that they look like this in 64-bit mode
                   (let ((bv (make-bytevector (+ 4 2))))
                     (bytevector-u32-set! bv 0 (or offset 0) (endianness little))
-                    (bytevector-u16-set! bv 4 (far-pointer-seg operand) (endianness little))
+                    (bytevector-u16-set! bv 4 (far-pointer-seg operand)
+                                         (endianness little))
                     bv))
                  ((16)
                   (let ((bv (make-bytevector (+ 2 2))))
                     (bytevector-u16-set! bv 0 (or offset 0) (endianness little))
-                    (bytevector-u16-set! bv 2 (far-pointer-seg operand) (endianness little))
+                    (bytevector-u16-set! bv 2 (far-pointer-seg operand)
+                                         (endianness little))
                     bv)))))
             (else #f)))
     (map encode-operand! operands opsyntax))
@@ -958,14 +976,18 @@
                  ;; remain. These can be rIP-relative, which means
                  ;; we first need to find out the size of these
                  ;; values before we output them.
-                 (let* ((imms (cons disp (encode-operands! operands* opsyntax* eos as state)))
+                 (let* ((imms (cons disp (encode-operands! operands* opsyntax*
+                                                           eos as state)))
                         (size (fold-left (lambda (x y)
                                            (+ x (cond ((vector? y)
-                                                       (fxarithmetic-shift-right (vector-ref y 1) 3))
+                                                       (fxarithmetic-shift-right
+                                                        (vector-ref y 1) 3))
                                                       ((bytevector? y)
                                                        (bytevector-length y))
                                                       (else 0))))
-                                         (- (port-position (assembler-state-port state)) pos)
+                                         (- (port-position
+                                             (assembler-state-port state))
+                                            pos)
                                          imms)))
                    (print "#;immediates " imms " #;size " size)
 
@@ -974,7 +996,8 @@
                       (cond ((vector? y)
                              (put-bytevector port
                                              (number->bytevector
-                                              (- (vector-ref y 0) (assembler-state-ip state) size)
+                                              (- (vector-ref y 0)
+                                                 (assembler-state-ip state) size)
 
                                               (vector-ref y 1))))
 
@@ -1155,7 +1178,9 @@
          (for-each (lambda (b) (put-immediate b (car instr) state))
                    operands)
          (assembler-state-ip-set! state (+ (assembler-state-ip state)
-                                           (- (port-position (assembler-state-port state)) pos)))))
+                                           (- (port-position
+                                               (assembler-state-port state))
+                                              pos)))))
       ((%vu8)
        (put-bytevector (assembler-state-port state)
                        (cadr instr))
@@ -1172,9 +1197,8 @@
        ;; (%align <alignment> <byte>)
        ;; (%align <alignment> <non-rex-default-operand-size-register>)
        (let* ((alignment (cadr instr))
-              (pad (- (bitwise-and (+ (assembler-state-ip state) (- alignment 1))
-                                   (bitwise-not (- alignment 1)))
-                      (assembler-state-ip state))))
+              (pad (bitwise-and (- (assembler-state-ip state))
+                                (- alignment 1))))
          (cond ((= (length instr) 2)
                 (for-each (lambda (bv) (put-bytevector (assembler-state-port state) bv))
                           (choose-nops amd64-10h-nops pad 0
@@ -1197,15 +1221,15 @@
                   (size (cadr comm))
                   (alignment (caddr comm)))
               ;; Alignment
-              (let ((pad (- (bitwise-and (+ (assembler-state-ip state) (- alignment 1))
-                                         (bitwise-not (- alignment 1)))
-                            (assembler-state-ip state))))
+              (let ((pad (bitwise-and (- (assembler-state-ip state))
+                                      (- alignment 1))))
                 ;; Label
                 (hashtable-set! (assembler-state-labels state)
                                 label
                                 (assembler-state-ip state))
                 ;; Size
-                (assembler-state-ip-set! state (+ (assembler-state-ip state) pad size)))))
+                (assembler-state-ip-set! state (+ (assembler-state-ip state)
+                                                  pad size)))))
           (list-sort                    ;Sort by size
            (lambda (x y) (< (cadr x) (cadr y)))
            (reverse (assembler-state-comm state))))))
@@ -1216,7 +1240,9 @@
          ;; made as to what instruction encodings will work.
          (put-instruction instr state)
          (assembler-state-ip-set! state (+ (assembler-state-ip state)
-                                           (- (port-position (assembler-state-port state)) pos)))))))
+                                           (- (port-position
+                                               (assembler-state-port state))
+                                              pos)))))))
 
   
   (define (assemble code)
@@ -1244,8 +1270,10 @@
                   (hashtable-update! known-labels
                                      (cadar code)
                                      (lambda (old-label)
-                                       (when (and old-label (not (number? (cadar code))))
-                                         (error 'assemble "Duplicate label" (cadar code)))
+                                       (when (and old-label
+                                                  (not (number? (cadar code))))
+                                         (error 'assemble "Duplicate label"
+                                                (cadar code)))
                                        #t)
                                      #f)
                   ;; Keep the operands as they are
@@ -1262,7 +1290,8 @@
                   ;; Translate the operands, keeping the mnemonic as a symbol.
                   (let ((operands (translate-operands (cdar code) mode)))
                     (for-each (lambda (op)
-                                (for-each (lambda (x) (hashtable-set! used-labels x #t))
+                                (for-each (lambda (x)
+                                            (hashtable-set! used-labels x #t))
                                           (operand-labels op)))
                               operands)
                     (lp (cdr code)
@@ -1289,6 +1318,8 @@
             (cond ((or (assembler-state-relocs state)
                        (not (equal? labels newlabels)))
                    (print ";Some labels are unknown or changed! Assembling again...")
+                   (print labels)
+                   (print newlabels)
                    (lp newlabels
                        (make-assembler-state 16
                                              #f
@@ -1299,7 +1330,8 @@
                   (else
                    (print ";Symbol table:")
                    (vector-for-each
-                    (lambda (x) (print " '" (car x) " => #x" (number->string (cdr x) 16)))
+                    (lambda (x) (print " '" (car x) " => #x"
+                                       (number->string (cdr x) 16)))
                     newlabels)
                    (print ";Assembly complete.")
                    (values (extract) (assembler-state-labels state)))))))))
