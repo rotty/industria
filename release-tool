@@ -249,8 +249,14 @@
 
 (define release-libraries (find-released-set *released-libraries*))
 
-(define (release-test? test)
+(define (release-program? test type)
+  
   (define (good-import? import)
+    (define (ret import ok)
+      (unless ok
+        (format #t ";; Removing ~a program ~S from release because of import ~S.~%"
+                type (file-path test) import))
+      ok)
     (match (import-name import)
       (('srfi . _) #t)
       (('rnrs . _) #t)
@@ -259,20 +265,18 @@
                         (equal? (import-name import)
                                 (library-name lib)))
                       release-libraries)))
-         (unless v
-           (format #t ";; Removing test program ~S from release because of import ~S.~%"
-                   (file-path test) import))
-         v))
-      (x
-       (error 'release-test?
-              "Bad import in test program" x))))
+         (ret import v)))
+      (('xitomatl . _)
+       (ret import (eq? type 'demo)))
+      (else (ret import #f))))
   (for-all good-import? (program-imports test)))
 
-(define release-tests (filter release-test? tests))
+(define release-tests (filter (cut release-program? <> 'test) tests))
+(define release-programs (filter (cut release-program? <> 'demo) programs))
 
 (define release-files (append docs
                               release-tests
-                              programs
+                              release-programs
                               release-libraries))
 
 (define (list-unreleased-libs)
@@ -322,7 +326,8 @@
      (lambda (doc-name)
        (when (library-name? doc-name)
          (unless (member (cons 'weinholt doc-name) libs)
-           (format #t "Extra documentation for unreleased ~S~.%" (cons 'weinholt doc-name)))))
+           (format #t "Extra documentation for unreleased ~S~.%"
+                   (cons 'weinholt doc-name)))))
      docs)))
 
 (define (check-complete-testing)
@@ -348,7 +353,8 @@
           (filter
            (match-lambda (('srfi . _) #t) (_ #f))
            (map import-name
-                (append-map library-imports (remp library-implementation release-libraries)))))
+                (append-map library-imports (remp library-implementation
+                                                  release-libraries)))))
          (numbers
           (delete-duplicates (map cadr srfis))))
     (for-each (lambda (n)
