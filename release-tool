@@ -275,15 +275,15 @@
 (define release-programs (filter (cut release-program? <> 'demo) programs))
 
 (define release-files (append docs
-                              release-tests
                               release-programs
+                              release-tests
                               release-libraries))
 
-(define (list-unreleased-libs)
+(define (list-unreleased)
   (for-each (lambda (lib)
-              (unless (memq lib release-libraries)
+              (unless (memq lib release-files)
                 (format #t "~a~%" (file-path lib))))
-            libraries))
+            (append programs tests libraries)))
 
 ;;; Completeness tests
 
@@ -446,7 +446,7 @@
              (map file-path release-files)))
   ((_ "list-unreleased")
    ;; These files will not be included in the release.
-   (list-unreleased-libs))
+   (list-unreleased))
   ((name . _)
    (format (current-error-port)
            "Usage: ~a check-complete|list-srfis|run-tests|run-all-tests|list|list-unreleased~%"
