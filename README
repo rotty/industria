@@ -36,30 +36,3 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-* PROGRAMS
-The programs/ directory contains small utilities that use the
-libraries. These scripts are implemented in the way recommended by
-R6RS non-normative appendix D.
-
-** checksum
-Compute the hash or CRC of a file. Give it an algorithm and filenames
-and off it goes. It also demonstrates the superior slowness of the
-hashing libraries.
-
-** fcdisasm
-The Full-Color Disassembler, which disassembles x86 code and colors
-the bytes in the hexdump. This makes it easy to see how many bytes all
-the different parts of an instruction uses.
-
-** meircbot
-The Minimum-Effort IRC bot. The script contains the configuration. It
-doesn't do anything other than joining channels and being rude in
-private messages. Shows how the (weinholt net irc) library can be
-used. It requires tcp-connect and the (xitomatl AS-match).
-
-** x86-demo
-A demonstration of the (weinholt assembler x86) library. The program
-assembles a Multiboot image, which can be loaded by GNU GRUB. The demo
-uses the VGA text mode and a few VGA registers to generate a classic
-copper bar effect.
