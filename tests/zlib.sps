@@ -67,6 +67,14 @@
 (check (extract-bv #vu8(120 156 3 0 0 0 0 1) #f)
        => (eof-object))
 
+;; Bad checksum
+(check (guard (cnd
+               ((and (message-condition? cnd)
+                     (string=? (condition-message cnd) "bad ZLIB checksum"))
+                'bad-checksum))
+         (extract-bv #vu8(120 156 3 0 0 0 0 2) #f))
+       => 'bad-checksum)
+
 (call-with-port
     (open-bytevector-input-port chunked)
   (lambda (p)

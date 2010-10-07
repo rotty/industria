@@ -69,47 +69,61 @@ port that decompresses the file on-the-fly.
 
 @deffn Procedure extract-gzip binary-input-port binary-output-port
 Reads compressed data from @var{binary-input-port} and writes the
-decompressed data to @var{binary-output-port}. Returns the same values
-as @code{get-gzip-header}.
+decompressed data to @var{binary-output-port}. Returns a list of gzip
+headers, one for each gzip member of the file (gzip files can be
+concatenated).
 @end deffn
 
 @deffn Procedure get-gzip-header binary-input-port
 Reads a GZIP header from @var{binary-input-port} and performs sanity
 checks.
+@end deffn
 
-Returns several values:
+See RFC 1952 for a full description of the following values. Updates
+are available at @uref{http://www.gzip.org/format.txt}.
 
-@itemize
-@item
-A boolean that indicates if the data is believed to be text or binary.
-@item
+@deffn Procedure gzip-text? hdr
+True if the uncompressed data associated with @var{hdr} is believed to
+be text.
+@end deffn
+
+@deffn Procedure gzip-mtime hdr
 The file's modification time as an SRFI-19 date or @code{#f} is none
 is available.
-@item
+@end deffn
+
+@deffn Procedure gzip-extra-data hdr
 An ``extra field'' which some systems use to encode additional file
 attributes. This is an unparsed bytevector.
-@item
+@end deffn
+
+@deffn Procedure gzip-filename hdr
 The file's original filename as a string or @code{#f} if none is
 available.
-@item
+@end deffn
+
+@deffn Procedure gzip-comment hdr
 A file comment as a string or @code{#f} if none is available.
-@item
+@end deffn
+
+@deffn Procedure gzip-method hdr
 The symbol @code{slowest}, @code{fastest} or an integer (probably
 denoting a different compression setting).
-@item
+@end deffn
+
+@deffn Procedure gzip-os hdr
 The id number of the operating system that created the file. It is
 e.g.@: 0 for DOS, 1 for Amiga, 2 for VMS, 3 for Unix.
-@end itemize
-
-See RFC 1952 for a full description of the values. Updates are
-available at @uref{http://www.gzip.org/format.txt}.
 @end deffn
 
 @noindent
 Version history:
 @itemize
 @item
-@code{(0 0)} -- Initial version
+@code{(0 0)} -- Initial version.
+@item
+@code{(1 0)} -- GZIP headers are returned as a record type.
+@code{extract-gzip} returns a list of headers.
 @end itemize
 
 @c ======================================================================
@@ -129,8 +143,8 @@ The arguments @var{crc-init}, @var{crc-update} and @var{crc-finish}
 should have the same semantics that @code{(weinholt crypto crc)} uses,
 see @ref{crypto crc} and @ref{compression adler-32}.
 
-Two values are returned: the final CRC of the decompressed data, and
-its length.
+Three values are returned: the final CRC of the decompressed data, its
+length, and a bytevector with read but unused bytes from the input.
 @end deffn
 
 @deffn Procedure make-inflater binary-input-port sink window-size dictionary
@@ -151,6 +165,11 @@ streams this value is specified in the header.
 The @var{dictionary} is a bytevector that is prepended to the output
 buffer, but it is not actually copied to the output.
 @xref{compression zlib}.
+
+The inflate algorithm needs some lookahead and therefore it can read a
+byte or two that does not belong to the inflate stream itself. Apply
+the symbol @code{get-buffer} to the returned procedure to recover
+those extra bytes as a bytevector.
 @end deffn
 
 @noindent
@@ -158,6 +177,10 @@ Version history:
 @itemize
 @item
 @code{(0 0)} -- Initial version
+@item
+@code{(1 0)} -- @code{inflate} returns three values (backwards
+incompatible change). The inflater procedures gain a way to return any
+buffered bytes.
 @end itemize
 
 @c ======================================================================
