@@ -17,18 +17,19 @@ attempting to standardize this environment variable name. An
 alternative is to move or symlink the @code{weinholt} directory into a
 directory that already exists in your Scheme's search path.
 
-There have not been any releases yet. The development version of
-Industria is available in a Bazaar repository on
-@uref{https://launchpad.net/,Launchpad}. You can download the
-development version like this:
+Release tarballs are available at
+@url{https://weinholt.se/industria/}.
+@cindex release tarballs
+
+The development version of Industria is available in a Bazaar
+repository on @uref{https://launchpad.net/,Launchpad}. You can
+download the development version like this:
 @verbatim
 bzr checkout --lightweight lp:~weinholt/scheme-libraries/industria
 @end verbatim
-
 Development snapshots are available at
 @url{https://weinholt.se/industria/}.
 @cindex development snapshots
-
 
 You will also need a number of SRFI libraries. If your Scheme does not
 come with a collection of SRFIs already you can get them from the
