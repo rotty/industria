@@ -1,8 +1,11 @@
 -*- mode: outline; coding: utf-8 -*-
 
 * WHAT THIS IS
-These are the Industria libraries for R6RS Scheme. It's more or less a
-place for me to put the Scheme code I write.
+Industria is a collection of portable R6RS Scheme libraries for
+cryptography (AES, DES, Blowfish, HMAC, MD5, SHA-1, SHA-2, RSA, DSA,
+etc.), zip/gzip/zlib decompression, disassembly of amd64 machine code,
+Off-The-Record messaging, bytevector pack/unpack syntax, TLS
+connections via custom binary ports, and more.
 
 Here's the project website:
 <https://code.launchpad.net/~weinholt/scheme-libraries/industria>
