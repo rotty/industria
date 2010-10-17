@@ -37,7 +37,7 @@ come with a collection of SRFIs already you can get them from the
 Scheme Libraries Team at Launchpad}.
 
 Another way to install the libraries is to use the Dorodango package
-manager. It's available at @url{http://rotty.yi.org/software/dorodango/}.
+manager. It's available at @url{http://home.gna.org/dorodango/}.
 @cindex dorodango, package manager
 
 @node Usage
