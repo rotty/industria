@@ -254,7 +254,6 @@
 (define release-libraries (find-released-set *released-libraries*))
 
 (define (release-program? test type)
-
   (define (good-import? import)
     (define (ret import ok)
       (unless ok
@@ -348,25 +347,28 @@
 
 ;;; Check which SRFIs are required to use all the libraries
 
+(define (srfi<? . xs)
+  (define (f s)
+    (let ((s (symbol->string s)))
+      (string->number (substring s 1 (string-length s)))))
+  (apply < (map f (map cadr xs))))
+
+(define (srfi=? x y) (eq? (cadr x) (cadr y)))
+
+(define srfi? (match-lambda (('srfi . _) #t) (_ #f)))
+
+(define *srfis*
+  (list-sort srfi<?
+             (delete-duplicates
+              (filter srfi?
+                      (map import-name
+                           (append-map library-imports
+                                       (remp library-implementation
+                                             release-libraries))))
+              srfi=?)))
+
 (define (list-required-srfis)
-  (define (srfi<? . xs)
-    (define (f s)
-      (let ((s (symbol->string s)))
-        (string->number (substring s 1 (string-length s)))))
-    (apply < (map f xs)))
-  (let* ((srfis
-          (filter
-           (match-lambda (('srfi . _) #t) (_ #f))
-           (map import-name
-                (append-map library-imports (remp library-implementation
-                                                  release-libraries)))))
-         (numbers
-          (delete-duplicates (map cadr srfis))))
-    (for-each (lambda (n)
-                (let ((name (find (lambda (l) (eq? (cadr l) n))
-                                  srfis)))
-                  (format #t "~S~%" name)))
-              (list-sort srfi<? numbers))))
+  (for-each (cut format #t "~S~%" <>) *srfis*))
 
 ;;; Run test programs
 
@@ -447,15 +449,22 @@ connections via custom binary ports, and more.")
 
 ;; This file should be named pkg-list.scm
 (define (dorodango-package-list version)
+  (define (build-srfis)
+    (map (lambda (srfi)
+           ;; (srfi :1 lists) => srfi-1
+           (let ((str (symbol->string (cadr srfi))))
+             (list
+              (string->symbol
+               (string-append "srfi-" (substring str 1 (string-length str)))))))
+         *srfis*))
   (format #t ";; Dorodango package, see http://home.gna.org/dorodango/~%")
   (pretty-print
    `(package (industria ,(map string->number (string-split version #\.)))
-             ;; XXX: could include which SRFIs it depends on
-             (depends (srfi))
-             (libraries "weinholt")
+             (depends ,@(build-srfis))
              (synopsis ,synopsis)
              (description ,description)
-             (homepage ,homepage))))
+             (homepage ,homepage)
+             (libraries "weinholt"))))
 
 ;; This file should be named MANIFEST
 (define (ucl-manifest version)
