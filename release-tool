@@ -32,7 +32,8 @@
               file-symbolic-link? file-size)
         (xitomatl AS-match)
         ;; TODO: find a portable replacement:
-        (only (ikarus) process waitpid wstatus-exit-status))
+        (only (ikarus) process waitpid wstatus-exit-status)
+        (only (ikarus) pretty-print))
 
 (unless (file-exists? "documentation/industria.texinfo")
   (error 'release-tool "Could not find documentation/industria.texinfo"))
@@ -87,6 +88,8 @@
 
 (define *implementations* '(chezscheme
                             ikarus
+                            ;; guile
+                            ;; larcency
                             mosh
                             mzscheme
                             vicare
@@ -173,7 +176,7 @@
   (guard (exn
           (else
            (format (current-error-port)
-                   ";; Exception while reading ~S: ~S~%"
+                   ";;; Exception while reading ~S: ~S~%"
                    path exn)
            #f))
     (call-with-input-file path
@@ -204,7 +207,7 @@
                 (cond ((examine-file path) => list)
                       (else
                        (format (current-error-port)
-                               ";; File ~S rejected by examine-file~%" path)
+                               ";;; File ~S rejected by examine-file~%" path)
                        '())))
                ((file-directory? path)
                 (find-files (string-append path "/")
@@ -235,7 +238,8 @@
       (add! library)
       (for-each (lambda (dep)
                   (unless (added? dep)
-                    (format #t ";; Adding extra library to release: ~S.~%" dep)
+                    (format (current-error-port)
+                            ";;; Adding extra library to release: ~S.~%" dep)
                     (traverse add! added? dep)))
                 deps)))
   (letrec ((libs (make-hashtable (lambda (x) (string-hash (format #f "~a" x)))
@@ -250,11 +254,12 @@
 (define release-libraries (find-released-set *released-libraries*))
 
 (define (release-program? test type)
-  
+
   (define (good-import? import)
     (define (ret import ok)
       (unless ok
-        (format #t ";; Removing ~a program ~S from release because of import ~S.~%"
+        (format (current-error-port)
+                ";;; Removing ~a program ~S from release because of import ~S.~%"
                 type (file-path test) import))
       ok)
     (match (import-name import)
@@ -428,6 +433,56 @@
           (length tests) correct failed)
   (for-each display failures))
 
+;;; Package manifests
+
+(define synopsis "Cryptography, compression, OTR, TLS, etc.")
+(define description
+  "Industria is a collection of portable R6RS Scheme libraries for \
+cryptography (AES, DES, Blowfish, HMAC, MD5, SHA-1, SHA-2, RSA, DSA, \
+etc.), zip/gzip/zlib decompression, disassembly of amd64 machine code, \
+Off-The-Record messaging, bytevector pack/unpack syntax, TLS \
+connections via custom binary ports, and more.")
+
+(define homepage "http://weinholt.se/industria/")
+
+;; This file should be named pkg-list.scm
+(define (dorodango-package-list version)
+  (format #t ";; Dorodango package, see http://home.gna.org/dorodango/~%")
+  (pretty-print
+   `(package (industria ,(map string->number (string-split version #\.)))
+             ;; XXX: could include which SRFIs it depends on
+             (depends (srfi))
+             (libraries "weinholt")
+             (synopsis ,synopsis)
+             (description ,description)
+             (homepage ,homepage))))
+
+;; This file should be named MANIFEST
+(define (ucl-manifest version)
+  (define (print . x) (for-each write x) (newline))
+  (format #t ";; UCL package, see http://ucl.willdonnelly.net/~%")
+  (print '(package industria))
+  (print `(version ,@(map string->number (string-split version #\.))))
+  (print '(category "Cryptography" "Compression"))
+  (print `(synopsis ,synopsis))
+  (print `(description ,description))
+  (print '(author "Göran Weinholt"))
+  (print '(email "goran@weinholt.se"))
+  (print `(url ,homepage))
+  (print '(license GPL3))
+  (print '(license-file "COPYING"))
+  (print `(code ,@(map file-path release-libraries)))
+  ;;(print `(symlink (,(string-append "industria-" version "/weinholt") . "weinholt")))
+  ;; TODO: missing SRFI dependencies
+  (print `(depends))
+  (print `(schemes ,@*implementations*)))
+
+(define package-files
+  (append (if (file-exists? "pkg-list.scm") '("pkg-list.scm") '())
+          ;; XXX: UCL can't use the release tarball because UCL
+          ;; packages are tarbombs.
+          #;(if (file-exists? "MANIFEST") '("MANIFEST") '())))
+
 ;;; Invocation
 
 (match (command-line)
@@ -443,14 +498,19 @@
    ;; These are all the files to be included in a release tarball.
    (for-each (lambda (x)
                (format #t "~a~%" x))
-             (map file-path release-files)))
+             (append package-files (map file-path release-files))))
   ((_ "list-unreleased")
    ;; These files will not be included in the release.
    (list-unreleased))
+  ((_ "dorodango" version) (dorodango-package-list version))
+  ((_ "ucl" version) (ucl-manifest version))
   ((name . _)
    (format (current-error-port)
            "Usage: ~a check-complete|list-srfis|run-tests|run-all-tests|list|list-unreleased~%"
            name)
+   (format (current-error-port)
+           "Usage: ~a dorodango|ucl package-version~%"
+           name)
    (exit 1)))
 
-(format #t ";; done.~%")
+(format (current-error-port) ";;; done.~%")
