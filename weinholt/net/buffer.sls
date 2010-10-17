@@ -32,7 +32,7 @@
 
 ;; TODO: proper conditions
 
-(library (weinholt net buffer (1 0 20100617))
+(library (weinholt net buffer (1 0 20101016))
   (export make-buffer
           buffer-read! buffer-copy!
           buffer-port buffer-port-set!
@@ -80,7 +80,7 @@
                                            (buffer-bottom buf) n)))
         (if (or (eof-object? bytes-read)
                 (< bytes-read n))
-            (error 'buffer-read! "unexpected end of data")
+            (error 'buffer-read! "unexpected end of data" (buffer-port buf))
             (buffer-bottom-set! buf (+ (buffer-bottom buf) n))))))
 
   ;; Copy `n' bytes from source+source-start to the top of the buffer.
