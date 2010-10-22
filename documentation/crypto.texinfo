@@ -33,6 +33,7 @@ or the FDA and quite likely aren't allowed for government work.
 * crypto blowfish::       The Blowfish cipher
 * crypto crc::            Cyclic Redundancy Codes (CRC)
 * crypto des::            Data Encryption Standard (DES, 3DES)
+* crypto dh::             Diffie-Hellman key exchange
 * crypto dsa::            Digital Signature Algorithm (DSA)
 * crypto entropy::        Entropy and randomness
 * crypto md5::            Message-Digest algorithm 5 (MD5)
@@ -484,6 +485,64 @@ The @var{salt} must be a string of two characters from the alphabet
 A more general interface is also available, @pxref{crypto password}.
 @end deffn
 
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
+@end itemize
+
+
+@c ======================================================================
+@node crypto dh
+@subsection Diffie-Hellman key exchange
+The @code{(weinholt crypto dh)} library exports procedures and
+constants for Diffie-Hellman (Merkle) key exchange. D-H works by
+generating a pair of numbers, sending one of them to the other party,
+and using the other one and the one you receive to compute a shared
+secret. The idea is that it's difficult for an eavesdropper to deduce
+the shared secret.
+
+The D-H exchange must be protected by e.g.@: public key encryption
+because otherwise a MITM attack is trivial. It is best to use a
+security protocol designed by an expert.
+@cindex Diffie-Hellman
+
+@deffn Procedure make-dh-secret generator prime bit-length
+Generates a Diffie-Hellman secret key pair. Returns two values: the
+secret key (of bitwise length @var{bit-length}) part and the public
+key part.
+@end deffn
+
+@deffn Procedure expt-mod base exponent modulus
+Computes @code{(mod (expt @var{base} @var{exponent}) @var{modulus})}.
+This is modular exponentiation, so all the parameters must be
+integers.
+
+The @var{exponent} can also be negative (set it to -1 to calculate the
+multiplicative inverse of @var{base}).
+
+@example
+(import (weinholt crypto dh))
+(let ((g modp-group15-g) (p modp-group15-p))
+  (let-values (((y Y) (make-dh-secret g p 320))
+               ((x X) (make-dh-secret g p 320)))
+    ;; The numbers being compared are the shared secret
+    (= (expt-mod X y modp-group15-p)
+       (expt-mod Y x modp-group15-p))))
+@result{} #t
+@end example
+@end deffn
+
+This library also exports a few well known modular exponential (MODP)
+Diffie-Hellman groups (generators and primes) that have been defined
+by Internet RFCs. They are named modp-groupN-g (generator) and
+modp-groupN-p (prime) where N is the number of the group. Groups 1, 2,
+5, 14, 15, 16, 17 and 18 are currently exported. They all have
+different lengths and longer primes are more secure but also slower.
+See RFC 3526 for more on this.
+@cindex MODP groups
 
 @noindent
 Version history:
