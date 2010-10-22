@@ -147,7 +147,8 @@
 
 (define (find-docs start)
   (append (list (make-document "COPYING" '())
-                (make-document "README" '()))
+                (make-document "README" '())
+                (make-document "NEWS" '()))
           (map parse-doc (locate-docs start))))
 
 (define (examine-file path)
