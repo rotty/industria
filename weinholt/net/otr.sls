@@ -26,7 +26,7 @@
 ;; TODO: finishing sessions.
 ;; TODO: let the library user decide what errors to send
 
-(library (weinholt net otr (0 0 20101007))
+(library (weinholt net otr (0 0 20101022))
   (export otr-message?
           otr-update!
           otr-send-encrypted!
@@ -51,8 +51,8 @@
           (weinholt bytevectors)
           (weinholt crypto aes)
           (weinholt crypto dsa)
+          (weinholt crypto dh)
           (weinholt crypto entropy)
-          (weinholt crypto math)
           (weinholt crypto sha-1)
           (weinholt crypto sha-2)
           (weinholt struct pack)
@@ -72,17 +72,6 @@
 
   (define (hex x)
     (string-append "#x" (number->string x 16)))
-
-  (define (make-secret g n bits tries) ;also in net/irc/fish, should be in crypto/dh maybe?
-    (unless (< tries 1000)
-      (error 'make-secret "unable to make a secret"))
-    (let* ((y (bytevector->uint (make-random-bytevector (div (+ bits 7) 8))))
-           (Y (expt-mod g y n)))
-      ;; See RFC 2631. Probably not clever enough.
-      (if (and (<= 2 Y (- n 1))
-               (= 1 (expt-mod Y (/ (- n 1) 2) n)))
-          (values y Y)
-          (make-secret g n bits (+ tries 1)))))
 
   (define (get-bytevector p n)
     (when (> n 65536)
@@ -219,19 +208,11 @@
 
   ;; Diffie-Hellman modulus and generator. Diffie-Hellman Group 5 from
   ;; RFC 3526.
-  (define n
-    (string->number
-     "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1\
-      29024E088A67CC74020BBEA63B139B22514A08798E3404DD\
-      EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245\
-      E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED\
-      EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3D\
-      C2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F\
-      83655D23DCA3AD961C62F356208552BB9ED529077096966D\
-      670C354E4ABC9804F1746C08CA237327FFFFFFFFFFFFFFFF"
-     16))
-  (define g 2)
+  (define n modp-group5-p)
+  (define g modp-group5-g)
 
+  ;; "Note that all DH key pairs should have a private part that is at
+  ;; least 320 bits long." -- OTR spec 3.2.0
   (define dh-length 640)              ;length for the private D-H keys
 
   ;; XXX: unfortunately libotr assumes 160-bit signatures. It is
@@ -764,7 +745,7 @@
 
   ;; "Bob" starts the Authenticated Key Exchange.
   (define (start-ake _)
-    (let-values (((x X) (make-secret g n dh-length 100))
+    (let-values (((x X) (make-dh-secret g n dh-length))
                  ((r) (make-random-bytevector 128/8)))
       (let* ((Xbv (uint->mpi X))
              (X-hash (sha-256->bytevector (sha-256 Xbv))))
@@ -784,6 +765,7 @@
              (let ((Y (bytevector->uint (get-bytevector p (get-unpack p "!L")))))
                (unless (and (<= 2 Y (- n 2)) (not (= X Y)))
                  (error 'auth-state-awaiting-dhkey "Received bad Y" Y))
+               (print "Here's Y: #x" (number->string Y 16))
                (let-values (((ssid c c* m1 m2 m1* m2*) (make-keys Y x)))
                  (let* ((keyid-bob 1)
                         (X-bob (sign-public-key (otr-state-our-dsa-key (*state*))
@@ -863,7 +845,7 @@
              ;; reveals in the next message.
              (let* ((X-encrypted (get-bytevector p (get-unpack p "!L")))
                     (X-hash (get-bytevector p (get-unpack p "!L"))))
-               (let-values (((y Y) (make-secret g n dh-length 100)))
+               (let-values (((y Y) (make-dh-secret g n dh-length)))
                  (print (list 'our-dh-privkey (hex y)))
                  (print (list 'our-dh-pubkey (hex Y)))
                  (send (bytevector-append (pack "!SC" otr-version
@@ -1019,7 +1001,7 @@
       (let ((latest-id (caar (otr-state-our-keys state))))
         (when (= (otr-state-our-latest-acked state) latest-id)
           (print "Making a new DH key")
-          (let-values (((y Y) (make-secret g n dh-length 100)))
+          (let-values (((y Y) (make-dh-secret g n dh-length)))
             ;; (print "Next public key: " (+ latest-id 1) " -- " (hex Y))
             ;; (print "Next private key: " (+ latest-id 1) " -- " (hex y))
             (otr-state-our-keys-set! state (take (cons (cons (+ latest-id 1) y)
