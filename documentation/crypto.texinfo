@@ -237,11 +237,29 @@ the key material will actually be gone from memory. It might remain in
 temporary numbers or other values.
 @end deffn
 
+@deffn Procedure blowfish-cbc-encrypt! source source-start target target-start k schedule iv
+Encrypts @var{k} bytes in the bytevector @var{source} starting at
+@var{source-start} with Blowfish in CBC mode and writes the result to
+@var{target} at @var{target-start}.
+
+The argument @var{k} must be an integer multiple of 8, which is the block length.
+
+The @var{iv} bytevector is an Initial Vector. It should be 8 bytes
+long, initialized to random bytes. This procedure updates the @var{iv}
+after processing a block.
+@end deffn
+
+@deffn Procedure blowfish-cbc-decrypt! source source-start target target-start k schedule iv
+The inverse of @code{blowfish-cbc-encrypt!}.
+@end deffn
+
 @noindent
 Version history:
 @itemize
 @item
 @code{(0 0)} -- Initial version.
+@item
+@code{(0 1)} -- Added procedures for CBC mode.
 @end itemize
 
 @c ======================================================================

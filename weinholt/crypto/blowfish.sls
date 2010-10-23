@@ -1,6 +1,6 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
 ;; Bruce Schneier's Blowfish block cipher.
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -20,12 +20,13 @@
 ;; Cryptography". http://www.schneier.com/blowfish.html
 
 ;; Keys can be between 8 and 448 bits. The key length does not affect
-;; performance.
+;; performance. Blocks are 8 bytes.
 
-(library (weinholt crypto blowfish (0 0 20090919))
+(library (weinholt crypto blowfish (0 1 20101023))
   (export expand-blowfish-key blowfish-encrypt!
           reverse-blowfish-schedule blowfish-decrypt!
-          clear-blowfish-schedule!)
+          clear-blowfish-schedule!
+          blowfish-cbc-encrypt! blowfish-cbc-decrypt!)
   (import (rename (rnrs)
                   (bitwise-xor xor) (bitwise-and logand)
                   (bitwise-ior ior)
@@ -108,6 +109,45 @@
     (vector-fill! (vector-ref (cdr sched) 2) 0)
     (vector-fill! (vector-ref (cdr sched) 3) 0))
 
+;;; CBC mode
+  
+  (define (blowfish-cbc-encrypt! source source-start target target-start len sched iv)
+    (unless (fxzero? (fxand len 7))
+      (error 'blowfish-cbc-encrypt!
+             "The length has to be an integer multiple of 8" len))
+    (do ((ss source-start (fx+ ss 8))
+         (ts target-start (fx+ ts 8))
+         (len len (fx- len 8)))
+        ((fx<? len 8))
+      (do ((i 0 (fx+ i 2)))
+          ((fx=? i 8))
+        (bytevector-u16-native-set! iv i
+                                    (fxxor
+                                     (bytevector-u16-native-ref iv i)
+                                     (bytevector-u16-native-ref source (fx+ ss i)))))
+      (blowfish! iv 0 target ts sched)
+      (bytevector-copy! target ts iv 0 8)))
+
+  (define (blowfish-cbc-decrypt! source source-start target target-start len sched iv)
+    (unless (fxzero? (fxand len 7))
+      (error 'blowfish-cbc-decrypt!
+             "The length has to be an integer multiple of 8" len))
+    (do ((buf (make-bytevector 8))
+         (ss source-start (fx+ ss 8))
+         (ts target-start (fx+ ts 8))
+         (len len (fx- len 8)))
+        ((fx<? len 8))
+      (blowfish! source ss buf 0 sched)
+      (do ((i 0 (fx+ i 2)))
+          ((fx=? i 8))
+        (bytevector-u16-native-set! buf i
+                                    (fxxor (bytevector-u16-native-ref iv i)
+                                           (bytevector-u16-native-ref buf i))))
+      (bytevector-copy! source ss iv 0 8)
+      (bytevector-copy! buf 0 target ts 8)))
+
+;;; P-box, S-box
+  
   ;; Permutation and substitution boxen. These are hexadecimal digits
   ;; of pi (check with pi.nersc.gov if you like).
   (define P-box

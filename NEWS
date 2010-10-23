@@ -1,6 +1,9 @@
 -*- mode: outline; coding: utf-8 -*-
 
 * New in 1.1 (not yet released):
+** (weinholt crypto blowfish): New procedures for CBC mode
+The procedures blowfish-cbc-encrypt! and blowfish-cbc-decrypt! were
+added.
 ** (weinholt crypto dh): New library for Diffie-Hellman key exchange
 This code was previously spread out in different libraries. The
 library exports make-dh-secret, expt-mod and a few MODP groups.
