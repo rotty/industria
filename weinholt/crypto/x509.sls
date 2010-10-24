@@ -23,7 +23,7 @@
 ;; A little on how people implement X.509 differently:
 ;; http://www.cs.auckland.ac.nz/~pgut001/pubs/x509guide.txt
 
-(library (weinholt crypto x509 (0 0 20100904))
+(library (weinholt crypto x509 (0 0 20101024))
   (export certificate?
           certificate-from-bytevector
           certificate-public-key
@@ -35,13 +35,14 @@
           certificate-tbs-data
 
           print-certificate)
-  (import (rnrs)
+  (import (except (rnrs) bytevector=?)
           (only (srfi :13 strings) string-join
                 string-pad string-prefix? string-suffix-ci?
                 string-count string-index-right)
           (srfi :19 time)
           (srfi :39 parameters)
-          (weinholt bytevectors)
+          (rename (weinholt bytevectors)
+                  (bytevector=?/constant-time bytevector=?))
           (weinholt crypto dsa)
           (weinholt crypto md5)
           (weinholt crypto rsa)

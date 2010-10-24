@@ -32,7 +32,7 @@
 ;; Each subkey also has a self-signature that binds it to the primary
 ;; key, and a self-signature that binds the primary key to the subkey.
 
-(library (weinholt crypto openpgp (1 0 20100829))
+(library (weinholt crypto openpgp (1 0 20101024))
   (export get-openpgp-keyring
           get-openpgp-keyring/keyid
           get-openpgp-detached-signature/ascii
@@ -56,11 +56,12 @@
           openpgp-public-key-value
           openpgp-public-key-fingerprint openpgp-format-fingerprint
           openpgp-public-key-id)
-  (import (rnrs)
+  (import (except (rnrs) bytevector=?)
           (only (srfi :1 lists) take-while)
           (only (srfi :13 strings) string-pad)
           (srfi :19 time)
-          (weinholt bytevectors)
+          (rename (weinholt bytevectors)
+                  (bytevector=?/constant-time bytevector=?))
           (weinholt crypto dsa)
           (weinholt crypto md5)
           (weinholt crypto rsa)

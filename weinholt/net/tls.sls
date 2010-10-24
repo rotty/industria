@@ -37,7 +37,7 @@
 ;; TODO: go through the implementation pitfalls in the RFC. check all
 ;; the MUSTs.
 
-(library (weinholt net tls (0 0 20101022))
+(library (weinholt net tls (0 0 20101024))
   (export make-tls-wrapper
           flush-tls-output
           put-tls-record get-tls-record
@@ -52,11 +52,12 @@
           put-tls-application-data
           tls-conn-remote-certs
           tls-conn-has-unprocessed-data?)
-  (import (rnrs)
+  (import (except (rnrs) bytevector=?)
           (only (srfi :1 lists) last)
           (srfi :19 time)
           (srfi :27 random-bits)
-          (weinholt bytevectors)
+          (rename (weinholt bytevectors)
+                  (bytevector=?/constant-time bytevector=?))
           (weinholt crypto aes)
           (weinholt crypto arcfour)
           (weinholt crypto des)

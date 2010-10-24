@@ -26,7 +26,7 @@
 ;; TODO: finishing sessions.
 ;; TODO: let the library user decide what errors to send
 
-(library (weinholt net otr (0 0 20101022))
+(library (weinholt net otr (0 0 20101024))
   (export otr-message?
           otr-update!
           otr-send-encrypted!
@@ -39,7 +39,7 @@
           otr-hash-public-key
           otr-format-session-id
           otr-state-mss otr-state-mss-set!)
-  (import (rnrs)
+  (import (except (rnrs) bytevector=?)
           (only (srfi :1 lists) iota map-in-order
                 alist-delete take)
           (only (srfi :13 strings) string-contains string-join
@@ -48,7 +48,8 @@
           (srfi :26 cut)
           (srfi :27 random-bits)
           (srfi :39 parameters)
-          (weinholt bytevectors)
+          (rename (weinholt bytevectors)
+                  (bytevector=?/constant-time bytevector=?))
           (weinholt crypto aes)
           (weinholt crypto dsa)
           (weinholt crypto dh)
