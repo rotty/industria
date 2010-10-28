@@ -10,3 +10,6 @@ added.
 ** (weinholt crypto dh): New library for Diffie-Hellman key exchange
 This code was previously spread out in different libraries. The
 library exports make-dh-secret, expt-mod and a few MODP groups.
+** (weinholt crypto dsa): Better secret numbers for signatures
+The per-message secret number used by dsa-create-signature is now
+generated more in accordance with FIPS 186-3 Appendix B.2.1.
