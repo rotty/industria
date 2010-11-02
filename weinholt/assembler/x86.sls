@@ -844,7 +844,7 @@
                          (cons default (map operand-size operands opsyntaxen)))))
       (cond ((null? sizes) #f)
             (else
-             (unless (apply = sizes)
+             (unless (or (null? (cdr sizes)) (apply = sizes))
                (error 'instruction-operand-size
                       "Incompatible operand sizes used" operands opsyntaxen))
              (car sizes)))))
