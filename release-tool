@@ -41,6 +41,8 @@
 (define *private-libraries*
   (list '(weinholt crypto aes private)
         '(weinholt disassembler private)
+        '(weinholt net ssh algorithms)
+        '(weinholt net ssh private)
         '(weinholt struct pack-aux)))
 
 (define *released-libraries*

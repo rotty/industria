@@ -25,7 +25,9 @@
 ;;      Thayer. November 2006. (Format: TXT=18395 bytes) (Status:
 ;;      INFORMATIONAL)
 
-(library (weinholt crypto ssh-public-key (1 0 20100829))
+;; TODO: http://permalink.gmane.org/gmane.ietf.secsh/6520 ?
+
+(library (weinholt crypto ssh-public-key (1 0 20101101))
   (export get-ssh-public-key
           ssh-public-key->bytevector
           ssh-public-key-fingerprint

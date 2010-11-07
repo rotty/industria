@@ -1,0 +1,269 @@
+#!/usr/bin/env scheme-script
+;; -*- mode: scheme; coding: utf-8 -*- !#
+;; Example SecSH server
+;; Copyright © 2010 Göran Weinholt <goran@weinholt.se>
+;;
+;; This program is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+;;
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+;;
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#!r6rs
+
+;; Take what you see here with a pinch of salt!
+
+;; TODO: handle window adjustments properly
+
+(import (rnrs)
+        (srfi :19 time)
+        (weinholt bytevectors)
+        (weinholt crypto dsa)
+        (weinholt crypto ssh-public-key)
+        (weinholt crypto password)
+        (weinholt net ssh)
+        (weinholt net ssh connection)
+        (weinholt net ssh transport)
+        (weinholt net ssh userauth)
+        (weinholt struct pack)
+        (weinholt text strings)
+        (only (ikarus) tcp-server-socket fork
+              accept-connection waitpid))
+
+(define (print . x) (for-each display x) (newline))
+
+(define passwd
+  '(("root" . "$1$P0j07sTf$aqyWUwdBcvgIYaIwVBzwS/"))) ;toor
+
+(define hostname "darkstar")
+
+(define (test-request x)
+  (and (userauth-request/password? x)
+       (string=? (userauth-request-service x) "ssh-connection")
+       (cond ((assoc (userauth-request-username x) passwd)
+              => (lambda (pwline)
+                   (if (string=? (cdr pwline)
+                                 (crypt (userauth-request/password-value x)
+                                        (cdr pwline)))
+                       'pwd-ok #f)))
+             (else #f))))
+
+(define *pty* '())
+
+#;((TTY_OP_OSPEED . 38400) (TTY_OP_ISPEED . 38400) (VINTR . 3) (VQUIT . 28)
+   (VERASE . 127) (VKILL . 21) (VEOF . 4) (VEOL . 0) (VEOL2 . 0) (VSTART . 17)
+   (VSTOP . 19) (VSUSP . 26) (VREPRINT . 18) (VWERASE . 23) (VLNEXT . 22)
+   (VDISCARD . 15) (IGNPAR . 1) (PARMRK . 0) (INPCK . 0) (ISTRIP . 0) (INLCR . 0)
+   (IGNCR . 0) (ICRNL . 1) (IUCLC . 0) (IXON . 1) (IXANY . 0) (IXOFF . 0)
+   (IMAXBEL . 1) (ISIG . 1) (ICANON . 1) (XCASE . 0) (ECHO . 1) (ECHOE . 1)
+   (ECHOK . 1) (ECHONL . 0) (NOFLSH . 0) (TOSTOP . 0) (IEXTEN . 1) (ECHOCTL . 1)
+   (ECHOKE . 1) (PENDIN . 0) (OPOST . 1) (OLCUC . 0) (ONLCR . 1) (OCRNL . 0)
+   (ONOCR . 0) (ONLRET . 0) (CS7 . 1) (CS8 . 1) (PARENB . 0) (PARODD . 0))
+
+(define *pty-line* #vu8())
+(define *prompt* "\n# ")
+
+(define (pty? b key)
+  (cond ((assq key *pty*) => (lambda (x) (= (cdr x) b)))
+        (else #f)))
+
+(define (send conn ID msg)
+  (define (fix bv)
+    (call-with-bytevector-output-port
+      (lambda (p)
+        (do ((i 0 (+ i 1)))
+            ((= i (bytevector-length bv)))
+          (let ((b (bytevector-u8-ref bv i)))
+            (cond ((and (= b (char->integer #\linefeed))
+                        (pty? 1 'ONLCR))
+                   (put-u8 p (char->integer #\return))
+                   (put-u8 p b))
+                  (else
+                   (put-u8 p b))))))))
+  (let ((bv (if (bytevector? msg) msg (string->utf8 msg))))
+    (put-ssh conn (make-channel-data ID (fix bv)))))
+
+(define (handle-command conn ID line)
+  (let ((line (utf8->string line)))
+    (print "Handling command:") (write line) (newline)
+    (unless (string=? line "")
+      ;; It's a realistic Linux simulation!
+      (send conn ID (string-append
+                     (car (string-split line #\space))
+                     ": Stale NFS handle")))))
+
+(define (fixup b)
+  (cond ((and (= b (char->integer #\return))
+              (pty? 1 'ICRNL))
+         (char->integer #\linefeed))
+        (else b)))
+
+(define (handle-data conn ID x)
+  (let ((bv (channel-data-value x)))
+    (do ((i 0 (+ i 1)))
+        ((= i (bytevector-length bv)))
+      (let ((b (fixup (bytevector-u8-ref bv i))))
+        (cond
+          ((= b (char->integer #\linefeed))
+           (send conn ID "\n")
+           (handle-command conn ID *pty-line*)
+           (set! *pty-line* #vu8())
+           (send conn ID *prompt*))
+          ((pty? b 'VINTR)
+           (set! *pty-line* #vu8())
+           (send conn ID "^C")
+           (send conn ID *prompt*))
+          ((pty? b 'VERASE)
+           (let* ((end (max 0 (- (bytevector-length *pty-line*) 1)))
+                  (new (subbytevector *pty-line* 0 end)))
+             (if (equal? *pty-line* new)
+                 (send conn ID "\a")
+                 (send conn ID (pack "CCC" 8 32 8)))
+             (set! *pty-line* new)))
+          ((and (pty? b 'VEOF) (equal? *pty-line* #vu8()))
+           (put-ssh conn (make-channel-data ID "\r\n"))
+           (put-ssh conn (make-channel-eof ID))
+           (put-ssh conn (make-channel-close ID)))
+          ((< b 32))                    ;ignore control characters
+          (else
+           (set! *pty-line* (bytevector-append *pty-line*
+                                               (pack "C" b)))
+           (send conn ID (pack "C" b))))))))
+
+(define (server conn)
+  (let ((ID #f)
+        (userid "root"))
+    (ssh-finish-key-exchange conn)
+    (let ((service (get-ssh conn)))   ;probably service-request
+      (put-ssh conn (make-service-accept "ssh-userauth"))
+      (register-userauth (ssh-conn-registrar conn)))
+    ;; Wait for a valid password
+    (let lp ()
+      (let ((x (get-ssh conn)))
+        (cond ((not (userauth-request? x))
+               (ssh-error conn 'server "Unexpected message" SSH-DISCONNECT-PROTOCOL-ERROR))
+              ((eq? 'pwd-ok (test-request x))
+               (print "Authorization succeeded.")
+               (set! userid (userauth-request-username x))
+               (put-ssh conn (make-userauth-success)))
+              (else
+               (print "Authorization failure.")
+               (put-ssh conn (make-userauth-failure '("password") #f))
+               (lp)))))
+    (deregister-userauth (ssh-conn-registrar conn))
+    (register-connection (ssh-conn-registrar conn))
+    (let lp ()
+      (let ((x (get-ssh conn)))
+        (cond ((channel-data? x)
+               (handle-data conn ID x)
+               (lp))
+              ((eof-object? x)
+               (display "disconnected!\n"))
+              ((kexinit? x)
+               #f
+               ;; TODO: key re-exchange
+               ;;(put-ssh conn (build-kexinit-packet #f))
+               #;(lp))
+              ((channel-request/shell? x)
+               (when (channel-request-want-reply? x)
+                 (put-ssh conn (make-channel-success ID)))
+               (set! *prompt* (string-append "\n" hostname ":~# "))
+               (send conn ID (string-append
+                              "Linux " hostname " 2.6.35.8 #1 Sat Oct 30 10:43:19 CEST 2010 i686\n"
+                              "\nWelcome to your new account!\n"
+                              "No mail."))
+               (send conn ID *prompt*)
+               (lp))
+              ((channel-request/exec? x)
+               (put-ssh conn (make-channel-failure ID))
+               (lp))
+              ((channel-request/pty-req? x)
+               (when (channel-request-want-reply? x)
+                 (set! *pty* (bytevector->terminal-modes
+                              (channel-request/pty-req-modes x)))
+                 (put-ssh conn (make-channel-success ID)))
+               (lp))
+              ((channel-request? x)
+               (when (channel-request-want-reply? x)
+                 (put-ssh conn (make-channel-success ID)))
+               (lp))
+              ((channel-open/session? x)
+               (cond ((not ID)
+                      (set! ID (channel-open-sender x))
+                      (put-ssh conn (make-channel-open-confirmation
+                                     (channel-open-sender x) 0 32768 32768)))
+                     (else
+                      (put-ssh conn (make-channel-open-failure
+                                     (channel-open-sender x)
+                                     SSH-OPEN-ADMINISTRATIVELY-PROHIBITED
+                                     "No more channels" ""))))
+               (lp))
+              ((channel-open? x)
+               (put-ssh conn (make-channel-open-failure (channel-open-sender x)
+                                                        SSH-OPEN-UNKNOWN-CHANNEL-TYPE
+                                                        "Request denied" ""))
+               (lp))
+              ((global-request? x)
+               (when (global-request-want-reply? x)
+                 (put-ssh conn
+                          (if (string=? (global-request-type x) "no-more-sessions@openssh.com")
+                              (make-request-success)
+                              (make-request-failure))))
+               (lp))
+              (else
+               (display "ignored\n")
+               (lp)))))
+    (put-ssh conn (make-disconnect SSH-DISCONNECT-BY-APPLICATION
+                                   "Good bye!" ""))
+    (close-ssh conn)))
+
+(define (make-new-name pid)
+  (call-with-string-output-port
+    (lambda (p)
+      ;; Just something to make it unique enough
+      (display "log." p)
+      (display (time-second (current-time)) p)
+      (display "-" p)
+      (display pid p)
+      (display ".txt" p))))
+
+(define (main socket key)
+  ;; (identification-software-version "OpenSSH_5.1p1")
+  ;; (identification-comments "Debian-5")
+  (ssh-debugging #b111) 
+  (print "Host key fingerprint: " (ssh-public-key-fingerprint
+                                   (dsa-private->public key)))
+  (print "Waiting for connections...")
+  (let lp ((pid 0))
+    (waitpid -1 #f #f)                  ;kill old zombies
+    (let-values (((i o) (accept-connection socket))
+                 ((logname) (make-new-name pid)))
+      (print "New connection: " i " logging to " logname)
+      (fork (lambda (pid)
+              (close-port i)
+              (close-port o)
+              (lp pid))
+            (lambda ()
+              (with-output-to-file logname
+                (lambda ()
+                  (print "Server on " i " and " o)
+                  (server (make-ssh-server i o (list key))))))))))
+
+(apply
+ (case-lambda
+   ((who keyfile port)
+    (main (tcp-server-socket (string->number port))
+          (dsa-private-key-from-pem-file keyfile)))
+   ((who)
+    (print "Usage: " who " <dsa-key-file.pem> <TCP-port-number>")
+    (print "Hint: generate the key with one of these commands:")
+    (print "openssl dsaparam 1024 | openssl gendsa /dev/stdin > demo.pem")
+    (print "certtool --dsa --bits 1024 -p > demo.pem")
+    (exit 1)))
+ (command-line))
