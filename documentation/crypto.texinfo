@@ -730,6 +730,10 @@ should be used with @code{md5->bytevector} or @code{md5->string}.
 @end example
 @end deffn
 
+@deffn Procedure md5-length
+The length of md5 message digests in bytes.
+@end deffn
+
 @deffn Procedure make-md5
 Returns a new MD5 state for use with the procedures below. The type of
 the return value is unspecified.
@@ -764,6 +768,10 @@ Copies the message digest (a.k.a.@: hash) in the finalized
 @var{md5state} into @var{bv} at the given offset.
 @end deffn
 
+@deffn Procedure md5-96-copy-hash! md5state bv offset
+Like @code{md5-copy-hash!}, but only copies the leftmost 96 bits.
+@end deffn
+
 @deffn Procedure md5->bytevector md5state
 Returns a new bytevector which contains a binary representation of the
 finalized @var{md5state}.
@@ -773,6 +781,18 @@ finalized @var{md5state}.
 Returns a new string which contains a textual representation of the
 finalized @var{md5state}. The conventional hexadecimal representation
 is used.
+@end deffn
+
+@deffn Procedure md5-hash=? md5state bv
+Compares the finalized @var{md5state} with the leading bytes of
+@var{bv}. The comparison is designed to take the same amount of time
+regardless of where any differences may be. This may be important for
+networked programs that would otherwise be vulnerable to timing
+attacks.
+@end deffn
+
+@deffn Procedure md5-96-hash=? md5state bv
+Like @code{md5-hash=?} except it only compares the leftmost 96 bits.
 @end deffn
 
 @deffn Procedure hmac-md5 secret bytevector ...
@@ -785,6 +805,9 @@ Version history:
 @itemize
 @item
 @code{(1 0)} -- Initial version.
+@item
+@code{(1 1)} -- Added @code{md5-length}, @code{md5-96-copy-hash!},
+@code{md5-hash=?} and @code{md5-96-hash=?}.
 @end itemize
 
 @c ======================================================================
@@ -1106,6 +1129,9 @@ Version history:
 @itemize
 @item
 @code{(1 0)} -- Initial version.
+@item
+@code{(1 1)} -- Added @code{sha-1-length}, @code{sha-1-96-copy-hash!},
+@code{sha-1-hash=?} and @code{sha-1-96-hash=?}.
 @end itemize
 
 @c ======================================================================
@@ -1114,7 +1140,9 @@ Version history:
 The interface provided by @code{(weinholt crypto sha-2)} is identical
 to the one provided by the MD5 library, but instead of @code{md5},
 every procedure is prefixed by @code{sha-224}, @code{sha-256},
-@code{sha-384} or @code{sha-512}. @xref{crypto md5}.
+@code{sha-384} or @code{sha-512}. In addition the procedures that
+operate on the leftmost 96 bits are instead defined for the leftmost
+128 bits (e.g.@: @code{sha-512-128-hash=?}). @xref{crypto md5}.
 
 SHA-224 and SHA-256 have a maximum message size of @math{2^{64}-1}
 bits. For SHA-384 and SHA-512 the maximum is @math{2^{128}-1} bits.
@@ -1129,6 +1157,19 @@ Version history:
 @itemize
 @item
 @code{(0 0)} -- Initial version.
+@item
+@code{(1 1)} -- Added @code{sha-224-length}, @code{sha-256-length},
+@code{sha-384-length}, @code{sha-512-length} that return the length of
+a digest in bytes. Added the comparison predicates
+@code{sha-224-hash=?}, @code{sha-256-hash=?}, @code{sha-384-hash=?}
+@code{sha-512-hash=?} that run in constant time. Added procedures for
+truncated digests: @code{sha-224-128-hash=?},
+@code{sha-256-128-hash=?}, @code{sha-384-128-hash=?}
+@code{sha-512-128-hash=?}, @code{sha-224-128-copy-hash!},
+@code{sha-256-128-copy-hash!}, @code{sha-384-128-copy-hash!} and
+@code{sha-512-128-copy-hash!}. Now uses the correct definition of
+HMAC-SHA-384 and HMAC-SHA-512. The HMACs now also handle key lengths
+larger than the block size.
 @end itemize
 
 @c ======================================================================

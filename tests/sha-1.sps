@@ -19,6 +19,7 @@
 (import (rnrs)
         (only (srfi :1 lists) iota)
         (srfi :78 lightweight-testing)
+        (weinholt bytevectors)
         (weinholt crypto sha-1))
 
 (define (test/s expect . data)
@@ -212,8 +213,23 @@
 
 (check (h (make-bytevector 20 #x0c)
           (string->utf8 "Test With Truncation"))
-       => "4c1a03424b55e07fe7f27be1d58bb9324a9a5a04") ; not testing truncation...
-;; digest-96 = 0x4c1a03424b55e07fe7f27be1
+       => "4c1a03424b55e07fe7f27be1d58bb9324a9a5a04")
+(check (sha-1-hash=?
+        (hmac-sha-1 (uint->bytevector #x0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c)
+                    (string->utf8 "Test With Truncation"))
+        (uint->bytevector #x4c1a03424b55e07fe7f27be1d58bb9324a9a5a04))
+       => #t)
+(check (sha-1-96-hash=?
+        (hmac-sha-1 (uint->bytevector #x0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c)
+                    (string->utf8 "Test With Truncation"))
+        (uint->bytevector #x4c1a03424b55e07fe7f27be1))
+       => #t)
+(check (sha-1-96-hash=?
+        (hmac-sha-1 (uint->bytevector #x0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c)
+                    (string->utf8 "Test With Truncation"))
+        (uint->bytevector #x4c1a03424b55e07fe7f27be0))
+       => #f)                           ;bad mac
+
 
 (check (h (make-bytevector 80 #xaa)
           (string->utf8 "Test Using Larger Than Block-Size Key - Hash Key First"))

@@ -17,6 +17,7 @@
 #!r6rs
 
 (import (rnrs)
+        (weinholt bytevectors)
         (weinholt crypto md5)
         (srfi :78 lightweight-testing))
 
@@ -64,7 +65,21 @@
 (check (h (make-bytevector 16 #x0c)
           (string->utf8 "Test With Truncation"))
        => "56461ef2342edc00f9bab995690efd4c") ; not testing truncation...
-;; digest-96 = 0x56461ef2342edc00f9bab995
+(check (md5-hash=?
+        (hmac-md5 (uint->bytevector #x0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c)
+                  (string->utf8 "Test With Truncation"))
+        (uint->bytevector #x56461ef2342edc00f9bab995690efd4c))
+       => #t)
+(check (md5-96-hash=?
+        (hmac-md5 (uint->bytevector #x0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c)
+                  (string->utf8 "Test With Truncation"))
+        (uint->bytevector #x56461ef2342edc00f9bab995))
+       => #t)
+(check (md5-96-hash=?
+        (hmac-md5 (uint->bytevector #x0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c)
+                  (string->utf8 "Test With Truncation"))
+        (uint->bytevector #x56461ef2342edc00f9bab990))
+       => #f)                           ;bad mac
 
 (check (h (make-bytevector 80 #xaa)
           (string->utf8 "Test Using Larger Than Block-Size Key - Hash Key First"))
