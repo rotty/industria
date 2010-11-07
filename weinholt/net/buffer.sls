@@ -32,7 +32,7 @@
 
 ;; TODO: proper conditions
 
-(library (weinholt net buffer (1 0 20101016))
+(library (weinholt net buffer (1 0 20101106))
   (export make-buffer
           buffer-read! buffer-copy!
           buffer-port buffer-port-set!
@@ -47,6 +47,7 @@
           (weinholt struct pack))
 
   (define-record-type buffer
+    (opaque #t)
     (fields (mutable port)
             (mutable data)
             (mutable top)
