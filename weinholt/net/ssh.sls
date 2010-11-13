@@ -28,7 +28,7 @@
 
 ;; TODO: fast path for channel-data
 
-(library (weinholt net ssh (1 0 20101107))
+(library (weinholt net ssh (1 0 20101113))
   (export
     make-ssh-client make-ssh-server
     ssh-conn-peer-identification
@@ -143,8 +143,6 @@
             (mutable algorithms)
             ;; Used for generating key material:
             (mutable kexer)
-            (mutable K)                 ;not needed?
-            (mutable H)                 ;not needed?
             (mutable session-id)
             ;; sequence numbers
             (mutable peer-seq)
@@ -174,9 +172,7 @@
               'no-public-key-yet
               'no-private-key
               (list (cons 'kex (guessed-kex-algorithm)))
-              'no-kexer-yet
-              'no-K-yet
-              'no-H-yet
+              #f
               'no-session-id-yet
               0 0
               (make-reader "none" #f #f)
@@ -199,8 +195,6 @@
   (define (close-ssh conn)
     (define (fill! x)
       (if (bytevector? x) (bytevector-fill! x 0)))
-    (fill! (ssh-conn-K conn))
-    (fill! (ssh-conn-H conn))
     (fill! (ssh-conn-session-id conn))
     (flush-ssh-output conn)
     (close-port (buffer-port (ssh-conn-inbuf conn)))
@@ -247,16 +241,17 @@
 
   (define (get-version-exchange conn)
     ;; FIXME: maybe limit the number of junk lines that can be
-    ;; received. a timeout would be nice.
+    ;; received
     (flush-ssh-output conn)
     (let ((p (buffer-port (ssh-conn-inbuf conn))))
-      (and (not (port-eof? p))
-           (let ((line (get-line* p)))
-             (packet-trace "<- " (utf8->string line))
-             (cond ((string-prefix? "SSH-" (utf8->string line))
-                    (ssh-conn-peer-identification-set! conn line))
-                   ;; rfc4253 suggests this could be shown to the user.
-                   (else (get-version-exchange p)))))))
+      (if (port-eof? p)
+          (eof-object)
+          (let ((line (get-line* p)))
+            (packet-trace "<- " (utf8->string line))
+            (cond ((string-prefix? "SSH-" (utf8->string line))
+                   line)
+                  ;; rfc4253 suggests this could be shown to the user.
+                  (else (get-version-exchange p)))))))
 
   (define (put-version-exchange conn)
     (let ((line (string->utf8
@@ -435,7 +430,6 @@
               (else (lp (cdr client))))))
     (let ((fields '(keyalg enc-cs enc-sc mac-cs mac-sc
                            cmp-cs cmp-sc lang-cs lang-sc)))
-      ;; TODO: check that common algorithms were found!
       `((kex . ,(first-kex (kexinit-kex-algorithms client-kex)
                            (kexinit-kex-algorithms server-kex)))
         ,@(map (lambda (field index)
@@ -485,15 +479,22 @@
     (ssh-conn-next-reader-set! conn #f)
     (ssh-conn-next-read-mac-set! conn #f))
 
-;;; The nice interface
+;;; Starting connections
+  
+  (define (bad-guess? local-kex peer-kex)
+    (not (and (equal? (car (kexinit-kex-algorithms local-kex))
+                      (car (kexinit-kex-algorithms peer-kex)))
+              (equal? (car (kexinit-server-host-key-algorithms local-kex))
+                      (car (kexinit-server-host-key-algorithms peer-kex))))))
 
   (define (start-ssh conn)
     (define (start-kex kex)
       (register-key-exchange kex (ssh-conn-registrar conn))
-      (ssh-conn-kexer-set! conn
-                           (make-key-exchanger kex
-                                               (ssh-conn-client? conn)
-                                               (lambda (x) (put-ssh conn x))))
+      (unless (ssh-conn-kexer conn)
+        (ssh-conn-kexer-set! conn
+                             (make-key-exchanger kex
+                                                 (ssh-conn-client? conn)
+                                                 (cut put-ssh conn <>))))
       ((ssh-conn-kexer conn) 'start #f))
     (register-transport (ssh-conn-registrar conn))
     (put-version-exchange conn)
@@ -503,7 +504,11 @@
       (put-ssh conn local-kex)
       ;; Clients speculatively start the key exchange
       (when client? (start-kex (guessed-kex-algorithm)))
-      (get-version-exchange conn)
+      (let ((id (get-version-exchange conn)))
+        (when (eof-object? id)
+          (ssh-error conn 'start-ssh "No identification string received"
+                     SSH-DISCONNECT-PROTOCOL-ERROR))
+        (ssh-conn-peer-identification-set! conn id))
       (let-values (((version server-version comment)
                     (parse-identification (ssh-conn-peer-identification conn))))
         (unless (string-prefix? "2." version)
@@ -516,19 +521,24 @@
                              (find-algorithms local-kex peer-kex)
                              (find-algorithms peer-kex local-kex))))
         (trace "#;algorithms: " algorithms)
+        (for-each (lambda (alg)
+                    (unless (or (memq (car alg) '(lang-cs lang-sc))
+                                (cdr alg))
+                      (ssh-error conn 'find-algorithms
+                                 "No common algorithms"
+                                 SSH-DISCONNECT-KEY-EXCHANGE-FAILED
+                                 algorithms)))
+                  algorithms)
         (ssh-conn-algorithms-set! conn algorithms)
         (when (and (kexinit-first-kex-packet-follows? peer-kex)
-                   (not (equal? (guessed-kex-algorithm)
-                                (car (kexinit-kex-algorithms peer-kex)))))
+                   (bad-guess? local-kex peer-kex))
           ;; Ignore the next packet, because the peer guessed the
           ;; wrong kex algorithm.
-          (trace "ignoring next packet because of wrong kex guess")
+          (trace "Ignoring next packet because of wrong algorithm guess.")
           (get-packet conn))
-        (when (or (not client?)
-                  (not (equal? (guessed-kex-algorithm)
-                               (car (kexinit-kex-algorithms peer-kex)))))
-          ;; XXX: It might be beneficial for later connections to
-          ;; remember which kex algorithm the server prefers.
+        (when (or (not client?) (bad-guess? local-kex peer-kex))
+          ;; Server start KEX here. Clients start KEX again if the
+          ;; server guessed wrong.
           (start-kex (ssh-conn-algorithm conn 'kex)))
         ((ssh-conn-kexer conn) 'init (list 'host-key-algorithm
                                            (ssh-conn-algorithm conn 'keyalg)

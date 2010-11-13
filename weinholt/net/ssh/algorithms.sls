@@ -36,7 +36,7 @@
 ;; This describes the MAC algorithm umac-64@openssh.com:
 ;; RFC4418 UMAC: Message Authentication Code using Universal Hashing
 
-(library (weinholt net ssh algorithms (1 0 20101107))
+(library (weinholt net ssh algorithms (1 0 20101113))
   (export make-reader make-writer
           make-read-mac make-write-mac
           make-key-exchanger register-key-exchange
@@ -68,7 +68,7 @@
 
   ;; kex is short for key exchange.
   (define kexes
-    '(#;"diffie-hellman-group-exchange-sha256" #;"diffie-hellman-group-exchange-sha1"
+    '("diffie-hellman-group-exchange-sha256" "diffie-hellman-group-exchange-sha1"
       "diffie-hellman-group14-sha1" "diffie-hellman-group1-sha1"))
 
   (define preferred-kex-algorithms

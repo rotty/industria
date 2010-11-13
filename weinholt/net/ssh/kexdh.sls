@@ -20,7 +20,7 @@
 ;; This handles diffie-hellman-group14-sha1 and
 ;; diffie-hellman-group1-sha1.
 
-(library (weinholt net ssh kexdh (1 0 20101107))
+(library (weinholt net ssh kexdh (1 0 20101110))
   (export register-kexdh
           make-kexdh-init kexdh-init? kexdh-init-e
           make-kexdh-reply kexdh-reply? kexdh-reply-f
@@ -104,8 +104,10 @@
           (case method
             ((start)
              (case state
-               ((send-kexdh-init recv-kexdh-reply)
-                (set! state 'wait-version/init)
+               ((send-kexdh-init wait-version/init)
+                (set! state (if init-data
+                                'recv-kexdh-reply
+                                'wait-version/init))
                 (send (make-kexdh-init e)) ; e = g^x mod p
                 #f)
                (else (invalid-state method state))))
