@@ -348,13 +348,17 @@
                     (ssh-packet-type msg) (type-category (ssh-packet-type msg)))))))
 
   (define (get-ssh conn)
+    (define SSH-MSG-IGNORE 2)
     (define (buffer->bytevector b)
       (subbytevector (buffer-data b) (buffer-top b) (buffer-bottom b)))
     (define (get)
       (let ((seq-no (get-packet conn))
             (b (ssh-conn-inbuf conn)))
         (let ((type (read-byte b)))
-          (cond ((vector-ref (ssh-conn-type-map conn) type)
+          (cond ((= type SSH-MSG-IGNORE)
+                 ;; Contents should be ignored anyhow.
+                 (make-ignore "bogus contents"))
+                ((vector-ref (ssh-conn-type-map conn) type)
                  => (lambda (handlers)
                       (trace "#;parser: " (car handlers))
                       (let ((msg ((car handlers) b)))
@@ -380,7 +384,9 @@
                    (eof-object)
                    (get))))
       (packet-trace "<= " msg)
-      msg))
+      (if (ignore? msg)
+          (get-ssh conn) ;simplify logic elsewhere by ignoring all ignores here
+          msg)))
 
   (define (make-registrar typemap)
     (lambda (type parse put)
