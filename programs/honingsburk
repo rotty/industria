@@ -54,7 +54,11 @@
                        'pwd-ok #f)))
              (else #f))))
 
-(define *pty* '())
+;; Incomplete, and I'm not sure if these really are any sort of
+;; defaults...
+(define (default-terminal-modes)
+  '((VINTR . 3) (VERASE . 127) (VKILL . 21) (VEOF . 4)
+    (ICRNL . 1) (ONLCR . 1)))
 
 #;((TTY_OP_OSPEED . 38400) (TTY_OP_ISPEED . 38400) (VINTR . 3) (VQUIT . 28)
    (VERASE . 127) (VKILL . 21) (VEOF . 4) (VEOL . 0) (VEOL2 . 0) (VSTART . 17)
@@ -65,6 +69,8 @@
    (ECHOK . 1) (ECHONL . 0) (NOFLSH . 0) (TOSTOP . 0) (IEXTEN . 1) (ECHOCTL . 1)
    (ECHOKE . 1) (PENDIN . 0) (OPOST . 1) (OLCUC . 0) (ONLCR . 1) (OCRNL . 0)
    (ONOCR . 0) (ONLRET . 0) (CS7 . 1) (CS8 . 1) (PARENB . 0) (PARODD . 0))
+
+(define *pty* '())
 
 (define *pty-line* #vu8())
 (define *prompt* "\n# ")
@@ -185,8 +191,10 @@
                (lp))
               ((channel-request/pty-req? x)
                (when (channel-request-want-reply? x)
-                 (set! *pty* (bytevector->terminal-modes
-                              (channel-request/pty-req-modes x)))
+                 (set! *pty* (append
+                              (bytevector->terminal-modes
+                               (channel-request/pty-req-modes x))
+                              (default-terminal-modes)))
                  (put-ssh conn (make-channel-success ID)))
                (lp))
               ((channel-request? x)
