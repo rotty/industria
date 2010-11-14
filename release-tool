@@ -72,6 +72,7 @@
         '(weinholt crypto sha-2)
         '(weinholt crypto ssh-public-key)
         '(weinholt crypto x509)
+        '(weinholt disassembler i8080)
         '(weinholt disassembler m68hc12)
         '(weinholt disassembler mips)
         '(weinholt disassembler x86)
