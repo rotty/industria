@@ -48,3 +48,8 @@ This change makes the output incompatible with previous versions, so
 the major version was incremented to 1. Another bug fixed was that the
 hmac procedures couldn't handle key lengths larger than the block
 size.
+
+** (weinholt disassembler i8080): New disassembler for Intel 8080
+
+This is a new disassembler for Intel 8080/8085, which was the
+predecessor of the Intel 8086.

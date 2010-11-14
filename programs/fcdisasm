@@ -24,10 +24,20 @@
 (import (rnrs)
         (weinholt binfmt elf (0 (>= 0)))
         #;(prefix (weinholt disassembler arm (1 (>= 0))) arm:)
+        (prefix (weinholt disassembler i8080 (1 (>= 0))) i8080:)
         (prefix (weinholt disassembler m68hc12 (1 (>= 0))) m68hc12:)
         (prefix (weinholt disassembler mips (1 (>= 0))) mips:)
         (prefix (weinholt disassembler x86 (1 (>= 0))) x86:)
         (only (weinholt disassembler x86 (1 (>= 0))) invalid-opcode?))
+
+(define archs
+  (list (cons "x86-16" (lambda (p c) (x86:get-instruction p 16 c)))
+        (cons "x86-32" (lambda (p c) (x86:get-instruction p 32 c)))
+        (cons "x86-64" (lambda (p c) (x86:get-instruction p 64 c)))
+        (cons "hc12" (lambda (p c) (m68hc12:get-instruction p c)))
+        (cons "mipsel" (lambda (p c) (mips:get-instruction p (endianness little) c)))
+        (cons "mipsbe" (lambda (p c) (mips:get-instruction p (endianness big) c)))
+        (cons "8080" (lambda (p c) (i8080:get-instruction p c)))))
 
 ;; Print an instruction with hexadecimal numbers.
 (define (print-instr/sexpr i)
@@ -96,7 +106,7 @@
         (newline)
         (lp new-pos)))))
 
-(define (get-disassembler machine endianness)
+(define (get-elf-disassembler machine endianness)
   (cond #;((= machine EM-ARM) (lambda (p c) (arm:get-instruction p #f c)))
         ((= machine EM-386) (lambda (p c) (x86:get-instruction p 32 c)))
         ((= machine EM-X86-64) (lambda (p c) (x86:get-instruction p 64 c)))
@@ -113,13 +123,13 @@
          (newline)
          (exit))))
 
-(define (disassemble-file filename mode color)
+(define (disassemble-file filename arch color)
   (cond ((is-elf-image? filename)
          (display "ELF image detected. Looking for .text section...\n")
          (let ((image (open-elf-image-file filename)))
            (cond ((elf-input-file-section-by-name image ".text") =>
                   (lambda (text)
-                    (let ((get-instruction (get-disassembler
+                    (let ((get-instruction (get-elf-disassembler
                                             (elf-input-file-machine image)
                                             (if (= (elf-input-file-endianness image) 1)
                                                 (endianness little) (endianness big)))))
@@ -133,7 +143,7 @@
                   (display "This ELF image has no .text section. No disassembly for you.\n")))))
         (else
          (disassemble (open-file-input-port filename)
-                      (lambda (p c) (x86:get-instruction p (or mode 16) c))
+                      (cdr (assoc arch archs))
                       color #f))))
 
 (define (parse-args args)
@@ -142,9 +152,14 @@
       (when msg (display (car msg) x) (newline x) (newline x))
       (display "fcdisasm - Full-color disassembler
 
-Usage: fcdisasm [-b|--bits <bits>] [--nocolor] [--] <filename>
+Usage: fcdisasm [-b|--bits <bits>] [-a|--arch <arch>] [--nocolor] [--] <filename>
 
-The <bits> argument can be either 16, 32 or 64 (default).
+The <bits> argument can be either 16 (default), 32 or 64 This is
+shorthand for --arch x86-16 etc.
+
+The <arch> is one of x86-16, x86-32, x86-64, hc12, mipsel, mipsbe,
+8080. It is used for non-ELF files.
+
 The --nocolor flag suppresses the color output.
 
 The colors used are:
@@ -159,29 +174,36 @@ Author: Göran Weinholt <goran@weinholt.se>.
       (exit 1)))
   (let lp ((filename #f)
            (color #t)
-           (mode #f)
+           (arch "x86-16")
            (args args))
     (cond ((null? args)
            (unless filename
              (help "ERROR: No filename given."))
-           (values filename mode color))
+           (values filename arch color))
           ((or (string=? (car args) "--bits")
                (string=? (car args) "-b"))
            (if (null? (cdr args)) (help "ERROR: -b needs an argument (16, 32, 64)"))
-           (cond ((assoc (cadr args) '(("64" . 64) ("32" . 32) ("16" . 16))) =>
+           (cond ((assoc (cadr args) '(("64" . "x86-64") ("32" . "x86-32") ("16" . "x86-16"))) =>
                   (lambda (x)
                     (lp filename color (cdr x) (cddr args))))
                  (else
-                  (help "ERROR: invalid argument for -b flag"))))
+                  (help "ERROR: invalid argument for --bits flag"))))
+          ((member (car args) '("-a" "--arch"))
+           (if (null? (cdr args)) (help "ERROR: -a needs an argument"))
+           (cond ((assoc (cadr args) archs) =>
+                  (lambda (_)
+                    (lp filename color (cadr args) (cddr args))))
+                 (else
+                  (help "ERROR: invalid argument for --arch flag"))))
           ((string=? (car args) "--nocolor")
-           (lp filename #f mode (cdr args)))
+           (lp filename #f arch (cdr args)))
           ((string=? (car args) "--")
            (if (not (= (length args) 2)) (help "ERROR: following -- must be only a filename"))
            (if filename (help "ERROR: you can't have it both ways, use -- or don't"))
-           (lp (cadr args) color mode (cddr args)))
+           (lp (cadr args) color arch (cddr args)))
           (else
            (if filename (help "ERROR: extra arguments on command line"))
-           (lp (car args) color mode (cdr args))))))
+           (lp (car args) color arch (cdr args))))))
 
 (define (main args)
   (call-with-values (lambda () (parse-args args))
