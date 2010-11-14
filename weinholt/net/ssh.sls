@@ -518,7 +518,7 @@
       (let-values (((version server-version comment)
                     (parse-identification (ssh-conn-peer-identification conn))))
         (unless (string-prefix? "2." version)
-          (ssh-error conn 'make-ssh-client "Unsupported protocol version"
+          (ssh-error conn 'start-ssh "Unsupported protocol version"
                      SSH-DISCONNECT-PROTOCOL-VERSION-NOT-SUPPORTED
                      version server-version comment)))
       ;; Get the peer's list of algorithms (and cookie)
@@ -530,7 +530,7 @@
         (for-each (lambda (alg)
                     (unless (or (memq (car alg) '(lang-cs lang-sc))
                                 (cdr alg))
-                      (ssh-error conn 'find-algorithms
+                      (ssh-error conn 'start-ssh
                                  "No common algorithms"
                                  SSH-DISCONNECT-KEY-EXCHANGE-FAILED
                                  algorithms)))
