@@ -838,6 +838,17 @@ keyring did due diligence when importing keys, and made sure that
 e.g.@: subkey binding signatures are verified, and that the order of
 packets is correct.
 
+@deffn Procedure port-ascii-armored? port
+Returns false if the data at the beginning of @var{port} doesn't look
+like a valid binary OpenPGP packet. The port must be a binary input
+port. The port position is not changed.
+@end deffn
+
+@deffn Procedure get-openpgp-packet port
+Reads an OpenPGP packet from @var{port}, which must be a binary input
+port. An error is raised if the packet type is unimplemented.
+@end deffn
+
 @deffn Procedure get-openpgp-keyring p
 Reads a keyring from the binary input port @var{p}. Returns a
 hashtable where all primary keys and subkeys are indexed by their key
@@ -972,6 +983,9 @@ Version history:
 @itemize
 @item
 @code{(1 0)} -- Initial version.
+@item
+@code{(1 1)} -- Added @code{get-openpgp-packet} and
+@code{port-ascii-armored?}.
 @end itemize
 
 @c ======================================================================

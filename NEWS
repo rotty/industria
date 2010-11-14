@@ -29,6 +29,12 @@ Added md5-length, md5-96-copy-hash!, md5-hash=? and md5-96-hash=?. The
 predicate compares an md5 state with a bytevector in a manner intended
 to not leak timing information about the comparison.
 
+** (weinholt crypto openpgp): New exports
+
+Added port-ascii-armormed? which checks if the data on a binary input
+port looks like a binary OpenPGP packet or not. The procedure
+get-openpgp-packet was added to the exports.
+
 ** (weinholt crypto sha-1): Added sha-1-96 and equality predicates
 
 Same changes as the md5 library.

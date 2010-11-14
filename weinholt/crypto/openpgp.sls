@@ -32,11 +32,13 @@
 ;; Each subkey also has a self-signature that binds it to the primary
 ;; key, and a self-signature that binds the primary key to the subkey.
 
-(library (weinholt crypto openpgp (1 0 20101024))
+(library (weinholt crypto openpgp (1 1 20101114))
   (export get-openpgp-keyring
           get-openpgp-keyring/keyid
           get-openpgp-detached-signature/ascii
+          (rename (get-packet get-openpgp-packet))
           verify-openpgp-signature
+          port-ascii-armored?
 
           openpgp-signature?
           openpgp-signature-issuer
@@ -109,21 +111,21 @@
 
   (define PACKET-SESSION-KEY 1)
   (define PACKET-SIGNATURE 2)
-  ;; 3        -- Symmetric-Key Encrypted Session Key Packet
-  ;; 4        -- One-Pass Signature Packet
-  ;; 5        -- Secret-Key Packet
+  (define PACKET-SYMMETRIC-SESSION-KEY 3)
+  (define PACKET-ONE-PASS-SIGNATURE 4)
+  (define PACKET-SECRET-KEY 5)
   (define PACKET-PUBLIC-KEY 6)
-  ;; 7        -- Secret-Subkey Packet
-  ;; 8        -- Compressed Data Packet
-  ;; 9        -- Symmetrically Encrypted Data Packet
-  ;; 10       -- Marker Packet
-  ;; 11       -- Literal Data Packet
+  (define PACKET-SECRET-SUBKEY 7)
+  (define PACKET-COMPRESSED-DATA 8)
+  (define PACKET-SYMMETRIC-ENCRYPTED-DATA 9)
+  (define PACKET-MARKER 10)
+  (define PACKET-LITERAL-DATA 11)
   (define PACKET-TRUST 12)
   (define PACKET-USER-ID 13)
   (define PACKET-PUBLIC-SUBKEY 14)
   (define PACKET-USER-ATTRIBUTE 17)
-  ;; 18       -- Sym. Encrypted and Integrity Protected Data Packet
-  ;; 19       -- Modification Detection Code Packet
+  (define PACKET-SYMMETRIC-ENCRYPTED/PROTECTED-DATA 18)
+  (define PACKET-MDC 19)
 
   (define PUBLIC-KEY-RSA 1)
   (define PUBLIC-KEY-RSA-ENCRYPT-ONLY 2)
@@ -231,6 +233,19 @@
 
 ;;; Parsing
 
+  ;; Look at the tag byte and see if it looks reasonable, if it does
+  ;; then the file is likely not armored. Does not move the port
+  ;; position.
+  (define (port-ascii-armored? p)
+    (let ((tag (lookahead-u8 p)))
+      (cond ((eof-object? tag) #f)
+            ((not (fxbit-set? tag 7)) #t)
+            (else
+             (let ((type (if (fxbit-set? tag 6)
+                             (fxbit-field tag 0 6)
+                             (fxbit-field tag 2 6))))
+               (not (<= PACKET-SESSION-KEY type PACKET-MDC)))))))
+  
   (define (get-mpi p)
     (let* ((bitlen (get-unpack p "!S"))
            (bytelen (fxdiv (fx+ bitlen 7) 8)))
@@ -248,7 +263,10 @@
             ((= o1 255)
              (get-unpack p "!L")))))
 
-  (define (get-packet p) (get-packet* p get-data))
+  (define (get-packet p)
+    (if (port-eof? p)
+        (eof-object)
+        (get-packet* p get-data)))
 
   (define (get-packet* p get-data)
     (let ((tag (get-u8 p)))
@@ -665,18 +683,14 @@
     (case-lambda
       ((p) (get-openpgp-keyring p -1))
       ((p limit)
-       (define (get-pkt p)
-         (if (port-eof? p)
-             (eof-object)
-             (get-packet p)))
        (let ((kr (make-eqv-hashtable)))
-         (let lp ((pkt (get-pkt p))
+         (let lp ((pkt (get-packet p))
                   (limit limit))
            (print "#;key " pkt)
            (cond ((or (zero? limit) (eof-object? pkt)) kr)
                  ((openpgp-public-key-primary? pkt)
                   ;; Read signatures, user id's, subkeys
-                  (let lp* ((pkt (get-pkt p))
+                  (let lp* ((pkt (get-packet p))
                             (pkts (list pkt))
                             (key-ids (list (openpgp-public-key-id pkt))))
                     (print "#;keydata " pkt)
@@ -693,13 +707,13 @@
                                        key-ids)
                              (lp pkt (- limit 1))))
                           ((openpgp-public-key? pkt) ;subkey
-                           (lp* (get-pkt p) (cons pkt pkts)
+                           (lp* (get-packet p) (cons pkt pkts)
                                 (cons (openpgp-public-key-id pkt) key-ids)))
                           (else
-                           (lp* (get-pkt p) (cons pkt pkts) key-ids)))))
+                           (lp* (get-packet p) (cons pkt pkts) key-ids)))))
                  (else
                   ;; Skip until there's a primary key. Ignore errors...
-                  (lp (get-pkt p) limit))))))))
+                  (lp (get-packet p) limit))))))))
 
   ;; XXX: should probably detect ascii armoring
   (define (openpgp-keyring-from-file filename)
