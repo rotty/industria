@@ -1,0 +1,71 @@
+@node Demo programs
+@chapter Demo programs
+The programs directory contains small demonstration of the libraries.
+These scripts are implemented in the way recommended by @rnrs{}
+non-normative appendix D.
+
+If you're packaging these libraries then I would recommend against
+installing the demos in the default program search path.
+
+@menu
+* checksig::    checksig -- verifies OpenPGP signature files
+* checksum::    checksum -- computes CRCs and message digests
+* fcdisasm::    fcdisasm -- full-color disassembler
+* meircbot::    meircbot -- the minimum-effort irc bot
+* sunzip::      sunzip -- zip archive extractor
+* szip::        szip -- zip archive creator
+* tarinfo::     tarinfo -- tarball information lister
+* tls-client::  tls-client -- trivial HTTPS client
+@end menu
+
+@node checksig
+@section checksig -- verifies OpenPGP signature files
+This program takes a detached ascii armored OpenPGP signature, a file
+to check against, and a GPG keyring. It then verifies the signature.
+As a curiosity it also prints OpenSSH-style random art for the key
+that made the signature.
+
+@node checksum
+@section checksum -- computes CRCs and message digests
+Compute the hash or CRC of a file. Give it an algorithm and filenames
+and off it goes. It also demonstrates the superior slowness of the
+hashing libraries.
+
+@node fcdisasm
+@section fcdisasm -- full-color disassembler
+The Full-Color Disassembler, which disassembles machine code and
+colors the bytes in the hexdump. This makes it easy to see how many
+bytes all the different parts of an instruction uses.
+
+Originally made for the x86 disassembler, so the hexdumps for other
+architectures might not be as nice. It now also supports HC12 and
+MIPS. It handles ELF files and assumes anything else is raw x86.
+
+@node meircbot
+@section meircbot -- the minimum-effort irc bot
+The program file contains the configuration. It doesn't do anything
+other than joining channels and being rude in private messages. Shows
+how the @code{(weinholt net irc)} library can be used. It requires
+@code{tcp-connect} and @code{(xitomatl AS-match)}.
+
+It also uses demonstrates how to use FiSH, OTR and the simple TLS
+library.
+
+@node sunzip
+@section sunzip -- zip archive extractor
+A simple program to extract (or list the contents of) zip archives.
+Can handle deflated files.
+
+@node szip
+@section szip -- zip archive creator
+Creates zip files, but does not actually compress anything as of yet.
+
+@node tarinfo
+@section tarinfo -- tarball information lister
+Lists the contents of @:.tar and @:.tar.gz files. Sometimes these
+files contain more information than you think.
+
+@node tls-client
+@section tls-client -- trivial HTTPS client
+Demonstrates the simple TLS library. It connects to an HTTPS server,
+does a GET / request and displays the reply.

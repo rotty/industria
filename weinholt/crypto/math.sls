@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -15,19 +15,21 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #!r6rs
 
-(library (weinholt crypto math (0 0 20090914))
+(library (weinholt crypto math (1 0 20101104))
   (export invmod expt-mod)
   (import (rnrs))
 
   (define (invmod a b)
     ;; Extended Euclidian algorithm. Used to find the inverse of a
     ;; modulo b.
-    (do ((a a (mod b a))
-         (b b a)
-         (x0 0 x1)
-         (x1 1 (+ (* (- (div b a)) x1) x0)))
-        ((zero? (mod b a))
-         x1)))
+    (let lp ((a a)
+             (b b)
+             (x0 0)
+             (x1 1))
+      (let-values (((q r) (div-and-mod b a)))
+        (if (zero? r)
+            x1
+            (lp r a x1 (+ (* (- q) x1) x0))))))
 
   (define (expt-mod base exponent modulus)
     ;; Faster version of (mod (expt base exponent) modulus).

@@ -1,6 +1,6 @@
 #!/usr/bin/env scheme-script
-;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
+;; -*- mode: scheme; coding: utf-8 -*- !#
+;; Copyright © 2008, 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -17,75 +17,47 @@
 #!r6rs
 
 (import (rnrs)
+        (srfi :78 lightweight-testing)
         (weinholt disassembler x86))
 
-(define (print-test filename mode)
-  "Improvised pretty-printer (not so pretty really) that prints a kind
-of indented test case, given a file and a mode."
-  (let ((p (open-file-input-port filename))
-        (p2 (open-file-input-port filename)))
-    (display "(test")
-    (display mode)
-    (display " '#vu8(")
-    (let lp ((pos (port-position p))
-             (instrs '()))
-      (let* ((i (guard (con
-                        ((invalid-opcode? con)
-                         (list 'bad:
-                               (condition-message con))))
-                       (get-instruction p mode #f)))
-             (new-pos (port-position p)))
-        (cond ((eof-object? i)
-               (for-each (lambda (i)
-                           (display #\')
-                           (display i)
-                           (newline))
-                         (map (lambda (i)
-                                (let lp ((i i))
-                                  (cond ((pair? i)
-                                         (cons (lp (car i))
-                                               (lp (cdr i))))
-                                        ((number? i)
-                                         (string-append "#x" (number->string i 16)))
-                                        (else i))))
-                              (reverse instrs)))
-               (display ")"))
-              (else
-               (for-each (lambda (byte)
-                           (display "#x")
-                           (when (< byte #x10)
-                             (display #\0))
-                           (display (number->string byte 16))
-                           (display #\space))
-                         (bytevector->u8-list (get-bytevector-n p2 (- new-pos pos))))
-               (if (eof-object? (lookahead-u8 p))
-                   (display ")"))
-               (newline)
-               (lp new-pos (cons i instrs))))))))
-
-(define (test mode input . expected)
+(define (test mode input)
   (let ((port (open-bytevector-input-port input))
         (bytes-returned 0))
-    (for-each (lambda (expect)
-                (let ((instruction (get-instruction port mode
-                                                    (lambda (_ . bytes)
-                                                      (set! bytes-returned (+ (length bytes)
-                                                                              bytes-returned))))))
-                  (unless (equal? expect instruction)
-                    (error 'test "Disassembly is not as expected"
-                           expect instruction))))
-              expected)
-    (unless (eof-object? (lookahead-u8 port))
-      (error 'test "After disassembly there are bytes unread."
-             (get-instruction port mode #f)))
-    (unless (= bytes-returned (bytevector-length input))
-      (error 'test "There are bytes missing in the collector function."
-             bytes-returned (bytevector-length input)))))
+    (let lp ((insrs '()))
+      (let ((i (get-instruction
+                port mode
+                (lambda (_ . bytes)
+                  (set! bytes-returned
+                        (+ (length bytes)
+                           bytes-returned))))))
+        (cond ((eof-object? i)
+               (unless (port-eof? port)
+                 (error 'test "After disassembly there are bytes unread."
+                        (get-bytevector-all port)))
+               (unless (= bytes-returned (bytevector-length input))
+                 (error 'test "There are bytes missing in the collector function."
+                        bytes-returned (bytevector-length input)))
+               (reverse insrs))
+              (else
+               (lp (cons i insrs))))))))
 
+(define-syntax test64
+  (lambda (x)
+    (syntax-case x ()
+      ((_ bytes insrs ...)
+       #'(check (test 64 bytes) => (list insrs ...))))))
 
-(define (test64 input . expected) (apply test 64 input expected))
-(define (test32 input . expected) (apply test 32 input expected))
-(define (test16 input . expected) (apply test 16 input expected))
+(define-syntax test32
+  (lambda (x)
+    (syntax-case x ()
+      ((_ bytes insrs ...)
+       #'(check (test 32 bytes) => (list insrs ...))))))
+
+(define-syntax test16
+  (lambda (x)
+    (syntax-case x ()
+      ((_ bytes insrs ...)
+       #'(check (test 16 bytes) => (list insrs ...))))))
 
 ;;; Various
 
@@ -757,3 +729,4 @@ of indented test case, given a file and a mode."
         '(xchg r8d eax)
         '(xchg r8w ax))
 
+(check-report)

@@ -1,5 +1,5 @@
 #!/usr/bin/env scheme-script
-;; -*- mode: scheme; coding: utf-8 -*-
+;; -*- mode: scheme; coding: utf-8 -*- !#
 ;; Copyright © 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
@@ -101,21 +101,21 @@
        => ":irc.example.net NOTICE ErrantUser :The server has taken a liking to you\r\n")
 
 (check
- (call-with-values open-bytevector-output-port
-   (lambda (port extract)
-     (format-message-raw port (utf-8-codec)
-                         "irc.example.net" 001 "luser"
-                         "Welcome to the Example Internet Relay Chat Network luser")
-     (bytevector->string (extract) (make-transcoder (utf-8-codec)))))
+ (utf8->string
+  (call-with-bytevector-output-port
+    (lambda (port)
+      (format-message-raw port (utf-8-codec)
+                          "irc.example.net" 001 "luser"
+                          "Welcome to the Example Internet Relay Chat Network luser"))))
  => ":irc.example.net 001 luser :Welcome to the Example Internet Relay Chat Network luser\r\n")
 
 (check
- (call-with-values open-bytevector-output-port
-   (lambda (port extract)
-     (format-message-raw port (utf-8-codec)
-                         #f 'PRIVMSG "#example"
-                         "This is a message to a channel")
-     (bytevector->string (extract) (make-transcoder (utf-8-codec)))))
+ (utf8->string
+  (call-with-bytevector-output-port
+    (lambda (port)
+      (format-message-raw port (utf-8-codec)
+                          #f 'PRIVMSG "#example"
+                          "This is a message to a channel"))))
  => "PRIVMSG #example :This is a message to a channel\r\n")
 
 ;;; Channel mode commands

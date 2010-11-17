@@ -22,10 +22,40 @@ variable-length instructions. For most instruction there will be
 multiple calls to the collector.
 
 @menu
+* disassembler i8080::    Intel 8080/8085 disassembler
 * disassembler m68hc12::  Freescale 68HC12 disassembler
 * disassembler mips::     MIPS II disassembler
 * disassembler x86::      Intel x86-16/32/64 disassembler
 @end menu
+
+@c ======================================================================
+@node disassembler i8080
+@subsection Intel 8080/8085 disassembler
+The @code{(weinholt disassembler i8080)} library provides a
+disassembler for the Intel 8080 architecture. It was an 8-bit
+architecture used in many micros and even the DEC VT100. It was also
+the predecessor of the Intel 8086.
+
+@deffn Procedure get-instruction binary-input-port collector
+Reads one instruction from the @var{binary-input-port} and returns it
+in symbolic form. For a description of the @var{collector},
+@pxref{disassembler}.
+
+@example
+(import (weinholt disassembler i8080))
+(get-instruction (open-bytevector-input-port
+                  #vu8(#x22 #x01 #x01)) 
+                 #f)
+@result{} (shld (mem16+ 257))
+@end example
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
+@end itemize
 
 @c ======================================================================
 @node disassembler m68hc12

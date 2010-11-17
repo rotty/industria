@@ -26,7 +26,7 @@
 ;; TODO: finishing sessions.
 ;; TODO: let the library user decide what errors to send
 
-(library (weinholt net otr (0 0 20100712))
+(library (weinholt net otr (0 0 20101024))
   (export otr-message?
           otr-update!
           otr-send-encrypted!
@@ -39,7 +39,7 @@
           otr-hash-public-key
           otr-format-session-id
           otr-state-mss otr-state-mss-set!)
-  (import (rnrs)
+  (import (except (rnrs) bytevector=?)
           (only (srfi :1 lists) iota map-in-order
                 alist-delete take)
           (only (srfi :13 strings) string-contains string-join
@@ -48,11 +48,12 @@
           (srfi :26 cut)
           (srfi :27 random-bits)
           (srfi :39 parameters)
-          (weinholt bytevectors)
+          (rename (weinholt bytevectors)
+                  (bytevector=?/constant-time bytevector=?))
           (weinholt crypto aes)
           (weinholt crypto dsa)
+          (weinholt crypto dh)
           (weinholt crypto entropy)
-          (weinholt crypto math)
           (weinholt crypto sha-1)
           (weinholt crypto sha-2)
           (weinholt struct pack)
@@ -72,17 +73,6 @@
 
   (define (hex x)
     (string-append "#x" (number->string x 16)))
-
-  (define (make-secret g n bits tries) ;also in net/irc/fish, should be in crypto/dh maybe?
-    (unless (< tries 1000)
-      (error 'make-secret "unable to make a secret"))
-    (let* ((y (bytevector->uint (make-random-bytevector (div (+ bits 7) 8))))
-           (Y (expt-mod g y n)))
-      ;; See RFC 2631. Probably not clever enough.
-      (if (and (<= 2 Y (- n 1))
-               (= 1 (expt-mod Y (/ (- n 1) 2) n)))
-          (values y Y)
-          (make-secret g n bits (+ tries 1)))))
 
   (define (get-bytevector p n)
     (when (> n 65536)
@@ -219,19 +209,11 @@
 
   ;; Diffie-Hellman modulus and generator. Diffie-Hellman Group 5 from
   ;; RFC 3526.
-  (define n
-    (string->number
-     "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1\
-      29024E088A67CC74020BBEA63B139B22514A08798E3404DD\
-      EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245\
-      E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED\
-      EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3D\
-      C2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F\
-      83655D23DCA3AD961C62F356208552BB9ED529077096966D\
-      670C354E4ABC9804F1746C08CA237327FFFFFFFFFFFFFFFF"
-     16))
-  (define g 2)
+  (define n modp-group5-p)
+  (define g modp-group5-g)
 
+  ;; "Note that all DH key pairs should have a private part that is at
+  ;; least 320 bits long." -- OTR spec 3.2.0
   (define dh-length 640)              ;length for the private D-H keys
 
   ;; XXX: unfortunately libotr assumes 160-bit signatures. It is
@@ -283,9 +265,8 @@
             (mutable frags)
             ;; Result queue
             (mutable queue)
-            ;; Continuations
+            ;; Handler for the next message
             (mutable k)
-            (mutable c)
             ;; Diffie-Hellman keys
             (mutable our-keys)
             (mutable their-pubkeys)
@@ -309,7 +290,7 @@
          (p dsa-key #f 0 mss
             0 0 '()
             '()
-            plaintext-state #f
+            plaintext-state
             '() '() 0 '()
             '()
             '() 0
@@ -471,26 +452,21 @@
       (otr-state-queue-set! state '())
       queue))
 
-  (define (recv)
-    ;; Return and wait for the next incoming message
-    (call/cc
-      (lambda (k)
-        (otr-state-k-set! (*state*) k)
-        ((otr-state-c (*state*))))))
-
   (define (return state p)
     (parameterize ((*state* state))
-      (call/cc
-        (lambda (c)
-          (otr-state-c-set! (*state*) c)
-          (guard (con
-                  (else
-                   (when (message-condition? con)
-                     (print "Error: " (condition-message con)))
-                   ;; TODO: what whould be appropriate here?
-                   (queue-data 'local-error con)))
-            ((otr-state-k (*state*)) p))))))
+      (guard (con
+              ;; TODO: Should probably only handle the explicit error
+              ;; calls and reset the session.
+              (else
+               (when (message-condition? con)
+                 (print "Error: " (condition-message con)))
+               (queue-data 'local-error con)))
+        ((otr-state-k (*state*)) p))))
 
+  (define (next-state proc . args)
+    ;; Set the procedure that handles the next incoming message.
+    (otr-state-k-set! (*state*) (lambda (p) (apply proc p args))))
+  
 ;;; Socialist Milllionaire's Protocol
 
   ;; The state transitions are much simpler here so continuations are
@@ -752,8 +728,6 @@
              ;; The authentication process is already under way.
              (else #f)))))))
 
-
-
 ;;; Everything below here deals with decoding and encoding messages
 
   (define (tlv-decode bv)
@@ -772,7 +746,7 @@
 
   ;; "Bob" starts the Authenticated Key Exchange.
   (define (start-ake _)
-    (let-values (((x X) (make-secret g n dh-length 100))
+    (let-values (((x X) (make-dh-secret g n dh-length))
                  ((r) (make-random-bytevector 128/8)))
       (let* ((Xbv (uint->mpi X))
              (X-hash (sha-256->bytevector (sha-256 Xbv))))
@@ -783,7 +757,7 @@
         (send (bytevector-append (pack "!SC" otr-version msg-diffie-hellman-commit)
                                  (pack "!L" (bytevector-length Xbv)) Xbv
                                  (pack "!L" (bytevector-length X-hash)) X-hash))
-        (auth-state-awaiting-dhkey (recv) Xbv X-hash x X r))))
+        (next-state auth-state-awaiting-dhkey Xbv X-hash x X r))))
 
   ;; "Bob" gets Alice's public D-H key.
   (define (auth-state-awaiting-dhkey p Xbv X-hash x X r)
@@ -792,6 +766,7 @@
              (let ((Y (bytevector->uint (get-bytevector p (get-unpack p "!L")))))
                (unless (and (<= 2 Y (- n 2)) (not (= X Y)))
                  (error 'auth-state-awaiting-dhkey "Received bad Y" Y))
+               (print "Here's Y: #x" (number->string Y 16))
                (let-values (((ssid c c* m1 m2 m1* m2*) (make-keys Y x)))
                  (let* ((keyid-bob 1)
                         (X-bob (sign-public-key (otr-state-our-dsa-key (*state*))
@@ -806,8 +781,9 @@
                           (MAC m2
                                (pack "!L" (bytevector-length X-bob))
                                X-bob)))
-                   (auth-state-awaiting-signature (recv) x X Y keyid-bob
-                                                  ssid c* m1* m2*)))))
+                   (next-state auth-state-awaiting-signature
+                               x X Y keyid-bob
+                               ssid c* m1* m2*)))))
             ((= type msg-diffie-hellman-commit)
              ;; Both sides started the AKE.
              ;; TODO: test this.
@@ -820,13 +796,13 @@
                              (pack "!SC" otr-version msg-diffie-hellman-commit)
                              (pack "!L" (bytevector-length Xbv)) Xbv
                              (pack "!L" (bytevector-length X-hash)) X-hash))
-                      (auth-state-awaiting-dhkey (recv) Xbv X-hash x X r))
+                      (next-state auth-state-awaiting-dhkey Xbv X-hash x X r))
                      (else
                       ;; Ignore the D-H Commit message we sent.
                       (set-port-position! p 2)
                       (auth-state-none p)))))
             (else
-             (auth-state-awaiting-dhkey (recv) Xbv X-hash x X r)))))
+             (next-state auth-state-awaiting-dhkey Xbv X-hash x X r)))))
 
   ;; "Bob" gets Alice's public DSA key
   (define (auth-state-awaiting-signature p x X Y keyid-bob ssid c* m1* m2*)
@@ -848,9 +824,10 @@
                  (clear-aes-schedule! c*)
                  (set-established! (*state*) ssid keyid-bob x X keyid-alice Y key-alice)
                  (queue-data 'session-established 'from-here)
-                 (msg-state-encrypted (recv)))))
+                 (next-state msg-state-encrypted))))
             (else
-             (auth-state-awaiting-signature (recv) x X Y keyid-bob ssid c* m1* m2*)))))
+             (next-state auth-state-awaiting-signature
+                         x X Y keyid-bob ssid c* m1* m2*)))))
 
   (define (plaintext-state p)
     (let ((type (get-u8 p)))
@@ -860,22 +837,25 @@
             (else
              (send-error "I can't read your pernicious secret writing right now")
              (queue-data 'undecipherable-message #f)
-             (plaintext-state (recv))))))
+             (next-state plaintext-state)))))
 
   (define (auth-state-none p)
-    (unless (eqv? msg-diffie-hellman-commit (get-u8 p))
-      (auth-state-none (recv)))
-    ;; X-encrypted is "Bob"'s g^x encrypted with a key he reveals in
-    ;; the next message.
-    (let* ((X-encrypted (get-bytevector p (get-unpack p "!L")))
-           (X-hash (get-bytevector p (get-unpack p "!L"))))
-      (let-values (((y Y) (make-secret g n dh-length 100)))
-        (print (list 'our-dh-privkey (hex y)))
-        (print (list 'our-dh-pubkey (hex Y)))
-        (send (bytevector-append (pack "!SC" otr-version
-                                       msg-diffie-hellman-key)
-                                 (uint->mpi Y)))
-        (auth-state-awaiting-reveal-sig (recv) X-encrypted X-hash y Y))))
+    (let ((type (get-u8 p)))
+      (cond ((= type msg-diffie-hellman-commit)
+             ;; X-encrypted is "Bob"'s g^x encrypted with a key he
+             ;; reveals in the next message.
+             (let* ((X-encrypted (get-bytevector p (get-unpack p "!L")))
+                    (X-hash (get-bytevector p (get-unpack p "!L"))))
+               (let-values (((y Y) (make-dh-secret g n dh-length)))
+                 (print (list 'our-dh-privkey (hex y)))
+                 (print (list 'our-dh-pubkey (hex Y)))
+                 (send (bytevector-append (pack "!SC" otr-version
+                                                msg-diffie-hellman-key)
+                                          (uint->mpi Y)))
+                 (next-state auth-state-awaiting-reveal-sig
+                             X-encrypted X-hash y Y))))
+            (else
+             (next-state auth-state-none)))))
 
   (define (auth-state-awaiting-reveal-sig p X-encrypted X-hash y Y)
     (unless (eqv? msg-reveal-signature (get-u8 p))
@@ -919,7 +899,7 @@
                    (MAC m2* (pack "!L" (bytevector-length X-alice)) X-alice)))
             (set-established! (*state*) ssid keyid-alice y Y keyid-bob X key-bob)
             (queue-data 'session-established 'from-there)
-            (msg-state-encrypted (recv)))))))
+            (next-state msg-state-encrypted))))))
 
   ;; "Bob"'s part of the data exchange phase
   (define (msg-state-encrypted p)
@@ -971,7 +951,7 @@
                  (for-each (lambda (k)
                              (queue-data 'they-revealed k))
                            old-keys)
-                 
+
                  (unless (assv (+ skeyid 1) (otr-state-their-pubkeys (*state*)))
                    ;; Add their next key
                    (print "Added key: " (+ skeyid 1) " "
@@ -1002,18 +982,18 @@
                                      (lambda (_)
                                        (forget-session! (*state*))
                                        (queue-data 'session-finished 'by-them)
-                                       (plaintext-state (recv))))
+                                       (next-state plaintext-state)))
                                     (else
                                      (print "TLVs: " tlvs)
                                      (for-each handle-smp (filter smp-tlv? tlvs))
-                                     (msg-state-encrypted (recv))))))))
+                                     (next-state msg-state-encrypted)))))))
                        (else
                         (unless (bytevector=? msg #vu8())
                           (queue-data 'encrypted (utf8->string msg)))
-                        (msg-state-encrypted (recv)))))))
+                        (next-state msg-state-encrypted))))))
             (else
              (send-error "That was unexpected of you.") ;XXX:
-             (msg-state-encrypted (recv))))))
+             (next-state msg-state-encrypted)))))
 
   ;; Alice's part of the data exchange phase. Used to send an
   ;; encrypted message to the correspondent.
@@ -1022,7 +1002,7 @@
       (let ((latest-id (caar (otr-state-our-keys state))))
         (when (= (otr-state-our-latest-acked state) latest-id)
           (print "Making a new DH key")
-          (let-values (((y Y) (make-secret g n dh-length 100)))
+          (let-values (((y Y) (make-dh-secret g n dh-length)))
             ;; (print "Next public key: " (+ latest-id 1) " -- " (hex Y))
             ;; (print "Next private key: " (+ latest-id 1) " -- " (hex y))
             (otr-state-our-keys-set! state (take (cons (cons (+ latest-id 1) y)
