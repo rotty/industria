@@ -148,7 +148,7 @@
 ;; syntax can handle non-constant offsets. Removed another unnecessary
 ;; size check in pack!. Added documentation and examples.
 
-(library (weinholt struct pack (1 4 20100304))
+(library (weinholt struct pack (1 4 20100918))
   (export format-size pack pack! unpack get-unpack)
   (import (rnrs)
           (for (prefix (weinholt struct pack-aux) aux:)
@@ -336,9 +336,6 @@
          ((_ . rest) #'(unpack** . rest))
          (_ #'unpack**)))))
 
-  (define (get-unpack** port fmt)
-    (unpack fmt (get-bytevector-n port (format-size fmt))))
-
   (define-syntax format-size
     (make-variable-transformer
      (lambda (x)
@@ -348,6 +345,9 @@
           (aux:format-size (syntax->datum #'fmt)))
          ((_ fmt)
           #'(aux:format-size fmt))))))
+
+  (define (get-unpack** port fmt)
+    (unpack fmt (get-bytevector-n port (format-size fmt))))
 
   (define-syntax get-unpack
     (make-variable-transformer

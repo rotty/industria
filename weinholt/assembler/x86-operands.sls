@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2008, 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008, 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -290,6 +290,7 @@
                                        B))))))
     (case addressing-mode
       ((32 64)
+       ;; TODO: moffset
        (cond ((rIP? base)
               ;; [rIP+disp32] in 64-bit mode
               (ret #b00 rbp
@@ -298,7 +299,7 @@
 
              ((and (not index) (not base)
                    (= addressing-mode 32))
-              ;; [disp32] in 32-bit mode
+              ;; [disp32] in 32-bit mode.
               (ret #b00 rbp
                    (disp32 disp)
                    #f 0 0))
@@ -519,6 +520,7 @@
                      ((mem16+) 16)
                      ((mem32+) 32)
                      ((mem64+) 64)
+                     ((mem80+) 80)
                      ((mem128+) 128)
                      ((mem256+) 256)
                      ((mem+) #f)
@@ -570,8 +572,9 @@
                       ((-) (apply - operands))
                       ((bitwise-and) (apply bitwise-and operands))
                       ((bitwise-ior) (apply bitwise-ior operands))
-                      ((<< bitwise-arithmetic-shift-left) (apply bitwise-arithmetic-shift-left operands))
-                      ((>> bitwise-arithmetic-shift-right) (apply bitwise-arithmetic-shift-right operands))
+                      ((<< asl bitwise-arithmetic-shift-left) (apply bitwise-arithmetic-shift-left operands))
+                      ((>> asr bitwise-arithmetic-shift-right) (apply bitwise-arithmetic-shift-right operands))
+                      ((ash) (apply bitwise-arithmetic-shift operands))
                       ((bitwise-bit-field) (apply bitwise-bit-field operands)))))))))
 
   (define (expression-labels expr)
@@ -654,7 +657,7 @@
                   (cond ((eq? (car op) 'far)
                          ;; Far pointer
                          (build-far-pointer (cadr op) (caddr op) mode))
-                        ((memq (car op) '(+ - << >>
+                        ((memq (car op) '(+ - << >> ash asr asl
                                             bitwise-ior bitwise-and
                                             bitwise-bit-field
                                             bitwise-arithmetic-shift-left

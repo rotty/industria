@@ -1,5 +1,5 @@
 #!/usr/bin/env scheme-script
-;; -*- mode: scheme; coding: utf-8 -*-
+;; -*- mode: scheme; coding: utf-8 -*- !#
 ;; Copyright © 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
@@ -34,3 +34,7 @@
                                     46 115 101 130 11 119 101 105 110 104 111 108 116 46 115 101))
                 (SubjectAltName))
  => '("www.weinholt.se" "weinholt.se"))
+
+;; TODO: needs more tests, to say the least.
+
+(check-report)

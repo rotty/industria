@@ -23,7 +23,7 @@
 ;; A little on how people implement X.509 differently:
 ;; http://www.cs.auckland.ac.nz/~pgut001/pubs/x509guide.txt
 
-(library (weinholt crypto x509 (0 0 20100705))
+(library (weinholt crypto x509 (0 0 20101024))
   (export certificate?
           certificate-from-bytevector
           certificate-public-key
@@ -35,13 +35,14 @@
           certificate-tbs-data
 
           print-certificate)
-  (import (rnrs)
+  (import (except (rnrs) bytevector=?)
           (only (srfi :13 strings) string-join
                 string-pad string-prefix? string-suffix-ci?
-                string-count)
+                string-count string-index-right)
           (srfi :19 time)
           (srfi :39 parameters)
-          (weinholt bytevectors)
+          (rename (weinholt bytevectors)
+                  (bytevector=?/constant-time bytevector=?))
           (weinholt crypto dsa)
           (weinholt crypto md5)
           (weinholt crypto rsa)
@@ -337,13 +338,18 @@
   (define dn=? equal?) ;compare distinguished names
 
   ;; FIXME: This doesn't really work, because the name must be
-  ;; converted to ascii (punycode) first, etc. Or it might be an IP
-  ;; address in a non-canonical form, I suppose. See section 7.1.
+  ;; converted to ascii (punycode) first, etc. See section 7.1.
   (define (common-name-matches? cn pattern)
+    (define (ip-address? s)             ;approximation only
+      (and (string->number
+            (substring s (+ 1 (string-index-right s #\.))
+                       (string-length s)))
+           #t))
     ;; `pattern' is from the certificate.
     (and (string? cn)
          (cond ((and (string-prefix? "*" pattern)
-                     (> (string-count pattern #\.) 1))
+                     (> (string-count pattern #\.) 1)
+                     (not (ip-address? cn)))
                 ;; Support one * at the start of a certificate's
                 ;; commonName or subjectAltName (partial support for
                 ;; RFC2818). Require that the pattern has more than

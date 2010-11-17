@@ -1,0 +1,77 @@
+#!/usr/bin/env scheme-script
+;; -*- mode: scheme; coding: utf-8 -*- !#
+;; Demonstration SSH client
+;; Copyright © 2010 Göran Weinholt <goran@weinholt.se>
+;;
+;; This program is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+;;
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+;;
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#!r6rs
+
+(import (rnrs)
+        (only (srfi :13 strings) string-index)
+        (srfi :39 parameters)
+        (weinholt crypto dsa)
+        (weinholt crypto rsa)
+        (weinholt crypto sha-1)
+        (weinholt crypto ssh-public-key (1))
+        (weinholt net ssh)
+        (weinholt net tcp)
+        (weinholt text base64))
+
+(define (print . x) (for-each display x) (newline))
+
+(define (get-key hostname portname algorithm)
+  (let-values (((in out) (tcp-connect hostname portname)))
+    (parameterize ((preferred-server-host-key-algorithms (list algorithm)))
+      (let ((conn (make-ssh-client in out)))
+        (ssh-finish-key-exchange conn)
+        (display "Server identification: ")
+        (write (utf8->string (ssh-conn-peer-identification conn)))
+        (newline)
+        (close-ssh conn)
+        (ssh-conn-host-key conn)))))
+
+(define (print-key hostname key)
+  (print (ssh-public-key-fingerprint key))
+  (print (ssh-public-key-random-art key))
+  (print key)
+  (let ((key-bv (ssh-public-key->bytevector key)))
+    (print (base64-encode key-bv))
+    ;; RFC4255
+    (print (if (string-index hostname #\.)
+               (string-append hostname ".")
+               hostname)
+           " SSHFP "
+           (cond ((rsa-public-key? key) 1)
+                 ((dsa-public-key? key) 2))
+           " 1 "                        ;sha-1
+           (string-downcase
+            (sha-1->string (sha-1 key-bv))))))
+
+(define (main hostname portname)
+  (print-key hostname (get-key hostname portname "ssh-dss"))
+  (print-key hostname (get-key hostname portname "ssh-rsa")))
+
+;; This is very incomplete. It should do userauth etc for a proper
+;; demo.
+
+(apply
+ (case-lambda
+   ((who hostname portname)
+    (main hostname portname))
+   ((who hostname)
+    (main hostname "22"))
+   ((who)
+    (print "Usage: " who " hostname [port]")
+    (exit 1)))
+ (command-line))
