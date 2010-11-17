@@ -26,7 +26,7 @@
 
 ;; TODO: initiating key exchange
 
-(library (weinholt net irc fish (0 0 20100611))
+(library (weinholt net irc fish (0 0 20101022))
   (export fish-message? fish-decrypt-message fish-encrypt-message
           fish-key-init? fish-generate-key make-fish-key)
   (import (rnrs)
@@ -34,9 +34,8 @@
           (only (srfi :13 strings) string-index string-prefix?)
           (weinholt bytevectors)
           (weinholt crypto blowfish)
-          (weinholt crypto entropy)
+          (weinholt crypto dh)
           (weinholt crypto sha-2)
-          (weinholt crypto math)
           (weinholt struct pack)
           (weinholt text base64))
 
@@ -144,22 +143,12 @@ out+to+TMG+for+helping+to+generate+this+cool+sophie+germain+prime+number++++\
            (substring msg 12 (string-length msg)))
           (else #f)))
 
-  (define (make-secret tries)
-    (unless (< tries 1000)
-      (error 'fish-generate-key "unable to make a secret"))
-    (let* ((y (bytevector->uint (make-random-bytevector 1080/8)))
-           (Y (expt-mod g y n)))
-      (if (and (<= (expt 2 512) Y (- n 2))
-               (= 1 (expt-mod Y (/ (- n 1) 2) n)))
-          (values y Y)
-          (make-secret (+ tries 1)))))
-
   ;; Returns a DH1080_FINISH message and a key.
   (define (fish-generate-key init)
     (let ((X (bytevector->uint (dh1080-base64-decode (fish-key-init? init)))))
       (unless (<= 1 X (- n 2))
         (error 'fish-key-generate "bad public number sent" X))
-      (let-values (((y Y) (make-secret 0)))
+      (let-values (((y Y) (make-dh-secret g n 1080)))
         (let ((k (expt-mod X y n)))
           (values (make-fish-key (dh1080-base64-encode
                                   (sha-256->bytevector (sha-256 (uint->bytevector k)))))

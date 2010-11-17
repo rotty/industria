@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -17,15 +17,19 @@
 
 ;; The MD5 Message-Digest Algorithm. RFC 1321
 
-(library (weinholt crypto md5 (1 0 20090916))
+(library (weinholt crypto md5 (1 1 20101022))
   (export make-md5 md5-update! md5-finish! md5-clear!
           md5 md5-copy md5-finish
-          md5-copy-hash! md5->bytevector md5->string
+          md5-length
+          md5-copy-hash! md5-96-copy-hash!
+          md5->bytevector md5->string
+          md5-hash=? md5-96-hash=?
           hmac-md5)
   (import (only (srfi :1 lists) iota)
           (except (rnrs) bitwise-rotate-bit-field))
 
-  (define (print . x) (for-each display x) (newline))
+  (define (md5-length) 16)
+
   (define (vector-copy x) (vector-map (lambda (i) i) x))
 
   (define (rol32 n count)
@@ -226,11 +230,19 @@
       (md5-finish! state)
       state))
 
-  (define (md5-copy-hash! state bv off)
+  (define (copy-hash! state bv off len)
     (do ((i 0 (+ i 1)))
-        ((= i 4))
-      (bytevector-u32-set! bv (+ off (* 4 i)) (vector-ref (md5state-H state) i) (endianness little))))
+        ((= i len))
+      (bytevector-u32-set! bv (+ off (* 4 i))
+                           (vector-ref (md5state-H state) i)
+                           (endianness little))))
 
+  (define (md5-copy-hash! state bv off)
+    (copy-hash! state bv off 4))
+
+  (define (md5-96-copy-hash! state bv off)
+    (copy-hash! state bv off 3))
+  
   (define (md5->bytevector state)
     (let ((ret (make-bytevector (* 4 4))))
       (md5-copy-hash! state ret 0)
@@ -244,6 +256,22 @@
                       (number->string x 16)))
                 (bytevector->u8-list (md5->bytevector state)))))
 
+  ;; Compare an SHA-1 state with a bytevector. It is supposed to not
+  ;; terminate early in order to not leak timing information. Assumes
+  ;; that the bytevector's length is ok.
+  (define (cmp state bv len)
+    (do ((i 0 (fx+ i 1))
+         (diff 0 (+ diff
+                    (bitwise-xor
+                     (bytevector-u32-ref bv (* 4 i) (endianness little))
+                     (vector-ref (md5state-H state) i)))))
+        ((fx=? i len)
+         (zero? diff))))
+
+  (define (md5-hash=? state bv) (cmp state bv 4))
+
+  (define (md5-96-hash=? state bv) (cmp state bv 3))
+  
   (define (hmac-md5 secret . data)
     ;; RFC 2104.
     (if (> (bytevector-length secret) 64)

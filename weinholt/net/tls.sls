@@ -37,7 +37,7 @@
 ;; TODO: go through the implementation pitfalls in the RFC. check all
 ;; the MUSTs.
 
-(library (weinholt net tls (0 0 20100627))
+(library (weinholt net tls (0 0 20101024))
   (export make-tls-wrapper
           flush-tls-output
           put-tls-record get-tls-record
@@ -52,17 +52,18 @@
           put-tls-application-data
           tls-conn-remote-certs
           tls-conn-has-unprocessed-data?)
-  (import (rnrs)
+  (import (except (rnrs) bytevector=?)
           (only (srfi :1 lists) last)
           (srfi :19 time)
           (srfi :27 random-bits)
-          (weinholt bytevectors)
+          (rename (weinholt bytevectors)
+                  (bytevector=?/constant-time bytevector=?))
           (weinholt crypto aes)
           (weinholt crypto arcfour)
           (weinholt crypto des)
+          (weinholt crypto dh)
           (weinholt crypto dsa)
           (weinholt crypto entropy)
-          (weinholt crypto math)        ;TODO: dh
           (weinholt crypto md5)
           (weinholt crypto rsa)
           (weinholt crypto sha-1)
@@ -753,26 +754,13 @@
                            (list bv)))))
 
   (define (put-tls-handshake-client-key-exchange-dhe conn)
-    (define (make-secret g n bits tries)
-      ;;also in net/irc/fish and net/otr, should be in crypto/dh maybe?
-      (unless (< tries 1000)
-        (error 'make-secret "unable to make a secret"))
-      (let* ((y (bytevector->uint (make-random-bytevector (div (+ bits 7) 8))))
-             (Y (expt-mod g y n)))
-        ;; See RFC 2631. Probably not clever enough.
-        (if (and (<= 2 Y (- n 1))
-                 (= 1 (expt-mod Y (/ (- n 1) 2) n)))
-            (values y Y)
-            (make-secret g n bits (+ tries 1)))))
-
     ;; TODO: if the client certificate contains a D-H key, this
     ;; message must be empty.
     (print ";Client Diffie-Hellman Key-Exchange")
     (print "#;p-length " (bitwise-length (tls-conn-server-DH-p conn)))
-    (let-values (((y Yc) (make-secret (tls-conn-server-DH-g conn)
-                                      (tls-conn-server-DH-p conn)
-                                      (bitwise-length (tls-conn-server-DH-p conn))
-                                      42)))
+    (let-values (((y Yc) (make-dh-secret (tls-conn-server-DH-g conn)
+                                         (tls-conn-server-DH-p conn)
+                                         (bitwise-length (tls-conn-server-DH-p conn)))))
       ;; FIXME: what is the minimum length, etc?
       (let ((Z (uint->bytevector (expt-mod (tls-conn-server-DH-Ys conn)
                                            y

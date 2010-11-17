@@ -1,0 +1,55 @@
+-*- mode: outline; coding: utf-8 -*-
+
+* New in 1.1 (not yet released):
+
+** (weinholt bytevectors): Added bytevector=?/constant-time
+
+The procedure bytevector=?/constant-time compares two bytevectors by
+summing up their differences.
+
+** (weinholt crypto blowfish): New procedures for CBC mode
+
+The procedures blowfish-cbc-encrypt! and blowfish-cbc-decrypt! were
+added.
+
+** (weinholt crypto dh): New library for Diffie-Hellman key exchange
+
+This code was previously spread out in different libraries. The
+library exports make-dh-secret, expt-mod and a few MODP groups.
+
+** (weinholt crypto dsa): Better secret numbers for signatures
+
+The per-message secret number used by dsa-create-signature is now
+generated more in accordance with FIPS 186-3 Appendix B.2.1.
+
+** (weinholt crypto md5): Added md5-96 and equality predicates
+
+Added md5-length, md5-96-copy-hash!, md5-hash=? and md5-96-hash=?. The
+-96 procedures work with the leftmost 96 bits of a hash. The equality
+predicate compares an md5 state with a bytevector in a manner intended
+to not leak timing information about the comparison.
+
+** (weinholt crypto openpgp): New exports
+
+Added port-ascii-armormed? which checks if the data on a binary input
+port looks like a binary OpenPGP packet or not. The procedure
+get-openpgp-packet was added to the exports.
+
+** (weinholt crypto sha-1): Added sha-1-96 and equality predicates
+
+Same changes as the md5 library.
+
+** (weinholt crypto sha-2): Equality predicates and HMAC bug fix
+
+Same changes as the md5 library except that the -96 procedures are
+-128 here. There are also bug fixes: the procedures hmac-sha-384 and
+hmac-sha-512 were previously defined using an incorrect block size.
+This change makes the output incompatible with previous versions, so
+the major version was incremented to 1. Another bug fixed was that the
+hmac procedures couldn't handle key lengths larger than the block
+size.
+
+** (weinholt disassembler i8080): New disassembler for Intel 8080
+
+This is a new disassembler for Intel 8080/8085, which was the
+predecessor of the Intel 8086.

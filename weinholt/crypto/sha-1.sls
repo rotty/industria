@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -22,15 +22,19 @@
 ;; TODO: give an error if more than 2^64 bits are processed?
 ;; TODO: Optimize. Should be simple enough with the help of a profiler.
 
-(library (weinholt crypto sha-1 (1 0 20090916))
+(library (weinholt crypto sha-1 (1 1 20101022))
   (export make-sha-1 sha-1-update! sha-1-finish! sha-1-clear!
           sha-1 sha-1-copy sha-1-finish
           sha-1-transform!              ;for interested parties only
-          sha-1-copy-hash! sha-1->bytevector sha-1->string
+          sha-1-length
+          sha-1-copy-hash! sha-1-96-copy-hash!
+          sha-1->bytevector sha-1->string
+          sha-1-hash=? sha-1-96-hash=?
           hmac-sha-1)
   (import (except (rnrs) bitwise-rotate-bit-field))
 
-  (define (print . x) (for-each display x) (newline))
+  (define (sha-1-length) 20)
+
   (define (vector-copy x) (vector-map (lambda (i) i) x))
 
   (define (rol32 n count)
@@ -221,10 +225,18 @@
       (sha-1-finish! state)
       state))
 
-  (define (sha-1-copy-hash! state bv off)
+  (define (copy-hash! state bv off len)
     (do ((i 0 (+ i 1)))
-        ((= i 5))
-      (bytevector-u32-set! bv (+ off (* 4 i)) (vector-ref (sha1state-H state) i) (endianness big))))
+        ((= i len))
+      (bytevector-u32-set! bv (+ off (* 4 i))
+                           (vector-ref (sha1state-H state) i)
+                           (endianness big))))
+
+  (define (sha-1-copy-hash! state bv off)
+    (copy-hash! state bv off 5))
+
+  (define (sha-1-96-copy-hash! state bv off)
+    (copy-hash! state bv off 3))
 
   (define (sha-1->bytevector state)
     (let ((ret (make-bytevector (* 4 5))))
@@ -238,6 +250,22 @@
                       (string-append "0" (number->string x 16))
                       (number->string x 16)))
                 (bytevector->u8-list (sha-1->bytevector state)))))
+
+  ;; Compare an SHA-1 state with a bytevector. It is supposed to not
+  ;; terminate early in order to not leak timing information. Assumes
+  ;; that the bytevector's length is ok.
+  (define (cmp state bv len)
+    (do ((i 0 (fx+ i 1))
+         (diff 0 (+ diff
+                    (bitwise-xor
+                     (bytevector-u32-ref bv (* 4 i) (endianness big))
+                     (vector-ref (sha1state-H state) i)))))
+        ((fx=? i len)
+         (zero? diff))))
+
+  (define (sha-1-hash=? state bv) (cmp state bv 5))
+
+  (define (sha-1-96-hash=? state bv) (cmp state bv 3))
 
 ;;; HMAC-SHA-1. RFC 2104.
 

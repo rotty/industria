@@ -75,7 +75,7 @@
 ;; }
 ;; http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.58.2363
 
-(library (weinholt crypto aes (1 0 20100617))
+(library (weinholt crypto aes (1 0 20101022))
   (export expand-aes-key aes-encrypt!
           reverse-aes-schedule aes-decrypt!
           clear-aes-schedule!
@@ -453,7 +453,7 @@
 ;;; CBC mode
 
   (define (aes-cbc-encrypt! source source-start target target-start len sched iv)
-    (unless (fxzero? (fxmod len 16))
+    (unless (fxzero? (fxand len 15))
       (error 'aes-cbc-encrypt!
              "The length has to be an integer multiple of 16" len))
     (do ((ss source-start (fx+ ss 16))
@@ -469,7 +469,7 @@
       (bytevector-copy! target ts iv 0 16)))
 
   (define (aes-cbc-decrypt! source source-start target target-start len sched iv)
-    (unless (fxzero? (fxmod len 16))
+    (unless (fxzero? (fxand len 15))
       (error 'aes-cbc-decrypt!
              "The length has to be an integer multiple of 16" len))
     (do ((buf (make-bytevector 16))

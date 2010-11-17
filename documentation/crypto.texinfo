@@ -28,20 +28,22 @@ or the FDA and quite likely aren't allowed for government work.
 @cindex security, warning
 
 @menu
-* crypto aes::         Advanced Encryption Standard (AES)
-* crypto arcfour::     ARCFOUR stream cipher
-* crypto blowfish::    The Blowfish cipher
-* crypto crc::         Cyclic Redundancy Codes (CRC)
-* crypto des::         Data Encryption Standard (DES, 3DES)
-* crypto dsa::         Digital Signature Algorithm (DSA)
-* crypto entropy::     Entropy and randomness
-* crypto md5::         Message-Digest algorithm 5 (MD5)
-* crypto openpgp::     OpenPGP signature verification
-* crypto password::    Password hashing
-* crypto rsa::         RSA public key encryption and signatures
-* crypto sha-1::       Secure Hash Algorithm 1 (SHA-1)
-* crypto sha-2::       Secure Hash Algorithm 2 (SHA-256, SHA-512, etc)
-* crypto x509::        X.509 Public-Key Infrastructure
+* crypto aes::            Advanced Encryption Standard (AES)
+* crypto arcfour::        ARCFOUR stream cipher
+* crypto blowfish::       The Blowfish cipher
+* crypto crc::            Cyclic Redundancy Codes (CRC)
+* crypto des::            Data Encryption Standard (DES, 3DES)
+* crypto dh::             Diffie-Hellman key exchange
+* crypto dsa::            Digital Signature Algorithm (DSA)
+* crypto entropy::        Entropy and randomness
+* crypto md5::            Message-Digest algorithm 5 (MD5)
+* crypto openpgp::        OpenPGP signature verification
+* crypto password::       Password hashing
+* crypto rsa::            RSA public key encryption and signatures
+* crypto sha-1::          Secure Hash Algorithm 1 (SHA-1)
+* crypto sha-2::          Secure Hash Algorithm 2 (SHA-256, SHA-512, etc)
+* crypto ssh-public-key:: SSH public key format conversion
+* crypto x509::           X.509 Public-Key Infrastructure
 @end menu
 
 @c ======================================================================
@@ -235,11 +237,29 @@ the key material will actually be gone from memory. It might remain in
 temporary numbers or other values.
 @end deffn
 
+@deffn Procedure blowfish-cbc-encrypt! source source-start target target-start k schedule iv
+Encrypts @var{k} bytes in the bytevector @var{source} starting at
+@var{source-start} with Blowfish in CBC mode and writes the result to
+@var{target} at @var{target-start}.
+
+The argument @var{k} must be an integer multiple of 8, which is the block length.
+
+The @var{iv} bytevector is an Initial Vector. It should be 8 bytes
+long, initialized to random bytes. This procedure updates the @var{iv}
+after processing a block.
+@end deffn
+
+@deffn Procedure blowfish-cbc-decrypt! source source-start target target-start k schedule iv
+The inverse of @code{blowfish-cbc-encrypt!}.
+@end deffn
+
 @noindent
 Version history:
 @itemize
 @item
 @code{(0 0)} -- Initial version.
+@item
+@code{(0 1)} -- Added procedures for CBC mode.
 @end itemize
 
 @c ======================================================================
@@ -493,6 +513,64 @@ Version history:
 
 
 @c ======================================================================
+@node crypto dh
+@subsection Diffie-Hellman key exchange
+The @code{(weinholt crypto dh)} library exports procedures and
+constants for Diffie-Hellman (Merkle) key exchange. D-H works by
+generating a pair of numbers, sending one of them to the other party,
+and using the other one and the one you receive to compute a shared
+secret. The idea is that it's difficult for an eavesdropper to deduce
+the shared secret.
+
+The D-H exchange must be protected by e.g.@: public key encryption
+because otherwise a MITM attack is trivial. It is best to use a
+security protocol designed by an expert.
+@cindex Diffie-Hellman
+
+@deffn Procedure make-dh-secret generator prime bit-length
+Generates a Diffie-Hellman secret key pair. Returns two values: the
+secret key (of bitwise length @var{bit-length}) part and the public
+key part.
+@end deffn
+
+@deffn Procedure expt-mod base exponent modulus
+Computes @code{(mod (expt @var{base} @var{exponent}) @var{modulus})}.
+This is modular exponentiation, so all the parameters must be
+integers.
+
+The @var{exponent} can also be negative (set it to -1 to calculate the
+multiplicative inverse of @var{base}).
+
+@example
+(import (weinholt crypto dh))
+(let ((g modp-group15-g) (p modp-group15-p))
+  (let-values (((y Y) (make-dh-secret g p 320))
+               ((x X) (make-dh-secret g p 320)))
+    ;; The numbers being compared are the shared secret
+    (= (expt-mod X y modp-group15-p)
+       (expt-mod Y x modp-group15-p))))
+@result{} #t
+@end example
+@end deffn
+
+This library also exports a few well known modular exponential (MODP)
+Diffie-Hellman groups (generators and primes) that have been defined
+by Internet RFCs. They are named modp-groupN-g (generator) and
+modp-groupN-p (prime) where N is the number of the group. Groups 1, 2,
+5, 14, 15, 16, 17 and 18 are currently exported. They all have
+different lengths and longer primes are more secure but also slower.
+See RFC 3526 for more on this.
+@cindex MODP groups
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
+@end itemize
+
+
+@c ======================================================================
 @node crypto dsa
 @subsection Digital Signature Algorithm
 The @code{(weinholt crypto dsa)} library provides procedures for
@@ -526,7 +604,14 @@ To access the fields use @code{dsa-public-key-p},
 @end deffn
 
 @deffn Procedure dsa-public-key? obj
-Returns @code{#t} if @var{obj} is a DSA public key value.
+True if @var{obj} is a DSA public key value.
+@end deffn
+
+@deffn Procedure dsa-public-key-length key
+Returns the number of bits in the @emph{p} value of @var{key}. This is
+often considered to be the length of the key. The bitwise-length of
+@emph{q} is also important, it corresponds with the length of the
+hashes used for signatures.
 @end deffn
 
 @deffn Procedure make-dsa-private-key p q g y x
@@ -584,7 +669,7 @@ Returns @code{#t} if the signature matches, otherwise @code{#f}.
 Version history:
 @itemize
 @item
-@code{(0 0)} -- Initial version.
+@code{(1 0)} -- Initial version.
 @end itemize
 
 
@@ -645,6 +730,10 @@ should be used with @code{md5->bytevector} or @code{md5->string}.
 @end example
 @end deffn
 
+@deffn Procedure md5-length
+The length of md5 message digests in bytes.
+@end deffn
+
 @deffn Procedure make-md5
 Returns a new MD5 state for use with the procedures below. The type of
 the return value is unspecified.
@@ -679,6 +768,10 @@ Copies the message digest (a.k.a.@: hash) in the finalized
 @var{md5state} into @var{bv} at the given offset.
 @end deffn
 
+@deffn Procedure md5-96-copy-hash! md5state bv offset
+Like @code{md5-copy-hash!}, but only copies the leftmost 96 bits.
+@end deffn
+
 @deffn Procedure md5->bytevector md5state
 Returns a new bytevector which contains a binary representation of the
 finalized @var{md5state}.
@@ -688,6 +781,18 @@ finalized @var{md5state}.
 Returns a new string which contains a textual representation of the
 finalized @var{md5state}. The conventional hexadecimal representation
 is used.
+@end deffn
+
+@deffn Procedure md5-hash=? md5state bv
+Compares the finalized @var{md5state} with the leading bytes of
+@var{bv}. The comparison is designed to take the same amount of time
+regardless of where any differences may be. This may be important for
+networked programs that would otherwise be vulnerable to timing
+attacks.
+@end deffn
+
+@deffn Procedure md5-96-hash=? md5state bv
+Like @code{md5-hash=?} except it only compares the leftmost 96 bits.
 @end deffn
 
 @deffn Procedure hmac-md5 secret bytevector ...
@@ -700,6 +805,9 @@ Version history:
 @itemize
 @item
 @code{(1 0)} -- Initial version.
+@item
+@code{(1 1)} -- Added @code{md5-length}, @code{md5-96-copy-hash!},
+@code{md5-hash=?} and @code{md5-96-hash=?}.
 @end itemize
 
 @c ======================================================================
@@ -717,9 +825,29 @@ SHA-224, SHA-256, SHA-384 and SHA-512 (all the standard algorithms
 except RIPE-MD160).
 
 An OpenPGP key is actually a list of OpenPGP packets with a certain
-structure: first is the primary key (e.g. an RSA or DSA key), then
-comes a number of user IDs, attributes, signatures and also subkeys
-(which are just like primary keys, except marked as subkeys).
+structure: first is the primary key (e.g. an RSA or DSA key), next
+possibly a revocation, then a number of user IDs, attributes,
+signatures and also subkeys (which are just like primary keys, except
+marked as subkeys). See RFC 4880 section 11 for the exact composition.
+This library represents keyrings as hashtables indexed by key ID and
+where the entries are lists of packets in the order they appeared in
+the keyring file.
+
+Please note that this library assumes the program that wrote the
+keyring did due diligence when importing keys, and made sure that
+e.g.@: subkey binding signatures are verified, and that the order of
+packets is correct.
+
+@deffn Procedure port-ascii-armored? port
+Returns false if the data at the beginning of @var{port} doesn't look
+like a valid binary OpenPGP packet. The port must be a binary input
+port. The port position is not changed.
+@end deffn
+
+@deffn Procedure get-openpgp-packet port
+Reads an OpenPGP packet from @var{port}, which must be a binary input
+port. An error is raised if the packet type is unimplemented.
+@end deffn
 
 @deffn Procedure get-openpgp-keyring p
 Reads a keyring from the binary input port @var{p}. Returns a
@@ -731,6 +859,18 @@ to verify that keys have valid signatures.
 Warning: this can take a while if the keyring is very big.
 @end deffn
 
+@deffn Procedure get-openpgp-keyring/keyid p keyid
+Searches the binary input port @var{p} for the public key with the
+given @var{keyid}. Returns a hashtable similar to
+@code{get-openpgp-keyring}, except it will only contain the primary
+and subkeys associated with the @var{keyid}.
+
+The @var{keyid} can be either a 64 or 32 bit exact integer.
+
+Warning: this is faster than get-openpgp-keyring, but is still rather
+slow with big keyrings. The speed depends on the SHA-1 implementation.
+@end deffn
+
 @deffn Procedure get-openpgp-detached-signature/ascii p
 Reads a detached OpenPGP signature from the textual input port
 @var{p}. Returns either an OpenPGP signature object or the end of file
@@ -740,7 +880,25 @@ These signatures can be created with e.g.@: @code{gpg -a --detach-sign filename}
 @end deffn
 
 @deffn Procedure verify-openpgp-signature sig keyring p
-TODO: document.
+Verifies the signature data in @var{sig}. The @var{keyring} hashtable
+is used to find the public key of the signature issuer. The signed
+data is read from the binary input port @var{p}.
+
+This procedure returns two values. These are the possible
+combinations:
+@itemize
+@item
+@t{good-signature }@emph{key-data} -- The signature matches
+the data. The @emph{key-data} contains the public key list that was
+used to verify the signature.
+@item
+@t{bad-signature }@emph{key-data} -- The signature does not
+match the data. The @emph{key-data} is the same as above.
+@item
+@t{missing-key }@emph{key-id} -- The issuer public key for the
+signature was not found in the keyring. The @emph{key-id} is the
+64-bit key ID of the issuer.
+@end itemize
 @end deffn
 
 @deffn Procedure openpgp-signature? obj
@@ -750,15 +908,74 @@ contained in keyring entries.
 @end deffn
 
 @deffn Procedure openpgp-signature-issuer sig
-TODO: document.
+The 64-bit key ID of the OpenPGP public key that issued the
+signature @var{sig}.
+@end deffn
+
+@deffn Procedure openpgp-signature-public-key-algorithm sig
+Returns the name of the public key algorithm used to create the
+signature @var{sig}. This is currently the symbol @code{dsa} or
+@emph{rsa}.
+@end deffn
+
+@deffn Procedure openpgp-signature-hash-algorithm sig
+The name of the message digest algorithm used to create the
+signature @var{sig}. This is currently one of @code{md5},
+@code{sha-1}, @code{ripe-md160} (unsupported), @code{sha-224},
+@code{sha-256}, @code{sha-384} or @code{sha-512}.
+@end deffn
+
+@deffn Procedure openpgp-signature-creation-time sig
+An SRFI-19 date object representing the time at which the signature
+@var{sig} was created.
+@end deffn
+
+@deffn Procedure openpgp-signature-expiration-time sig
+An SRFI-19 date object representing the time at which the signature
+@var{sig} expires. Returns @code{#f} if there's no expiration time.
+@end deffn
+
+@deffn Procedure openpgp-user-id? obj
+True if @var{obj} is an OpenPGP user id.
+@end deffn
+
+@deffn Procedure openpgp-user-id-value user-id
+The string value of the @var{user-id}. This is often the name of the
+person who owns the key.
+@end deffn
+
+@deffn Procedure openpgp-user-attribute? obj
+True if @var{obj} is an OpenPGP user attribute. Attributes are used to
+encode JPEG images. There's currently no way to access the image.
 @end deffn
 
 @deffn Procedure openpgp-public-key? obj
 True if @var{obj} is an OpenPGP primary key or subkey.
 @end deffn
 
-@deffn Procedure openpgp-user-id? obj
-True if @var{obj} is an OpenPGP user id.
+@deffn Procedure openpgp-public-key-subkey? key
+True if @var{obj} is a subkey.
+@end deffn
+
+@deffn Procedure openpgp-public-key-value key
+The DSA or RSA public key contained in the OpenPGP public @var{key}.
+The value returned has the same type as the @code{(crypto weinholt
+dsa)} or @code{(crypto weinholt rsa)}.
+@end deffn
+
+@deffn Procedure openpgp-public-key-fingerprint key
+The fingerprint of the OpenPGP public @var{key} as a bytevector. This
+is an SHA-1 digest based on the public key values.
+@end deffn
+
+@deffn Procedure openpgp-format-fingerprint bv
+Formats the bytevector @var{bv}, which was presumably created by
+@code{openpgp-public-key-fingerprint}, as a string in the format
+preferred for PGP public key fingerprints.
+@end deffn
+
+@deffn Procedure openpgp-public-key-id key
+The 64-bit key ID of the OpenPGP public @var{key}.
 @end deffn
 
 @noindent
@@ -766,6 +983,9 @@ Version history:
 @itemize
 @item
 @code{(1 0)} -- Initial version.
+@item
+@code{(1 1)} -- Added @code{get-openpgp-packet} and
+@code{port-ascii-armored?}.
 @end itemize
 
 @c ======================================================================
@@ -839,6 +1059,18 @@ the public exponent @var{e}.
 True if @var{obj} is a public RSA key.
 @end deffn
 
+@deffn Procedure rsa-public-key-n key
+@end deffn
+@deffn Procedure rsa-public-key-modulus key
+Returns the @emph{modulus} of @var{key}.
+@end deffn
+
+@deffn Procedure rsa-public-key-e key
+@end deffn
+@deffn Procedure rsa-public-key-public-exponent key
+Returns the @emph{public exponent} of @var{key}.
+@end deffn
+
 @deffn Procedure rsa-public-key-from-bytevector bv
 Parses the bytevector @var{bv} as an ASN.1 DER encoded public RSA key.
 The return value can be used with the other procedures in this
@@ -864,7 +1096,7 @@ either a public or private RSA key.
 @c @deffn Procedure rsa-decrypt
 @c @end deffn
 It is often not enough to just use the plain encryption and decryption
-procedures, a protocol for what to put in the plaintext should also be
+procedures; a protocol for what to put in the plaintext should also be
 used. PKCS #1 (RFC@: 3447) is a standard for how to perform RSA
 encryption and signing with padding. New protocols should use one of
 the other protocols from the RFC.
@@ -892,7 +1124,7 @@ list containing a digest algorithm specifier and a digest.
 Version history:
 @itemize
 @item
-@code{(0 0)} -- Initial version.
+@code{(1 0)} -- Initial version.
 @end itemize
 
 @c ======================================================================
@@ -911,6 +1143,9 @@ Version history:
 @itemize
 @item
 @code{(1 0)} -- Initial version.
+@item
+@code{(1 1)} -- Added @code{sha-1-length}, @code{sha-1-96-copy-hash!},
+@code{sha-1-hash=?} and @code{sha-1-96-hash=?}.
 @end itemize
 
 @c ======================================================================
@@ -919,7 +1154,9 @@ Version history:
 The interface provided by @code{(weinholt crypto sha-2)} is identical
 to the one provided by the MD5 library, but instead of @code{md5},
 every procedure is prefixed by @code{sha-224}, @code{sha-256},
-@code{sha-384} or @code{sha-512}. @xref{crypto md5}.
+@code{sha-384} or @code{sha-512}. In addition the procedures that
+operate on the leftmost 96 bits are instead defined for the leftmost
+128 bits (e.g.@: @code{sha-512-128-hash=?}). @xref{crypto md5}.
 
 SHA-224 and SHA-256 have a maximum message size of @math{2^{64}-1}
 bits. For SHA-384 and SHA-512 the maximum is @math{2^{128}-1} bits.
@@ -934,6 +1171,62 @@ Version history:
 @itemize
 @item
 @code{(0 0)} -- Initial version.
+@item
+@code{(1 1)} -- Added @code{sha-224-length}, @code{sha-256-length},
+@code{sha-384-length}, @code{sha-512-length} that return the length of
+a digest in bytes. Added the comparison predicates
+@code{sha-224-hash=?}, @code{sha-256-hash=?}, @code{sha-384-hash=?}
+@code{sha-512-hash=?} that run in constant time. Added procedures for
+truncated digests: @code{sha-224-128-hash=?},
+@code{sha-256-128-hash=?}, @code{sha-384-128-hash=?}
+@code{sha-512-128-hash=?}, @code{sha-224-128-copy-hash!},
+@code{sha-256-128-copy-hash!}, @code{sha-384-128-copy-hash!} and
+@code{sha-512-128-copy-hash!}. Now uses the correct definition of
+HMAC-SHA-384 and HMAC-SHA-512. The HMACs now also handle key lengths
+larger than the block size.
+@end itemize
+
+@c ======================================================================
+@node crypto ssh-public-key
+@subsection SSH public key format conversion
+Use @code{(weinholt crypto ssh-public-key)} to convert public RSA and
+DSA keys from records to the binary SSH public key format, and the
+other way around. SSH is the name of a network protocol for secure
+terminal connections defined by RFCs 4250-4254. The key format is
+specified by RFC 4716.
+
+The types used for RSA and DSA keys in this library are the same types
+used elsewhere.
+
+Future work would be to implement parsing of the various textual
+formats that contain Base64 public SSH keys.
+
+@deffn Procedure get-ssh-public-key p
+Reads a public RSA/DSA key encoded in the SSH public key format from
+the binary input port @var{p}.
+@end deffn
+
+@deffn Procedure ssh-public-key->bytevector key
+Converts the public RSA/DSA @var{key} to the SSH public key format.
+@end deffn
+
+@deffn Procedure ssh-public-key-fingerprint key
+The MD5 based fingerprint of the RSA/DSA key in the same format used
+by common SSH software and specified by RFC 4716.
+@end deffn
+
+@deffn Procedure ssh-public-key-random-art key
+The random art of the RSA/DSA key. This is a visual representation of
+the key can is easier for humans to distinguish than fingerprints.
+This is the same art that OpenSSH's VisualHostKey feature displays.
+@cindex VisualHostKey
+@end deffn
+
+@noindent
+Version history:
+@itemize
+@item
+@code{(1 0)} -- Initial version.
 @end itemize
 
 @c ======================================================================
