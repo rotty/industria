@@ -1,0 +1,529 @@
+#!/usr/bin/env scheme-script
+;; -*- mode: scheme; coding: utf-8 -*- !#
+;; release-tool - Release tool for Industria
+;; Copyright © 2010 Göran Weinholt <goran@weinholt.se>
+;;
+;; This program is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+;;
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+;;
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#!r6rs
+
+;; Checks documentation, runs tests, lists files, etc.
+
+(import (rnrs)
+        (only (srfi :1 lists) take drop-right append-map
+              delete-duplicates last)
+        (only (srfi :13 strings) string-prefix? string-contains string-suffix?
+              string-join)
+        (srfi :26 cut)
+        (srfi :48 intermediate-format-strings)
+        (weinholt text strings)
+        (only (xitomatl file-system base compat)
+              directory-list file-regular? file-directory?
+              file-symbolic-link? file-size)
+        (xitomatl AS-match)
+        ;; TODO: find a portable replacement:
+        (only (ikarus) process waitpid wstatus-exit-status)
+        (only (ikarus) pretty-print))
+
+(unless (file-exists? "documentation/industria.texinfo")
+  (error 'release-tool "Could not find documentation/industria.texinfo"))
+
+(define *private-libraries*
+  (list '(weinholt crypto aes private)
+        '(weinholt disassembler private)
+        '(weinholt net ssh algorithms)
+        '(weinholt net ssh private)
+        '(weinholt struct pack-aux)))
+
+(define *released-libraries*
+  (list '(weinholt archive tar)
+        #;'(weinholt assembler x86)
+        '(weinholt binfmt elf)
+        '(weinholt bytevectors)
+        '(weinholt compression adler-32)
+        '(weinholt compression inflate)
+        '(weinholt compression gzip)
+        '(weinholt compression zip)
+        '(weinholt compression zlib)
+        '(weinholt crypto aes)
+        '(weinholt crypto arcfour)
+        '(weinholt crypto blowfish)
+        '(weinholt crypto crc)
+        '(weinholt crypto des)
+        '(weinholt crypto dsa)
+        '(weinholt crypto entropy)
+        '(weinholt crypto hmac)
+        '(weinholt crypto math)
+        '(weinholt crypto md5)
+        '(weinholt crypto openpgp)
+        '(weinholt crypto password)
+        '(weinholt crypto rsa)
+        '(weinholt crypto sha-1)
+        '(weinholt crypto sha-2)
+        '(weinholt crypto ssh-public-key)
+        '(weinholt crypto x509)
+        '(weinholt disassembler i8080)
+        '(weinholt disassembler m68hc12)
+        '(weinholt disassembler mips)
+        '(weinholt disassembler x86)
+        ;;'(weinholt net dns)
+        '(weinholt net irc fish)
+        '(weinholt net irc)
+        '(weinholt net otr)
+        '(weinholt net tcp)
+        '(weinholt net tls simple)
+        '(weinholt net tls)
+        '(weinholt struct der)
+        '(weinholt struct pack)
+        '(weinholt text base64)
+        #;'(weinholt text punycode)
+        '(weinholt text random-art)))
+
+(define *implementations* '(chezscheme
+                            ikarus
+                            ;; guile
+                            ;; larcency
+                            mosh
+                            mzscheme
+                            vicare
+                            ypsilon))
+
+(define-record-type file
+  (fields path))
+
+(define-record-type library
+  (parent file)
+  (fields name version implementation exports imports))
+
+(define-record-type program
+  (parent file)
+  (fields imports))
+
+(define-record-type document
+  (parent file)
+  (fields nodes))
+
+(define import-name
+  (match-lambda
+   (((? symbol? ids) ...)
+    ids)
+   (((? symbol? ids) ... (_ ...))
+    ids)
+   (((or 'library 'only 'for 'except 'rename 'prefix) (ids ...) . _)
+    (import-name ids))
+   (x
+    (error 'import-name "Bug" x))))
+
+(define (locate-docs fn)
+  (delete-duplicates
+   (cons fn
+         (append-map
+          (lambda (line)
+            (match (string-split line #\space)
+              (("@include" fn*)
+               (locate-docs (string-join (append
+                                          (drop-right (string-split fn #\/) 1)
+                                          (list fn*))
+                                         "/")))
+              (x '())))
+          (string-split (call-with-input-file fn get-string-all) #\newline)))))
+
+(define (parse-doc fn)
+  (let ((nodes
+         (append-map
+          (lambda (line)
+            (match (string-split line #\space)
+              (("@node" node ...) (list (map string->symbol node)))
+              (x '())))
+          (string-split (call-with-input-file fn get-string-all) #\newline))))
+    (make-document fn nodes)))
+
+(define (find-docs start)
+  (append (list (make-document "COPYING" '())
+                (make-document "README" '())
+                (make-document "NEWS" '()))
+          (map parse-doc (locate-docs start))))
+
+(define (examine-file path)
+  (define (impl fn)
+    (match (string-split fn #\.)
+      ((_ impl "sls") (string->symbol impl))
+      (_ #f)))
+  (define maybe-library
+    (match-lambda
+      (('library (name ...)
+         ('export exports ...)
+         ('import imports ...)
+         . _)
+       (let ((ver (find list? name)))
+         (make-library path
+                       (if ver (drop-right name 1) name)
+                       (or ver '())
+                       (impl path)
+                       exports imports)))
+      (_ #f)))
+  (define maybe-program
+    (match-lambda
+     (('import imports ...)
+      (make-program path imports))
+     (_ #f)))
+  (guard (exn
+          (else
+           (format (current-error-port)
+                   ";;; Exception while reading ~S: ~S~%"
+                   path exn)
+           #f))
+    (call-with-input-file path
+      (lambda (port)
+        (let ((start (port-position port)))
+          (let ((line1 (get-line port)))
+            (cond ((or (string-prefix? "#! " line1)
+                       (string-prefix? "#!/" line1))
+                   (maybe-program (read port)))
+                  (else
+                   (set-port-position! port start)
+                   (let ((data (read port)))
+                     (or (maybe-program data)
+                         (maybe-library data)))))))))))
+
+;; Takes a directory name and a list of files contained in it. Returns
+;; a list of (program ...) and (library ...).
+(define (find-files basepath files)
+  (let ((files (list-sort string<? files)))
+    (append-map
+     (lambda (fn)
+       (let ((path (string-append basepath fn)))
+         (cond ((or (string-prefix? "." fn)
+                    (string-suffix? "~" fn)
+                    (file-symbolic-link? fn))
+                '())
+               ((file-regular? path)
+                (cond ((examine-file path) => list)
+                      (else
+                       (format (current-error-port)
+                               ";;; File ~S rejected by examine-file~%" path)
+                       '())))
+               ((file-directory? path)
+                (find-files (string-append path "/")
+                            (directory-list path)))
+               (else '()))))
+     files)))
+
+(define libraries (find-files "weinholt/" (directory-list "weinholt")))
+(define docs (find-docs "documentation/industria.texinfo"))
+(define tests (find-files "tests/" (directory-list "tests")))
+(define programs (find-files "programs/" (directory-list "programs")))
+
+;;; Find the set of released libraries
+
+(define (find-dependencies lib-name)
+  (let ((lib (find (lambda (lib) (equal? (library-name lib) lib-name))
+                   libraries)))
+    (unless lib
+      (error 'find-released-set
+             "Bad library included in the released set"
+             lib-name))
+    (map import-name (library-imports lib))))
+
+(define (find-released-set start-set)
+  (define (traverse add! added? library)
+    (let ((deps (filter (match-lambda (('weinholt . _) #t) (_ #f))
+                        (find-dependencies library))))
+      (add! library)
+      (for-each (lambda (dep)
+                  (unless (added? dep)
+                    (format (current-error-port)
+                            ";;; Adding extra library to release: ~S.~%" dep)
+                    (traverse add! added? dep)))
+                deps)))
+  (letrec ((libs (make-hashtable (lambda (x) (string-hash (format #f "~a" x)))
+                                 equal?))
+           (add! (cut hashtable-set! libs <> #t))
+           (added? (cut hashtable-ref libs <> #f)))
+    (for-each add! start-set)
+    (for-each (cut traverse add! added? <>) start-set)
+    (filter (lambda (lib) (added? (library-name lib)))
+            libraries)))
+
+(define release-libraries (find-released-set *released-libraries*))
+
+(define (release-program? test type)
+  (define (good-import? import)
+    (define (ret import ok)
+      (unless ok
+        (format (current-error-port)
+                ";;; Removing ~a program ~S from release because of import ~S.~%"
+                type (file-path test) import))
+      ok)
+    (match (import-name import)
+      (('srfi . _) #t)
+      (('rnrs . _) #t)
+      (('weinholt . _)
+       (let ((v (find (lambda (lib)
+                        (equal? (import-name import)
+                                (library-name lib)))
+                      release-libraries)))
+         (ret import v)))
+      (('xitomatl . _)
+       (ret import (eq? type 'demo)))
+      (else (ret import #f))))
+  (for-all good-import? (program-imports test)))
+
+(define release-tests (filter (cut release-program? <> 'test) tests))
+(define release-programs (filter (cut release-program? <> 'demo) programs))
+
+(define release-files (append docs
+                              release-programs
+                              release-tests
+                              release-libraries))
+
+(define (list-unreleased)
+  (for-each (lambda (lib)
+              (unless (memq lib release-files)
+                (format #t "~a~%" (file-path lib))))
+            (append programs tests libraries)))
+
+;;; Completeness tests
+
+(define (check-complete-portability)
+  ;; Go over each library that has implementation-specific overrides
+  ;; and print missing overrides.
+  (for-each
+   (lambda (lib-name)
+     (for-each (lambda (impl)
+                 (unless (find (lambda (lib)
+                                 (and (equal? impl (library-implementation lib))
+                                      (equal? lib-name (library-name lib))))
+                               libraries)
+                   (format #t "Missing implementation of ~S for ~S.~%"
+                           lib-name (or impl "the default"))))
+               (cons #f *implementations*)))
+   (delete-duplicates
+    (map library-name (filter library-implementation libraries)))))
+
+(define (check-complete-documentation)
+  ;; Check that documentation exists for each library that will be
+  ;; included in the release. Also check that documentation isn't
+  ;; provided for unreleased libraries. Future work: check that all
+  ;; exports are documented.
+  (define (library-name? syms)
+    (define (lowercased? s)
+      (string=? (string-downcase (symbol->string s))
+                (symbol->string s)))
+    (and (> (length syms) 1)
+         (for-all lowercased? syms)))
+  (let ((docs (append-map document-nodes docs))
+        (libs (delete-duplicates (map library-name release-libraries))))
+    (for-each
+     (lambda (lib-name)
+       (unless (or (member lib-name *private-libraries*)
+                   (member (cdr lib-name) docs))
+         (format #t "Missing documentation for ~S.~%" lib-name)))
+     libs)
+    (for-each
+     (lambda (doc-name)
+       (when (library-name? doc-name)
+         (unless (member (cons 'weinholt doc-name) libs)
+           (format #t "Extra documentation for unreleased ~S~.%"
+                   (cons 'weinholt doc-name)))))
+     docs)))
+
+(define (check-complete-testing)
+  (for-each
+   (lambda (lib-name)
+     (unless (or (member lib-name *private-libraries*)
+                 (exists
+                  (lambda (test)
+                    (member lib-name (map import-name (program-imports test))))
+                  tests))
+       (format #t "No test case imports ~S.~%" lib-name)))
+   (delete-duplicates (map library-name release-libraries))))
+
+;;; Check which SRFIs are required to use all the libraries
+
+(define (srfi<? . xs)
+  (define (f s)
+    (let ((s (symbol->string s)))
+      (string->number (substring s 1 (string-length s)))))
+  (apply < (map f (map cadr xs))))
+
+(define (srfi=? x y) (eq? (cadr x) (cadr y)))
+
+(define srfi? (match-lambda (('srfi . _) #t) (_ #f)))
+
+(define *srfis*
+  (list-sort srfi<?
+             (delete-duplicates
+              (filter srfi?
+                      (map import-name
+                           (append-map library-imports
+                                       (remp library-implementation
+                                             release-libraries))))
+              srfi=?)))
+
+(define (list-required-srfis)
+  (for-each (cut format #t "~S~%" <>) *srfis*))
+
+;;; Run test programs
+
+(define (run-test test record!)
+  (define (srfi-78? test)
+    (member '(srfi :78 lightweight-testing)
+            (program-imports test)))
+  (format #t ";;; Running ~S which uses ~a...~%"
+          (file-path test)
+          (string-join
+           (map (cut format #f "~s" <>)
+                (filter
+                 (match-lambda (('weinholt . _) #t) (else #f))
+                 (map import-name (program-imports test))))
+           ", "))
+  (let-values (((pid o i e) (process (file-path test))))
+    (close-port o)
+    (let* ((output (get-bytevector-all i))
+           (ws (waitpid pid))
+           (status (wstatus-exit-status ws)))
+      (close-port e)
+      (close-port i)
+      (cond ((eof-object? output)
+             (display ";;; No program output.\n"))
+            (else
+             (let ((output (utf8->string output)))
+               (display output)
+               (when (srfi-78? test)
+                 (let* ((lines (string-split output #\newline))
+                        (checkline
+                         (find (lambda (l) (string-contains l "correct,"))
+                               (reverse lines))))
+                   (match (if checkline (string-split checkline #\space) '())
+                     ((_ ... correct "correct," failed "failed.")
+                      (record! test 'correct (string->number correct))
+                      (record! test 'failed (string->number failed)))
+                     (else
+                      (record! test 'bad-output #f))))))))
+      (unless (zero? status)
+        (record! test 'bad-status status))
+      (format #t ";;; Exit status ~s from ~s~%" status (file-path test)))))
+
+(define (run-tests tests)
+  (define correct 0)
+  (define failed 0)
+  (define failures '())
+  (define (record! test msg p)
+    (case msg
+      ((correct) (set! correct (+ correct p)))
+      ((failed)
+       (unless (zero? p)
+         (set! failures (cons (format #f "Failed ~a tests in ~a.~%" p (file-path test))
+                              failures))
+         (set! failed (+ failed p))))
+      ((bad-output)
+       (set! failures (cons (format #f "Bad output from ~a.~%" (file-path test))
+                            failures)))
+      ((bad-status)
+       (set! failures (cons (format #f "Bad exit status from ~a.~%" (file-path test))
+                            failures)))))
+  (for-each (cut run-test <> record!)
+            tests)
+  (format #t "Summary:~%~% Test programs: ~a~% Correct tests: ~a~% Failed tests: ~a~%~%"
+          (length tests) correct failed)
+  (for-each display failures))
+
+;;; Package manifests
+
+(define synopsis "Cryptography, compression, OTR, TLS, etc.")
+(define description
+  "Industria is a collection of portable R6RS Scheme libraries for \
+cryptography (AES, DES, Blowfish, HMAC, MD5, SHA-1, SHA-2, RSA, DSA, \
+etc.), zip/gzip/zlib decompression, disassembly of amd64 machine code, \
+Off-The-Record messaging, bytevector pack/unpack syntax, TLS \
+connections via custom binary ports, and more.")
+
+(define homepage "http://weinholt.se/industria/")
+
+;; This file should be named pkg-list.scm
+(define (dorodango-package-list version)
+  (define (build-srfis)
+    (map (lambda (srfi)
+           ;; (srfi :1 lists) => srfi-1
+           (let ((str (symbol->string (cadr srfi))))
+             (list
+              (string->symbol
+               (string-append "srfi-" (substring str 1 (string-length str)))))))
+         *srfis*))
+  (format #t ";; Dorodango package, see http://home.gna.org/dorodango/~%")
+  (pretty-print
+   `(package (industria ,(map string->number (string-split version #\.)))
+             (depends ,@(build-srfis))
+             (synopsis ,synopsis)
+             (description ,description)
+             (homepage ,homepage)
+             (libraries "weinholt"))))
+
+;; This file should be named MANIFEST
+(define (ucl-manifest version)
+  (define (print . x) (for-each write x) (newline))
+  (format #t ";; UCL package, see http://ucl.willdonnelly.net/~%")
+  (print '(package industria))
+  (print `(version ,@(map string->number (string-split version #\.))))
+  (print '(category "Cryptography" "Compression"))
+  (print `(synopsis ,synopsis))
+  (print `(description ,description))
+  (print '(author "Göran Weinholt"))
+  (print '(email "goran@weinholt.se"))
+  (print `(url ,homepage))
+  (print '(license GPL3))
+  (print '(license-file "COPYING"))
+  (print `(code ,@(map file-path release-libraries)))
+  ;;(print `(symlink (,(string-append "industria-" version "/weinholt") . "weinholt")))
+  ;; TODO: missing SRFI dependencies
+  (print `(depends))
+  (print `(schemes ,@*implementations*)))
+
+(define package-files
+  (append (if (file-exists? "pkg-list.scm") '("pkg-list.scm") '())
+          ;; XXX: UCL can't use the release tarball because UCL
+          ;; packages are tarbombs.
+          #;(if (file-exists? "MANIFEST") '("MANIFEST") '())))
+
+;;; Invocation
+
+(match (command-line)
+  ((_ "check-complete")
+   (check-complete-portability)
+   (check-complete-documentation)
+   (check-complete-testing))
+  ((_ "list-srfis")
+   (list-required-srfis))
+  ((_ "run-tests") (run-tests release-tests))
+  ((_ "run-all-tests") (run-tests tests))
+  ((_ "list")
+   ;; These are all the files to be included in a release tarball.
+   (for-each (lambda (x)
+               (format #t "~a~%" x))
+             (append package-files (map file-path release-files))))
+  ((_ "list-unreleased")
+   ;; These files will not be included in the release.
+   (list-unreleased))
+  ((_ "dorodango" version) (dorodango-package-list version))
+  ((_ "ucl" version) (ucl-manifest version))
+  ((name . _)
+   (format (current-error-port)
+           "Usage: ~a check-complete|list-srfis|run-tests|run-all-tests|list|list-unreleased~%"
+           name)
+   (format (current-error-port)
+           "Usage: ~a dorodango|ucl package-version~%"
+           name)
+   (exit 1)))
+
+(format (current-error-port) ";;; done.~%")

@@ -17,12 +17,13 @@
 
 ;; The Digital Signature Algorithm from FIPS Pub 186.
 
-(library (weinholt crypto dsa (0 0 20100712))
+(library (weinholt crypto dsa (1 0 20101028))
   (export make-dsa-public-key dsa-public-key?
           dsa-public-key-p
           dsa-public-key-q
           dsa-public-key-g
           dsa-public-key-y
+          dsa-public-key-length
 
           make-dsa-private-key dsa-private-key?
           dsa-private-key-p
@@ -55,6 +56,9 @@
     (opaque #t)
     (nongenerative dsa-private-key-ec67dd75-be57-42ac-b8ed-95bc893a80db)
     (fields p q g y x))
+
+  (define (dsa-public-key-length key)
+    (bitwise-length (dsa-public-key-p key)))
 
   (define (Dss-Parms)
     '(sequence (p integer)
@@ -118,10 +122,10 @@
 
   (define (make-random q)
     ;; Generate a random number less than q
-    (mod (bytevector->uint
-          (make-random-bytevector
-           (div (+ (bitwise-length q) 7) 8)))
-         q))
+    (let ((c (bytevector->uint
+               (make-random-bytevector
+                (+ 64 (div (+ (bitwise-length q) 7) 8))))))
+      (+ (mod c (- q 1)) 1)))
 
   (define (dsa-create-signature Hm privkey)
     (let ((p (dsa-private-key-p privkey))

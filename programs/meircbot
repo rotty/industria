@@ -1,5 +1,5 @@
 #!/usr/bin/env scheme-script
-;; -*- mode: scheme; coding: utf-8 -*-
+;; -*- mode: scheme; coding: utf-8 -*- !#
 ;; The Minimum-Effort IRC bot
 ;; Copyright © 2008, 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;

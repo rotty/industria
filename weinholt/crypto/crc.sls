@@ -85,7 +85,7 @@
 ;; (1 0 20090906) - Added crc-64 and the -width procedure. The -update
 ;; procedure uses fixnums if (> (fixnum-width) (crc-width)).
 
-(library (weinholt crypto crc (1 1 20090906))
+(library (weinholt crypto crc (1 1 20101117))
   (export define-crc)
   (import (rnrs)
           (for (only (srfi :1 lists) iota) expand))
@@ -187,7 +187,6 @@
                            'success 'failure)
                        'no-self-test))
                  (define (crc-width) width)
-                 (define t 'table)
                  (define crc-update
                    (case-lambda
                      ((r* bv)
@@ -195,6 +194,7 @@
                      ((r* bv start)
                       (crc-update r* bv start (bytevector-length bv)))
                      ((r* bv start end)
+                      (define t 'table)
                       (if (> (fixnum-width) width)
                           (do ((i start (+ i 1))
                                (r r*

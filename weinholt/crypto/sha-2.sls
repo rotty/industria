@@ -1,5 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
-;; Copyright © 2009 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2009, 2010 Göran Weinholt <goran@weinholt.se>
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -22,29 +22,42 @@
 ;; TODO: give an error if more than 2^64 / 2^128 bits are processed?
 ;; TODO: Optimize. Should be simple enough with the help of a profiler.
 
-(library (weinholt crypto sha-2 (0 0 20090918))
+(library (weinholt crypto sha-2 (1 1 20101107))
   (export make-sha-224 sha-224-update! sha-224-finish! sha-224-clear!
-          sha-224 sha-224-copy sha-224-finish
-          sha-224-copy-hash! sha-224->bytevector sha-224->string
+          sha-224 sha-224-copy sha-224-finish sha-224-length
+          sha-224-copy-hash! sha-224-128-copy-hash!
+          sha-224->bytevector sha-224->string
+          sha-224-hash=? sha-224-128-hash=?
           hmac-sha-224
 
           make-sha-256 sha-256-update! sha-256-finish! sha-256-clear!
-          sha-256 sha-256-copy sha-256-finish
-          sha-256-copy-hash! sha-256->bytevector sha-256->string
+          sha-256 sha-256-copy sha-256-finish sha-256-length
+          sha-256-copy-hash! sha-256-128-copy-hash!
+          sha-256->bytevector sha-256->string
+          sha-256-hash=? sha-256-128-hash=?
           hmac-sha-256
 
           make-sha-384 sha-384-update! sha-384-finish! sha-384-clear!
-          sha-384 sha-384-copy sha-384-finish
-          sha-384-copy-hash! sha-384->bytevector sha-384->string
+          sha-384 sha-384-copy sha-384-finish sha-384-length
+          sha-384-copy-hash! sha-384-128-copy-hash!
+          sha-384->bytevector sha-384->string
+          sha-384-hash=? sha-384-128-hash=?
           hmac-sha-384
 
           make-sha-512 sha-512-update! sha-512-finish! sha-512-clear!
-          sha-512 sha-512-copy sha-512-finish
-          sha-512-copy-hash! sha-512->bytevector sha-512->string
+          sha-512 sha-512-copy sha-512-finish sha-512-length
+          sha-512-copy-hash! sha-512-128-copy-hash!
+          sha-512->bytevector sha-512->string
+          sha-512-hash=? sha-512-128-hash=?
           hmac-sha-512)
   (import (rnrs)
           (weinholt crypto hmac))
 
+  (define (sha-224-length) 224/8)
+  (define (sha-256-length) 256/8)
+  (define (sha-384-length) 384/8)
+  (define (sha-512-length) 512/8)
+  
   (define (vector-copy x) (vector-map (lambda (i) i) x))
 
   (define (ror32 n count)
@@ -481,6 +494,8 @@
 
   (define sha-224-copy-hash! (sha-2/32-copy-hash! 224/32))
   (define sha-256-copy-hash! (sha-2/32-copy-hash! 256/32))
+  (define sha-224-128-copy-hash! (sha-2/32-copy-hash! 128/32))
+  (define sha-256-128-copy-hash! (sha-2/32-copy-hash! 128/32))
 
   (define (sha-2/64-copy-hash! len)
     (lambda (state bv off)
@@ -492,6 +507,8 @@
 
   (define sha-384-copy-hash! (sha-2/64-copy-hash! 384/64))
   (define sha-512-copy-hash! (sha-2/64-copy-hash! 512/64))
+  (define sha-384-128-copy-hash! (sha-2/64-copy-hash! 128/64))
+  (define sha-512-128-copy-hash! (sha-2/64-copy-hash! 128/64))
 
   (define (sha-2->bytevector copy! len)
     (lambda (state)
@@ -518,16 +535,44 @@
   (define sha-384->string (sha-2->string sha-384->bytevector))
   (define sha-512->string (sha-2->string sha-512->bytevector))
 
+  (define (cmp/32 state bv len)
+    (do ((i 0 (fx+ i 1))
+         (diff 0 (+ diff
+                    (bitwise-xor
+                     (bytevector-u32-ref bv (* 4 i) (endianness big))
+                     (vector-ref (sha-state-H state) i)))))
+        ((fx=? i len)
+         (zero? diff))))
+
+  (define (sha-224-hash=? state bv) (cmp/32 state bv 224/32))
+  (define (sha-256-hash=? state bv) (cmp/32 state bv 256/32))
+  (define (sha-384-hash=? state bv) (cmp/64 state bv 384/64))
+  (define (sha-512-hash=? state bv) (cmp/64 state bv 512/64))
+
+  (define (cmp/64 state bv len)
+    (do ((i 0 (fx+ i 1))
+         (diff 0 (+ diff
+                    (bitwise-xor
+                     (bytevector-u64-ref bv (* 8 i) (endianness big))
+                     (vector-ref (sha-state-H state) i)))))
+        ((fx=? i len)
+         (zero? diff))))
+
+  (define (sha-224-128-hash=? state bv) (cmp/32 state bv 128/32))
+  (define (sha-256-128-hash=? state bv) (cmp/32 state bv 128/32))
+  (define (sha-384-128-hash=? state bv) (cmp/64 state bv 128/64))
+  (define (sha-512-128-hash=? state bv) (cmp/64 state bv 128/64))
+
   (define hmac-sha-224
-    (make-hmac 64 make-sha-224 sha-224->bytevector make-sha-224 sha-224-update! sha-224-finish! sha-224-clear!))
+    (make-hmac 64 sha-224 sha-224->bytevector make-sha-224 sha-224-update! sha-224-finish! sha-224-clear!))
 
   (define hmac-sha-256
-    (make-hmac 64 make-sha-256 sha-256->bytevector make-sha-256 sha-256-update! sha-256-finish! sha-256-clear!))
+    (make-hmac 64 sha-256 sha-256->bytevector make-sha-256 sha-256-update! sha-256-finish! sha-256-clear!))
 
   (define hmac-sha-384
-    (make-hmac 64 make-sha-384 sha-384->bytevector make-sha-384 sha-384-update! sha-384-finish! sha-384-clear!))
+    (make-hmac 128 sha-384 sha-384->bytevector make-sha-384 sha-384-update! sha-384-finish! sha-384-clear!))
 
   (define hmac-sha-512
-    (make-hmac 64 make-sha-512 sha-512->bytevector make-sha-512 sha-512-update! sha-512-finish! sha-512-clear!))
+    (make-hmac 128 sha-512 sha-512->bytevector make-sha-512 sha-512-update! sha-512-finish! sha-512-clear!))
 
   )
