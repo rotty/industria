@@ -29,7 +29,6 @@
           (only (srfi :1 lists) iota)
           (weinholt compression bitstream)
           (weinholt compression huffman)
-          (weinholt compression huffman (0 (>= 1)))
           (weinholt compression sliding-buffer))
 
   (define-syntax trace
